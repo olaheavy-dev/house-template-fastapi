@@ -10,7 +10,8 @@ import pytest
 from alembic import command
 from asgi_lifespan import LifespanManager
 from fastapi import FastAPI
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from pydantic import SecretStr
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.db import get_session
@@ -68,14 +69,24 @@ async def db_session(database_url: str) -> AsyncIterator[AsyncSession]:
 
 
 @pytest.fixture
-async def db_client(app: FastAPI, db_session: AsyncSession) -> AsyncIterator[httpx.AsyncClient]:
-    """Like client, with every request using db_session."""
+async def db_client(
+    app: FastAPI, db_session: AsyncSession, database_url: str
+) -> AsyncIterator[httpx.AsyncClient]:
+    """Like client, with the whole app on the test database: requests use db_session, and code
+    that opens sessions from app.state.sessionmaker joins the same rolled-back transaction."""
 
     async def session_override() -> AsyncIterator[AsyncSession]:
         yield db_session
 
     app.dependency_overrides[get_session] = session_override
+    # The lifespan builds the engine from these settings: the test database, never a local one.
+    app.state.settings = app.state.settings.model_copy(
+        update={"database_url": SecretStr(database_url)}
+    )
     async with LifespanManager(app) as manager:
+        app.state.sessionmaker = async_sessionmaker(
+            bind=db_session.bind, join_transaction_mode="create_savepoint", expire_on_commit=False
+        )
         transport = httpx.ASGITransport(app=manager.app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             yield client

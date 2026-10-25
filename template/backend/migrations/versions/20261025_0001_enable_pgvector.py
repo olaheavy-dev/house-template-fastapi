@@ -24,4 +24,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("DROP EXTENSION IF EXISTS vector")
+    # Left in place: the extension may predate this migration (a managed database often has it
+    # installed by an admin), and dropping it would take other schemas' vector columns with it.
+    pass

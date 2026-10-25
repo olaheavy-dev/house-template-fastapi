@@ -16,6 +16,7 @@ with lazy="raise" so a forgotten load fails loudly instead of at an awkward mome
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from typing import Annotated
 
@@ -70,6 +71,7 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
-async def ping(engine: AsyncEngine) -> None:
-    async with engine.connect() as connection:
+async def ping(engine: AsyncEngine, seconds: float = 3.0) -> None:
+    # Bounded: a host that drops packets would otherwise hang readiness for the TCP timeout.
+    async with asyncio.timeout(seconds), engine.connect() as connection:
         await connection.execute(text("SELECT 1"))

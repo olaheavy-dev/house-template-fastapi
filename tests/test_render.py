@@ -125,6 +125,9 @@ def test_local_database_is_pinned_and_keeps_its_data():
     assert db["volumes"] == ["db-data:/var/lib/postgresql"]
     # Only reachable from this machine.
     assert all(port.startswith("127.0.0.1:") for port in db["ports"])
+    # Over TCP: a socket check passes during the image's temporary init-time server, so
+    # `docker compose up --wait` could return before the database accepts connections.
+    assert "pg_isready -h 127.0.0.1" in db["healthcheck"]["test"][1]
 
 
 def test_migrations_need_no_alembic_ini():

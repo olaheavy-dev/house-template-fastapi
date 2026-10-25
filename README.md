@@ -12,7 +12,7 @@ make install && make check      # the backend tests need Docker
 make db-up && make migrate && make dev
 ```
 
-The layer reads the project name and stacks from `.copier-answers.base.yml` and refuses to apply without them. Update it later with `copier update -a .copier-answers.fastapi.yml`.
+The layer reads the project name and stacks from `.copier-answers.base.yml` and refuses to apply without them. Update it later with `copier update -a .copier-answers.fastapi.yml`. The project owns `backend/uv.lock`, so after an update that changes dependencies, run `make lock` and commit the lockfile before `make install`.
 
 ## What it adds
 
