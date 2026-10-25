@@ -16,6 +16,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.log import REQUEST_ID_HEADER
+
 MEDIA_TYPE = "application/problem+json"
 log = structlog.get_logger()
 
@@ -95,7 +97,11 @@ async def _validation_error(request: Request, exc: Exception) -> JSONResponse:
 
 async def _unexpected(request: Request, exc: Exception) -> JSONResponse:
     log.exception("unhandled_error", path=request.url.path)
-    return problem_response(500, instance=request.url.path)
+    response = problem_response(500, instance=request.url.path)
+    request_id = getattr(request.state, "request_id", None)
+    if request_id:
+        response.headers[REQUEST_ID_HEADER] = request_id
+    return response
 
 
 def install_problem_handlers(app: FastAPI) -> None:

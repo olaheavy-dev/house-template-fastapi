@@ -75,3 +75,12 @@ async def test_unexpected_error_hides_details(app: FastAPI) -> None:
         "instance": "/boom",
     }
     assert "secret" not in response.text
+
+
+async def test_unexpected_error_still_carries_the_request_id(app: FastAPI) -> None:
+    # The 500 handler runs outside the request-id middleware, so it has to add the header itself.
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/boom", headers={"X-Request-ID": "req-42"})
+    assert response.status_code == 500
+    assert response.headers["X-Request-ID"] == "req-42"

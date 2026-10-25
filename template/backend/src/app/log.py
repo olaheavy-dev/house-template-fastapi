@@ -48,6 +48,8 @@ async def request_context(
     request_id = incoming if _SAFE_ID.match(incoming) else uuid.uuid4().hex
     structlog.contextvars.clear_contextvars()
     structlog.contextvars.bind_contextvars(request_id=request_id)
+    # Kept on the request too: the 500 handler runs outside this middleware and adds it itself.
+    request.state.request_id = request_id
     response = await call_next(request)
     response.headers[REQUEST_ID_HEADER] = request_id
     return response
