@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app import health
+from app import db, health
 from app.log import configure_logging, request_context
 from app.problems import install_problem_handlers
 from app.settings import Settings, get_settings
@@ -19,7 +19,17 @@ from app.settings import Settings, get_settings
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    yield
+    engine = db.create_engine(app.state.settings)
+    app.state.engine = engine
+    app.state.sessionmaker = db.create_sessionmaker(engine)
+    try:
+        yield
+    finally:
+        await engine.dispose()
+
+
+async def _database_ready(app: FastAPI) -> None:
+    await db.ping(app.state.engine)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -37,6 +47,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     install_problem_handlers(app)
     app.middleware("http")(request_context)
     app.include_router(health.router)
+    health.add_readiness_check(app, "database", lambda: _database_ready(app))
     return app
 
 

@@ -115,3 +115,22 @@ def test_rendered_project_has_no_leftover_template_syntax(render):
     for path in Path(render()).rglob("*"):
         if path.is_file() and path.suffix in {".py", ".toml", ".md", ".mk", ".yml", ".txt"}:
             assert "{{" not in path.read_text(), path
+
+
+def test_local_database_is_pinned_and_keeps_its_data():
+    compose = yaml.safe_load((TEMPLATE / "backend/compose.yaml").read_text())
+    db = compose["services"]["db"]
+    assert re.fullmatch(r"pgvector/pgvector:[\w.-]+-pg18[\w-]*@sha256:[0-9a-f]{64}", db["image"])
+    # PostgreSQL 18 images keep data under /var/lib/postgresql/18/docker; mounting .../data loses it.
+    assert db["volumes"] == ["db-data:/var/lib/postgresql"]
+    # Only reachable from this machine.
+    assert all(port.startswith("127.0.0.1:") for port in db["ports"])
+    # Over TCP: a socket check passes during the image's temporary init-time server, so
+    # `docker compose up --wait` could return before the database accepts connections.
+    assert "pg_isready -h 127.0.0.1" in db["healthcheck"]["test"][1]
+
+
+def test_migrations_need_no_alembic_ini():
+    backend = TEMPLATE / "backend"
+    assert not (backend / "alembic.ini").exists()
+    assert 'script_location = "migrations"' in (backend / "pyproject.toml").read_text()

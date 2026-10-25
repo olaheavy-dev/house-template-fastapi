@@ -1,6 +1,6 @@
 """Settings from the environment (and backend/.env locally), read once per process.
 
-Names are the upper-case field names with no prefix (APP_ENV, LOG_LEVEL, LOG_JSON, DOCS_ENABLED).
+Names are the upper-case field names with no prefix (APP_ENV, LOG_LEVEL, DATABASE_URL, ...).
 Secrets are SecretStr so they never print in logs or tracebacks; .env.example lists every setting
 with a safe value.
 """
@@ -10,6 +10,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,6 +23,13 @@ class Settings(BaseSettings):
     log_json: bool = False
     # Interactive API docs at /docs. Unset means on everywhere except production.
     docs_enabled: bool | None = None
+
+    # SQLAlchemy URL with the psycopg 3 driver. The default matches backend/compose.yaml's local db.
+    database_url: SecretStr = SecretStr("postgresql+psycopg://app:app@localhost:5432/app")
+    # Connections per process: keep pool_size + max_overflow times the worker count under
+    # Postgres's max_connections.
+    db_pool_size: int = 5
+    db_max_overflow: int = 10
 
     @property
     def docs_on(self) -> bool:

@@ -18,7 +18,7 @@ TEMPLATE = ROOT / "template"
 
 BASE_ANSWERS = {
     "_src_path": "gh:olaheavy-dev/house-template-base",
-    "_commit": "v0.1.4",
+    "_commit": "v0.2.0",
     "project_name": "Course Lens",
     "project_slug": "course-lens",
     "description": "Turns a course into something you can search, question and practise.",
