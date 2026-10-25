@@ -7,12 +7,12 @@ INSTALLS += install-fastapi
 CHECKS += check-fastapi
 FAST_CHECKS += check-fast-fastapi
 
-.PHONY: install-fastapi check-fastapi check-fast-fastapi lock dev test
+.PHONY: install-fastapi check-fastapi check-fast-fastapi lock dev test db-up migrate migration
 
 install-fastapi: ## Install the backend's Python and dependencies (from backend/uv.lock)
 	uv --directory backend sync --locked
 
-check-fastapi: ## Backend: lint, format, types, import contracts and tests
+check-fastapi: ## Backend: lint, format, types, import contracts and tests (tests need Docker)
 	$(BACKEND) ruff check
 	$(BACKEND) ruff format --check
 	$(BACKEND) mypy
@@ -32,3 +32,13 @@ dev: ## Run the API with reload on http://127.0.0.1:8000
 
 test: ## Run the backend tests
 	$(BACKEND) pytest
+
+db-up: ## Start the local PostgreSQL with pgvector (backend/compose.yaml) and wait until it's healthy
+	docker compose up -d --wait db
+
+migrate: ## Apply migrations to DATABASE_URL (the local db by default)
+	$(BACKEND) alembic upgrade head
+
+migration: ## Write a migration from model changes: make migration name="add courses"
+	@test -n "$(name)" || { echo 'usage: make migration name="what changed"'; exit 2; }
+	$(BACKEND) alembic revision --autogenerate -m "$(name)"

@@ -9,7 +9,11 @@ requires-python = ">=3.12"
 dependencies = [
     # FastAPI 0.x minors can break, so stay on one minor and move deliberately.
     "fastapi[standard-no-fastapi-cloud-cli]>=0.162.0,<0.163",
+    "alembic>=1.20.1",
+    "pgvector>=0.5.1",
+    "psycopg[binary,pool]>=3.3.6",
     "pydantic-settings>=2.16.1",
+    "sqlalchemy[asyncio]>=2.1.6",
     "structlog>=26.1.0",
 ]
 
@@ -19,7 +23,10 @@ dev = [
     "import-linter>=2.15",
     "mypy>=2.4.0",
     "pytest>=9.1.1",
+    "pyyaml>=6.0.3",
     "ruff>=0.17.2",
+    "testcontainers[postgres]>=4.15.0",
+    "types-pyyaml>=6.0.12",
 ]
 
 [build-system]
@@ -32,9 +39,28 @@ module-name = "app"
 [tool.fastapi]
 entrypoint = "app.main:app"
 
+[tool.alembic]
+# No alembic.ini: the database URL comes from app settings (migrations/env.py).
+script_location = "migrations"
+# %% because Alembic interpolates %(here)s-style values in this table.
+file_template = "%%(year)d%%(month).2d%%(day).2d_%%(rev)s_%%(slug)s"
+
+# New revision files come out lint-clean and formatted.
+[[tool.alembic.post_write_hooks]]
+name = "ruff_fix"
+type = "module"
+module = "ruff"
+options = "check --fix REVISION_SCRIPT_FILENAME"
+
+[[tool.alembic.post_write_hooks]]
+name = "ruff_format"
+type = "module"
+module = "ruff"
+options = "format REVISION_SCRIPT_FILENAME"
+
 [tool.ruff]
 line-length = 100
-src = ["src", "tests"]
+src = ["src", "tests", "migrations"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "UP", "S", "ASYNC", "C4", "SIM", "RUF", "PT", "TID"]
@@ -45,7 +71,7 @@ select = ["E", "W", "F", "I", "B", "UP", "S", "ASYNC", "C4", "SIM", "RUF", "PT",
 [tool.mypy]
 strict = true
 plugins = ["pydantic.mypy"]
-files = ["src", "tests"]
+files = ["src", "tests", "migrations"]
 
 [tool.pytest]
 testpaths = ["tests"]

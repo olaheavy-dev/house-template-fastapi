@@ -9,3 +9,7 @@ backend/.gitignore
 backend/src/app/log.py
 backend/src/app/problems.py
 backend/src/app/health.py
+backend/compose.yaml
+backend/migrations/env.py
+backend/migrations/script.py.mako
+backend/tests/db.py

@@ -1,0 +1,26 @@
+# Owned by house-template-fastapi. Included by the root compose.yaml (house-template-base), so
+# `docker compose up -d db` from the project root starts the local database for `make dev`.
+# Local credentials only; production gets DATABASE_URL from its environment.
+
+services:
+  db:
+    # pgvector 0.8.7 on PostgreSQL 18, pinned by digest (Dependabot updates it).
+    image: pgvector/pgvector:0.8.7-pg18-trixie@sha256:9d9c930220cb9bf2f956d10a8f909cf9973d9672ca0278aef2c1e6facccad2e0
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      # PostgreSQL 18 images keep data under /var/lib/postgresql/18/docker: mount the parent.
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    shm_size: 256mb
+
+volumes:
+  db-data:
