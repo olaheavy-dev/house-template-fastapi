@@ -13,6 +13,7 @@ from collections.abc import Awaitable, Callable
 
 import structlog
 from fastapi import Request, Response
+from structlog.tracebacks import ExceptionDictTransformer
 
 from app.settings import Settings
 
@@ -23,10 +24,18 @@ _SAFE_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
 def configure_logging(settings: Settings) -> None:
     # JSON lines carry tracebacks as structured data; the console renderer formats them itself.
+    # Neither shows frame locals: they can hold request data or credentials (both default to on).
     rendering: list[structlog.types.Processor] = (
-        [structlog.processors.dict_tracebacks, structlog.processors.JSONRenderer()]
+        [
+            structlog.processors.ExceptionRenderer(ExceptionDictTransformer(show_locals=False)),
+            structlog.processors.JSONRenderer(),
+        ]
         if settings.log_json
-        else [structlog.dev.ConsoleRenderer()]
+        else [
+            structlog.dev.ConsoleRenderer(
+                exception_formatter=structlog.dev.RichTracebackFormatter(show_locals=False)
+            )
+        ]
     )
     structlog.configure(
         processors=[

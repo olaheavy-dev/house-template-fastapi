@@ -47,7 +47,8 @@ async def test_json_logs_carry_the_request_id_and_a_structured_traceback(
 
     @app.get("/boom")
     async def boom() -> None:
-        raise RuntimeError("kaboom")
+        api_key = "sk-must-not-be-logged"
+        raise RuntimeError(f"kaboom {len(api_key)}")
 
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -56,3 +57,25 @@ async def test_json_logs_carry_the_request_id_and_a_structured_traceback(
     event = json.loads(line)
     assert event["request_id"] == "req-1"
     assert event["exception"][0]["exc_type"] == "RuntimeError"
+    # Frame locals can hold request data or credentials, so tracebacks never include them.
+    assert "sk-xxxxxxxx" not in line
+
+
+@pytest.mark.parametrize("log_json", [True, False])
+async def test_tracebacks_never_include_frame_locals(
+    log_json: bool, capsys: pytest.CaptureFixture[str]
+) -> None:
+    app = create_app(Settings.model_validate({"app_env": "test", "log_json": log_json}))
+
+    @app.get("/boom")
+    async def boom() -> None:
+        # Built at run time, so only a captured local (not a source line) could show it.
+        password = "hunter" + "2" * 3
+        raise RuntimeError(str(len(password)))
+
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.get("/boom")
+    captured = capsys.readouterr()
+    assert "RuntimeError" in captured.out + captured.err
+    assert "hunter222" not in captured.out + captured.err
