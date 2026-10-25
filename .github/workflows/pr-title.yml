@@ -1,0 +1,42 @@
+# Copied from house-template-base (its template/.github/workflows/pr-title.yml).
+# With squash merges the PR title becomes the commit on main, so the title is what must follow
+# Conventional Commits (release-please reads it). Runs on pull_request,
+# not pull_request_target: it only reads the title, so it needs no access to secrets.
+name: PR title
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  conventional-title:
+    name: Conventional Commits title
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read # read the pull request title
+    steps:
+      - name: Check the title
+        uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            chore
+            test
+            refactor
+            ci
+            perf
+            build
+            revert
+          subjectPattern: ^[a-z].+[^.]$
+          subjectPatternError: Start the subject with a lowercase letter and don't end it with a full stop.

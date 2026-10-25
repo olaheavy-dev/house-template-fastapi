@@ -1,0 +1,21 @@
+[project]
+name = "house-template-fastapi"
+version = "0.1.0"
+description = "Tests for the house-template-fastapi Copier template"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "copier==9.19.1",
+    "pytest>=9.1.1",
+    "pyyaml>=6.0.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+filterwarnings = ["ignore::copier.errors.DirtyLocalWarning"]
+
+[tool.uv]
+package = false

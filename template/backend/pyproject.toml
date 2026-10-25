@@ -1,0 +1,64 @@
+# Owned by house-template-fastapi. The distribution is always "backend" and the import package
+# always "app", so this file and the lockfile need no per-project values and Dependabot can update
+# the template directly. Add the product's own dependencies here and run `make lock`.
+
+[project]
+name = "backend"
+version = "0.0.0"
+requires-python = ">=3.12"
+dependencies = [
+    # FastAPI 0.x minors can break, so stay on one minor and move deliberately.
+    "fastapi[standard-no-fastapi-cloud-cli]>=0.162.0,<0.163",
+    "pydantic-settings>=2.16.1",
+    "structlog>=26.1.0",
+]
+
+[dependency-groups]
+dev = [
+    "asgi-lifespan>=2.1.0",
+    "import-linter>=2.15",
+    "mypy>=2.4.0",
+    "pytest>=9.1.1",
+    "ruff>=0.17.2",
+]
+
+[build-system]
+requires = ["uv_build>=0.11,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "app"
+
+[tool.fastapi]
+entrypoint = "app.main:app"
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "S", "ASYNC", "C4", "SIM", "RUF", "PT", "TID"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"] # assert is how pytest checks
+
+[tool.mypy]
+strict = true
+plugins = ["pydantic.mypy"]
+files = ["src", "tests"]
+
+[tool.pytest]
+testpaths = ["tests"]
+addopts = ["-q", "--strict-markers", "--strict-config"]
+xfail_strict = true
+filterwarnings = ["error"]
+
+[tool.importlinter]
+root_package = "app"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Only the model gateway talks to model providers"
+type = "forbidden"
+source_modules = ["app"]
+forbidden_modules = ["openai", "anthropic", "langchain_openai", "langchain_anthropic"]
