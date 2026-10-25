@@ -1,0 +1,11 @@
+# Files owned by house-template-fastapi. A pull request that changes one gets a CI warning
+# (tools/check_template_owned.py): improve the template first, or label it template-candidate.
+# The product's own code in backend/src/app and backend/tests is the project's, except these files.
+.python-version
+mk/fastapi.mk
+.claude/rules/fastapi.md
+.github/template-owned/fastapi.txt
+backend/.gitignore
+backend/src/app/log.py
+backend/src/app/problems.py
+backend/src/app/health.py

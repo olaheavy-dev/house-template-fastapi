@@ -1,0 +1,47 @@
+# house-template-fastapi: the Python backend layer. Apply it after house-template-base, in the same
+# project, with its own answers file:
+#   copier copy --trust -a .copier-answers.fastapi.yml gh:olaheavy-dev/house-template-fastapi .
+# It owns backend/, mk/fastapi.mk, .python-version and its rules file, and reads the base answers
+# (project name, slug, domain, stacks) through _external_data instead of asking again.
+# Copier docs: https://copier.readthedocs.io/en/stable/configuring/
+
+_min_copier_version: "9.19.0"
+_subdirectory: template
+_answers_file: .copier-answers.fastapi.yml
+_templates_suffix: .jinja
+_envops:
+  keep_trailing_newline: true
+  undefined: jinja2.StrictUndefined
+# Copier's defaults plus the caches a local run of the backend's checks leaves in template/backend.
+_exclude:
+  - copier.yml
+  - "~*"
+  - "*.py[co]"
+  - __pycache__
+  - .git
+  - .DS_Store
+  - .venv
+  - .mypy_cache
+  - .ruff_cache
+  - .pytest_cache
+  - .import_linter_cache
+_external_data:
+  base: .copier-answers.base.yml
+# The project owns its lockfile after the first copy: a template update changes
+# backend/pyproject.toml, and `make lock` brings the lockfile in line.
+_skip_if_exists:
+  - backend/uv.lock
+_message_after_copy: |
+  The FastAPI layer is in backend/. Next:
+    1. make install && make check
+    2. git add -A && git commit -m "chore: add the house-template-fastapi layer"
+
+python_version:
+  type: str
+  help: Python version for the backend (the image and CI use it; 3.12 is the oldest supported)
+  default: "3.14"
+  choices: ["3.14", "3.13", "3.12"]
+  validator: >-
+    {% if not _external_data.base %}Apply house-template-base first: .copier-answers.base.yml is missing
+    {%- elif 'fastapi' not in _external_data.base.stacks %}The base answers don't list the fastapi stack: run
+    copier update -a .copier-answers.base.yml and add it, so CI, CodeQL and Dependabot cover the backend{% endif %}
