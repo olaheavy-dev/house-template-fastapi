@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.telemetry import TelemetryConfig
 
-from app import db, health
+from app import api, db, health
 from app.limits import BodyLimit, SecurityHeaders
 from app.llm import checkpoints
 from app.llm.errors import install_model_error_handlers
@@ -111,6 +111,7 @@ def create_app(
     if settings.allowed_hosts != ["*"]:
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
     app.include_router(health.router)
+    app.include_router(api.router)
     health.add_readiness_check(app, "database", lambda: _database_ready(app))
     if settings.storage_bucket:
         health.add_readiness_check(app, "storage", lambda: app.state.storage.ping())
