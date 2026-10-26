@@ -1,0 +1,36 @@
+# Releases of this template. release-please reads the Conventional Commit titles merged to main,
+# keeps a release PR with the next version and changelog, and on merge tags vX.Y.Z and publishes the
+# release. Copier updates generated projects from these tags
+# (`copier update -a .copier-answers.fastapi.yml`), and base's weekly update workflow watches them.
+# A release PR opened with GITHUB_TOKEN doesn't start CI, and main requires CI to pass, so set a
+# RELEASE_PLEASE_TOKEN secret in the `release` environment (a GitHub App token or a fine-grained
+# token with contents and pull-requests write) for the release PR to be mergeable. https://github.com/googleapis/release-please-action
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Release PR and tag
+    runs-on: ubuntu-24.04
+    # The token lives in this environment's secrets, so it can carry its own protection rules.
+    environment: release
+    timeout-minutes: 10
+    permissions:
+      contents: write # tag and publish the release
+      pull-requests: write # open and update the release PR
+    steps:
+      - name: Run release-please
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
