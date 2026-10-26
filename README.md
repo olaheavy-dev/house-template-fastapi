@@ -28,8 +28,14 @@ The layer reads the project name and stacks from `.copier-answers.base.yml` and 
 | `.claude/rules/fastapi.md` | Backend rules for coding agents, loaded only when they touch `backend/` |
 | `.python-version` | The backend's Python (3.14 by default; 3.12 is the oldest supported) |
 
-Still to come, through reviewed pull requests: the budget-capped LangChain model gateway with LangSmith tracing and recorded responses; S3-compatible storage; the container image with the API and a one-off migration service in Compose; releases.
+Still to come, through reviewed pull requests: the budget-capped LangChain model gateway with LangSmith tracing and recorded responses; S3-compatible storage; the container image with the API and a one-off migration service in Compose.
 
 ## Develop the template
 
 `uv run pytest` renders the layer and checks it. CI also generates a real project from house-template-base plus this layer and runs its `make check`. After changing `template/backend/pyproject.toml`, run `uv lock --directory template/backend`.
+
+`main` is protected by [`.github/rulesets/main.json`](.github/rulesets/main.json): squash merges through pull requests, with the tests, workflow lint (actionlint and zizmor), the PR title check and CodeQL required, and CodeQL and zizmor findings blocking a merge. A test checks that every required check is a job the workflows run.
+
+## Releases
+
+release-please turns Conventional Commit titles into a release PR and, on merge, a `vX.Y.Z` tag. Projects update from those tags.
