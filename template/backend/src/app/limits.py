@@ -9,13 +9,17 @@ small.
 
 from __future__ import annotations
 
+from starlette.exceptions import HTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.problems import problem_response
 
 
-class _TooLarge(Exception):
-    pass
+class _TooLarge(HTTPException):
+    # An HTTPException, so FastAPI's own body parsing passes it on as a 413 (any other exception
+    # raised while it reads the body becomes a 400) and the problem handler renders it.
+    def __init__(self, max_bytes: int) -> None:
+        super().__init__(413, detail=f"The request body is over {max_bytes} bytes.")
 
 
 class BodyLimit:
@@ -41,7 +45,7 @@ class BodyLimit:
             if message["type"] == "http.request":
                 seen += len(message.get("body", b""))
                 if seen > self.max_bytes:
-                    raise _TooLarge
+                    raise _TooLarge(self.max_bytes)
             return message
 
         async def watched(message: Message) -> None:
