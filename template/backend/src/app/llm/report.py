@@ -20,7 +20,7 @@ from sqlalchemy import ColumnElement, Integer, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import create_engine, create_sessionmaker
-from app.llm.budget import LlmCall, utc_today
+from app.llm.budget import LlmCall, expire_stale, utc_today
 from app.llm.prices import MICRO_USD
 from app.settings import get_settings
 
@@ -116,22 +116,46 @@ def render(rows: Sequence[SpendRow], by: Sequence[str]) -> str:
     return "\n".join([*body, f"\ntotal: ${total:.6f} over {sum(r.calls for r in rows)} calls"])
 
 
-async def main(days: int, by: Sequence[str]) -> None:
+# A call outlives every timeout and retry long before this; a reservation still open is stuck.
+STALE_AFTER = timedelta(minutes=30)
+
+
+async def stale(session: AsyncSession, older_than: timedelta = STALE_AFTER) -> int:
+    count = await session.scalar(
+        select(func.count()).where(
+            LlmCall.status == "reserved", LlmCall.created_at < func.now() - older_than
+        )
+    )
+    return int(count or 0)
+
+
+async def main(days: int, by: Sequence[str], expire: bool) -> None:
     engine = create_engine(get_settings())
     try:
         async with create_sessionmaker(engine)() as session:
             rows = await spend(session, since=utc_today() - timedelta(days=days - 1), by=by)
+            stuck = await stale(session)
+            if expire and stuck:
+                stuck -= await expire_stale(session, older_than=STALE_AFTER)
+                await session.commit()
     finally:
         await engine.dispose()
     print(render(rows, by) if rows else f"No settled model calls in the last {days} days.")
+    if stuck:
+        print(f"\n{stuck} reservations open for over 30 minutes: rerun with --expire-stale.")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Model spend from the llm_call table.")
     parser.add_argument("--days", type=int, default=7, help="days back from today (UTC)")
     parser.add_argument("--by", default="day,model", help=f"comma-separated: {', '.join(GROUPS)}")
+    parser.add_argument(
+        "--expire-stale",
+        action="store_true",
+        help="close reservations open for over 30 minutes (keeping their reserved cost)",
+    )
     args = parser.parse_args()
     by = [name.strip() for name in args.by.split(",") if name.strip()]
     if not by or any(name not in GROUPS for name in by):
         parser.error(f"--by takes {', '.join(GROUPS)}")
-    asyncio.run(main(args.days, by))
+    asyncio.run(main(args.days, by, args.expire_stale))

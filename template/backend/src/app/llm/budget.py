@@ -274,6 +274,11 @@ async def settle(
     )
 
 
+class PromptTooLong(Problem):
+    def __init__(self) -> None:
+        super().__init__(422, detail="The input is too long for the language model.")
+
+
 class UserBudgetExhausted(Problem):
     """One user's daily share is used up; everyone else can still call the model."""
 
@@ -330,6 +335,23 @@ async def _add_user_spend(
         where=total <= cap,
     ).returning(LlmSpendUserDay.committed_micro_usd)
     return (await session.execute(upsert)).first() is not None
+
+
+async def expire_stale(session: AsyncSession, *, older_than: timedelta) -> int:
+    """Close reservations left open by a process that died mid-call (a crash, a SIGKILL after
+    the grace period). Whether the provider billed them is unknown, so each keeps its
+    reservation as its cost (the day's total already counts it) and is marked failed. Returns how
+    many were closed. Run it from a scheduled job, or `python -m app.llm.report --expire-stale`."""
+    closed = await session.execute(
+        update(LlmCall)
+        .where(LlmCall.status == "reserved", LlmCall.created_at < func.now() - older_than)
+        .values(status="failed", settled_at=func.now(), cost_micro_usd=LlmCall.reserved_micro_usd)
+        .returning(LlmCall.id)
+    )
+    count = len(closed.all())
+    if count:
+        log.warning("llm_reservations_expired", count=count)
+    return count
 
 
 class UnboundedMedia(Problem):
@@ -420,9 +442,12 @@ class BudgetGuard(AsyncCallbackHandler):
         # A caller may bind a larger limit than the gateway's; reserve for whichever is larger.
         bound = [params.get(k) for k in ("max_tokens", "max_completion_tokens")]
         output = max([self.max_tokens, *(b for b in bound if isinstance(b, int))])
-        amount = prices.ceiling(
-            self.price, sum(input_bound(batch, params) for batch in messages), output
-        )
+        given = sum(input_bound(batch, params) for batch in messages)
+        if self.price.max_prompt_tokens and given > self.price.max_prompt_tokens:
+            # The bound is bytes, an over-estimate of tokens: a prompt near the limit in tokens
+            # may be refused, never one past it sent and under-recorded.
+            raise PromptTooLong
+        amount = prices.ceiling(self.price, given, output)
         metadata = metadata or {}
         async with self.sessionmaker()() as session, session.begin():
             refused = await reserve_for(

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import pytest
@@ -14,19 +14,21 @@ from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, Huma
 from langchain_core.messages.ai import UsageMetadata
 from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_core.runnables import RunnableConfig
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.llm import budget, prices
+from app.llm import budget, prices, report
 from app.llm.budget import (
     BudgetExhausted,
     BudgetGuard,
     LlmCall,
     LlmSpendDay,
     LlmSpendUserDay,
+    PromptTooLong,
     UnboundedMedia,
     UserBudgetExhausted,
+    expire_stale,
     reserve,
     reserve_for,
     settle,
@@ -328,6 +330,40 @@ async def test_a_call_that_never_reserved_against_the_user_leaves_their_total_al
     assert await user_total(db_session, "u_4") == 900
     await settle(db_session, call_id=capped, status="settled", cost=100)
     assert await user_total(db_session, "u_4") == 100
+
+
+async def test_a_prompt_past_the_priced_length_is_refused_before_reserving(
+    db_session: AsyncSession, guard: Callable[..., BudgetGuard]
+) -> None:
+    short_limit = guard()
+    short_limit.price = prices.Price(PRICE.rates, max_prompt_tokens=10)
+    model = GenericFakeChatModel(messages=iter([answer("4")]), callbacks=[short_limit])
+    with pytest.raises(PromptTooLong) as refused:
+        await model.ainvoke(QUESTION)
+    assert refused.value.status == 422
+    assert await calls(db_session) == []
+
+
+async def test_stale_reservations_are_closed_at_their_reserved_cost(
+    db_session: AsyncSession,
+) -> None:
+    stuck, fresh = uuid.uuid4(), uuid.uuid4()
+    for call_id in (stuck, fresh):
+        assert await reserve(
+            db_session, call_id=call_id, day=DAY, model=MODEL, amount=500, cap=10**6
+        )
+    await db_session.execute(
+        update(LlmCall)
+        .where(LlmCall.id == stuck)
+        .values(created_at=func.now() - timedelta(hours=2))
+    )
+    assert await report.stale(db_session) == 1
+    assert await expire_stale(db_session, older_than=timedelta(minutes=30)) == 1
+    closed = await db_session.get(LlmCall, stuck, populate_existing=True)
+    assert closed is not None
+    assert (closed.status, closed.cost_micro_usd) == ("failed", 500)
+    assert await committed(db_session) == 1_000  # the day already counted both reservations
+    assert await report.stale(db_session) == 0
 
 
 @pytest.fixture
