@@ -15,6 +15,7 @@ from fastapi.telemetry import TelemetryConfig
 
 from app import db, health
 from app.llm import checkpoints
+from app.llm.errors import install_model_error_handlers
 from app.llm.gateway import Gateway
 from app.log import configure_logging, request_context
 from app.problems import install_problem_handlers
@@ -81,6 +82,7 @@ def create_app(
     app.state.settings = settings
     app.state.readiness_checks = {}
     install_problem_handlers(app)
+    install_model_error_handlers(app)
     app.middleware("http")(request_context)
     app.include_router(health.router)
     health.add_readiness_check(app, "database", lambda: _database_ready(app))
