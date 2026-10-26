@@ -106,3 +106,21 @@ def ceiling(price: Price, input_tokens: int, output_tokens: int) -> int:
     rates = price.highest
     total = input_tokens * max(rates.input, rates.cache_write_long) + output_tokens * rates.output
     return -(-total // _PER_MILLION)
+
+
+def token_details(usage: UsageMetadata | None) -> dict[str, int | None]:
+    """Reasoning, cache-read and cache-write tokens from LangChain's usage details (both providers;
+    Anthropic splits cache writes by lifetime)."""
+    if not usage:
+        return {"reasoning_tokens": None, "cache_read_tokens": None, "cache_write_tokens": None}
+    given: dict[str, Any] = dict(usage.get("input_token_details") or {})
+    out: dict[str, Any] = dict(usage.get("output_token_details") or {})
+    writes = sum(
+        int(given.get(key) or 0)
+        for key in ("cache_creation", "ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens")
+    )
+    return {
+        "reasoning_tokens": int(out.get("reasoning") or 0),
+        "cache_read_tokens": int(given.get("cache_read") or 0),
+        "cache_write_tokens": writes,
+    }

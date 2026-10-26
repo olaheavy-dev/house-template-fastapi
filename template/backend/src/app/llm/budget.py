@@ -23,6 +23,7 @@ model with invoke() or stream().
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime
@@ -41,13 +42,22 @@ from langchain_core.exceptions import (
 from langchain_core.messages import BaseMessage
 from langchain_core.messages.ai import UsageMetadata
 from langchain_core.outputs import ChatGeneration, LLMResult
-from sqlalchemy import BigInteger, CheckConstraint, DateTime, Integer, String, func, update
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    Integer,
+    String,
+    false,
+    func,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
-from app.llm import prices
+from app.llm import metrics, prices
 from app.problems import Problem
 
 log = structlog.get_logger()
@@ -55,6 +65,8 @@ log = structlog.get_logger()
 # Added to every reservation's input: message framing, and the system prompt a provider adds
 # when tools are bound (Anthropic documents a few hundred tokens).
 INPUT_MARGIN_TOKENS = 1024
+# Spend that triggers the day's one warning log, as a share of the cap.
+WARN_SHARE = 0.8
 # Per image, above Anthropic's documented maximum of 4,784 (high-resolution models, vision docs,
 # checked 26 Oct 2026). Check the provider's image pricing before sending images to another one.
 IMAGE_TOKENS = 6_000
@@ -79,6 +91,9 @@ class LlmSpendDay(Base):
 
     day: Mapped[date] = mapped_column(primary_key=True)
     committed_micro_usd: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    # Set by the first reservation to reach WARN_SHARE of the cap, so the day warns once even
+    # though settlements below their reservation lower the total again.
+    warned: Mapped[bool] = mapped_column(server_default=false())
 
 
 class LlmCall(Base):
@@ -102,6 +117,15 @@ class LlmCall(Base):
     cost_micro_usd: Mapped[int | None] = mapped_column(BigInteger)
     input_tokens: Mapped[int | None] = mapped_column(Integer)
     output_tokens: Mapped[int | None] = mapped_column(Integer)
+    # Parts of the totals above that are priced or behave differently.
+    reasoning_tokens: Mapped[int | None] = mapped_column(Integer)
+    cache_read_tokens: Mapped[int | None] = mapped_column(Integer)
+    cache_write_tokens: Mapped[int | None] = mapped_column(Integer)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    # From the call's metadata: what the product used the model for, and an opaque id of whom
+    # for (never a name or an email), so cost can be read per feature and per user.
+    feature: Mapped[str | None] = mapped_column(String(100), index=True)
+    user_ref: Mapped[str | None] = mapped_column(String(200))
 
 
 class BudgetExhausted(Problem):
@@ -123,6 +147,8 @@ async def reserve(
     cap: int,
     prompt: str | None = None,
     prompt_sha: str | None = None,
+    feature: str | None = None,
+    user_ref: str | None = None,
 ) -> bool:
     """Add `amount` to the day's total and record the call, or change nothing and return False if
     that would cross `cap`. One statement: Postgres locks the day's row, so concurrent
@@ -136,8 +162,18 @@ async def reserve(
         set_={"committed_micro_usd": total},
         where=total <= cap,
     ).returning(LlmSpendDay.committed_micro_usd)
-    if (await session.execute(upsert)).first() is None:
+    committed = (await session.execute(upsert)).scalar()
+    if committed is None:
         return False
+    # Once per day: the first reservation to bring the total to WARN_SHARE of the cap claims the
+    # day's warning (one UPDATE, so only one process can win it).
+    if committed >= cap * WARN_SHARE and await _claim_warning(session, day):
+        log.warning(
+            "llm_budget_nearly_used",
+            day=day.isoformat(),
+            committed_micro_usd=committed,
+            cap_micro_usd=cap,
+        )
     session.add(
         LlmCall(
             id=call_id,
@@ -145,11 +181,23 @@ async def reserve(
             model=model,
             prompt=prompt,
             prompt_sha=prompt_sha,
+            feature=feature,
+            user_ref=user_ref,
             status="reserved",
             reserved_micro_usd=amount,
         )
     )
     return True
+
+
+async def _claim_warning(session: AsyncSession, day: date) -> bool:
+    claimed = await session.execute(
+        update(LlmSpendDay)
+        .where(LlmSpendDay.day == day, LlmSpendDay.warned.is_(False))
+        .values(warned=True)
+        .returning(LlmSpendDay.day)
+    )
+    return claimed.first() is not None
 
 
 async def settle(
@@ -159,9 +207,11 @@ async def settle(
     status: str,
     cost: int | None,
     usage: UsageMetadata | None = None,
+    latency_ms: int | None = None,
 ) -> None:
     """Record what a reserved call really cost (None keeps the reservation as its cost) and move
     the day's total by the difference. Settling twice changes nothing."""
+    details = prices.token_details(usage)
     row = (
         await session.execute(
             update(LlmCall)
@@ -172,6 +222,8 @@ async def settle(
                 cost_micro_usd=LlmCall.reserved_micro_usd if cost is None else cost,
                 input_tokens=usage["input_tokens"] if usage else None,
                 output_tokens=usage["output_tokens"] if usage else None,
+                latency_ms=latency_ms,
+                **details,
             )
             .returning(LlmCall.day, LlmCall.reserved_micro_usd, LlmCall.cost_micro_usd)
         )
@@ -251,6 +303,8 @@ class BudgetGuard(AsyncCallbackHandler):
         self.sessionmaker = sessionmaker
         self.today = today
         self._streamed: set[uuid.UUID] = set()
+        # Per call in flight: when it started, and what the metrics break it down by.
+        self._started: dict[uuid.UUID, tuple[float, dict[str, str]]] = {}
 
     async def on_chat_model_start(
         self,
@@ -281,7 +335,14 @@ class BudgetGuard(AsyncCallbackHandler):
                 cap=self.cap,
                 prompt=metadata.get("prompt"),
                 prompt_sha=metadata.get("prompt_sha"),
+                feature=metadata.get("feature"),
+                user_ref=metadata.get("user_ref"),
             )
+        labels = metrics.labels(self.model, metadata.get("prompt"), metadata.get("feature"))
+        if reserved:
+            self._started[run_id] = (time.monotonic(), labels)
+        else:
+            metrics.record_refusal(labels)
         if not reserved:
             log.warning("llm_budget_exhausted", model=self.model, reservation_micro_usd=amount)
             raise BudgetExhausted
@@ -308,10 +369,20 @@ class BudgetGuard(AsyncCallbackHandler):
     async def _settle(
         self, run_id: uuid.UUID, status: str, cost: int | None, usage: UsageMetadata | None
     ) -> None:
+        started, labels = self._started.pop(run_id, (None, metrics.labels(self.model)))
+        latency_ms = round((time.monotonic() - started) * 1000) if started is not None else None
         # The call has happened by now: a settlement that fails must not fail it, and the
         # reservation it leaves in place overstates the spend rather than hiding it.
         try:
             async with self.sessionmaker()() as session, session.begin():
-                await settle(session, call_id=run_id, status=status, cost=cost, usage=usage)
+                await settle(
+                    session,
+                    call_id=run_id,
+                    status=status,
+                    cost=cost,
+                    usage=usage,
+                    latency_ms=latency_ms,
+                )
         except Exception:
             log.exception("llm_settle_failed", model=self.model, call_id=str(run_id))
+        metrics.record_call(labels, status, cost, usage, latency_ms)

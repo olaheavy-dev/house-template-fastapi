@@ -2,6 +2,7 @@
 # checks to `make install`, `make check` and `make check-fast`.
 
 BACKEND := uv --directory backend run --locked
+comma := ,
 # Recording and evals call the real model, so they also read keys from backend/.env when it exists.
 # Variables already set (the budget caps below) win over the file. The tests ignore it.
 LIVE := uv --directory backend run --locked $(if $(wildcard backend/.env),--env-file .env)
@@ -10,7 +11,7 @@ INSTALLS += install-fastapi
 CHECKS += check-fastapi
 FAST_CHECKS += check-fast-fastapi
 
-.PHONY: install-fastapi check-fastapi check-fast-fastapi lock dev test db-up storage-up migrate migration record-llm eval image up
+.PHONY: install-fastapi check-fastapi check-fast-fastapi lock dev test db-up storage-up migrate migration record-llm eval image up llm-report
 
 install-fastapi: ## Install the backend's Python and dependencies (from backend/uv.lock)
 	uv --directory backend sync --locked
@@ -42,6 +43,9 @@ db-up: ## Start the local PostgreSQL with pgvector (backend/compose.yaml) and wa
 storage-up: ## Start the local S3-compatible storage (RustFS, backend/compose.yaml) and create the bucket
 	docker compose up -d --wait storage
 	$(BACKEND) python -m app.storage
+
+llm-report: ## Model spend from llm_call: make llm-report [days=7] [by=day,model] (by: day, model, prompt, feature)
+	$(BACKEND) python -m app.llm.report --days $(or $(days),7) --by $(or $(by),day$(comma)model)
 
 image: ## Build the API image from backend/Dockerfile
 	docker compose build api
