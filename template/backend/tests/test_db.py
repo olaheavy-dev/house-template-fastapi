@@ -118,14 +118,19 @@ def test_a_template_update_never_collides_with_project_migrations(
     config = db.alembic_config("postgresql+psycopg://app:app@localhost/unused")
     config.set_main_option("script_location", str(scripts))
     config.set_section_option("post_write_hooks", "hooks", "")  # no formatting needed here
+    # Whatever each branch's head is now: the project's own migrations and later template ones
+    # move them (Codex review on PR 19).
+    before = ScriptDirectory.from_config(config).revision_map
+    app_head = before.get_current_head("app")
+    template_head = before.get_current_head("template")
     command.revision(config, "a project table", head="app@head", rev_id="p1")
     command.revision(config, "a later template change", head="template@head", rev_id="t9")
 
     heads = ScriptDirectory.from_config(config)
     assert sorted(heads.get_heads()) == ["p1", "t9"]
     # Each new revision sits on its own branch's line.
-    assert heads.get_revision("p1").down_revision == "app_root"
-    assert heads.get_revision("t9").down_revision == "0004"
+    assert heads.get_revision("p1").down_revision == app_head
+    assert heads.get_revision("t9").down_revision == template_head
     command.upgrade(config, "heads", sql=True)  # offline: writes the SQL, no database needed
     sql = capsys.readouterr().out
     assert "INSERT INTO alembic_version" in sql
