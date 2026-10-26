@@ -177,7 +177,7 @@ async def db_client(
         update={"database_url": SecretStr(database_url)}
     )
     async with LifespanManager(app) as manager:
-        app.state.sessionmaker = async_sessionmaker(
+        app.state.sessionmaker = app.state.budget_sessionmaker = async_sessionmaker(
             bind=db_session.bind, join_transaction_mode="create_savepoint", expire_on_commit=False
         )
         transport = httpx.ASGITransport(app=manager.app)

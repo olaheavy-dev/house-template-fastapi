@@ -10,6 +10,8 @@ from app.settings import Settings
 
 pytestmark = pytest.mark.anyio
 
+PRODUCTION_DB = "postgresql+psycopg://app:secret@db.internal:5432/app"
+
 
 async def test_request_id_is_echoed_when_safe_and_replaced_when_not(
     client: httpx.AsyncClient,
@@ -33,7 +35,9 @@ async def test_request_id_is_echoed_when_safe_and_replaced_when_not(
 async def test_docs_are_off_in_production_unless_turned_on(
     env: str, docs_enabled: bool | None, expected: int
 ) -> None:
-    settings = Settings.model_validate({"app_env": env, "docs_enabled": docs_enabled})
+    settings = Settings.model_validate(
+        {"app_env": env, "docs_enabled": docs_enabled, "database_url": PRODUCTION_DB}
+    )
     transport = httpx.ASGITransport(app=create_app(settings))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         assert (await client.get("/openapi.json")).status_code == expected

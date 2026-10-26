@@ -1,4 +1,4 @@
-"""A cap on request bodies, enforced before the app reads them.
+"""A cap on request bodies, enforced before the app reads them, and baseline security headers.
 
 Neither uvicorn nor FastAPI limits body size, so one large POST could be read whole into memory.
 This middleware answers 413 when the declared Content-Length is over MAX_REQUEST_BYTES, and stops
@@ -65,3 +65,35 @@ class BodyLimit:
             413, detail=f"The request body is over {self.max_bytes} bytes.", instance=scope["path"]
         )
         await response(scope, receive, send)
+
+
+# Baseline headers for an API: no MIME sniffing, no framing, no referrer, and responses kept out of
+# shared caches unless a route says otherwise. The docs page (/docs) is left alone: its inline
+# scripts would break under a strict Content-Security-Policy.
+BASELINE = {
+    b"x-content-type-options": b"nosniff",
+    b"x-frame-options": b"DENY",
+    b"referrer-policy": b"no-referrer",
+}
+
+
+class SecurityHeaders:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                present = {name.lower() for name, _ in headers}
+                headers += [(k, v) for k, v in BASELINE.items() if k not in present]
+                if b"cache-control" not in present:
+                    headers.append((b"cache-control", b"no-store"))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, with_headers)
