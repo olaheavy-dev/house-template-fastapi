@@ -36,6 +36,18 @@ if TYPE_CHECKING:
 _KEY = re.compile(r"^(?!/)(?!.*(?:^|/)\.{1,2}(?:/|$))[^\x00-\x1f\x7f]{1,1024}$")
 
 
+class InvalidStorageKey(Problem):
+    def __init__(self, key: str) -> None:
+        # The key may come from the caller: it goes to the logs' exception, never the response.
+        super().__init__(400, detail="That isn't a valid file key.")
+        self.key = key
+
+
+class ObjectNotFound(Problem):
+    def __init__(self) -> None:
+        super().__init__(404, detail="No such file.")
+
+
 class Storage:
     def __init__(self, settings: Settings) -> None:
         if settings.storage_bucket is None:
@@ -75,7 +87,10 @@ class Storage:
 
     async def get(self, key: str) -> bytes:
         def read() -> bytes:
-            response = self.client.get_object(Bucket=self.bucket, Key=check_key(key))
+            try:
+                response = self.client.get_object(Bucket=self.bucket, Key=check_key(key))
+            except self.client.exceptions.NoSuchKey:
+                raise ObjectNotFound from None
             return response["Body"].read()
 
         return await anyio.to_thread.run_sync(read)
@@ -121,7 +136,7 @@ def _client(settings: Settings, endpoint_url: str | None) -> S3Client:
 
 def check_key(key: str) -> str:
     if not _KEY.match(key) or len(key.encode()) > 1024:
-        raise ValueError(f"not a storage key: {key!r}")
+        raise InvalidStorageKey(key)
     return key
 
 

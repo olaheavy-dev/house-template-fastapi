@@ -240,8 +240,9 @@ async def test_media_the_budget_cant_bound_is_refused_before_sending(
     pdf = {"type": "file", "url": "https://example.com/report.pdf", "mime_type": "application/pdf"}
     sent = iter([answer("4")])
     model = GenericFakeChatModel(messages=sent, callbacks=[guard()])
-    with pytest.raises(UnboundedMedia, match="'file'"):
+    with pytest.raises(UnboundedMedia) as refused:
         await model.ainvoke([HumanMessage(content=[pdf])])
+    assert (refused.value.status, refused.value.kind) == (422, "file")
     assert next(sent).text == "4"
     assert await calls(db_session) == []
 

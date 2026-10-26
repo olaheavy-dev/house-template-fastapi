@@ -26,7 +26,7 @@ import json
 import time
 import uuid
 from collections.abc import Callable, Sequence
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import structlog
@@ -129,8 +129,14 @@ class LlmCall(Base):
 
 
 class BudgetExhausted(Problem):
-    def __init__(self) -> None:
-        super().__init__(503, detail="The daily model budget is used up. Try again tomorrow (UTC).")
+    def __init__(self, now: datetime | None = None) -> None:
+        now = now or datetime.now(UTC)
+        midnight = datetime.combine(now.date() + timedelta(days=1), datetime.min.time(), UTC)
+        super().__init__(
+            503,
+            detail="The daily model budget is used up. Try again tomorrow (UTC).",
+            headers={"Retry-After": str(max(1, int((midnight - now).total_seconds())))},
+        )
 
 
 def utc_today() -> date:
@@ -238,8 +244,12 @@ async def settle(
     )
 
 
-class UnboundedMedia(ValueError):
+class UnboundedMedia(Problem):
     """A message carries content whose token cost the budget can't bound in advance."""
+
+    def __init__(self, kind: str) -> None:
+        super().__init__(422, detail="This kind of attachment can't be sent to the language model.")
+        self.kind = kind
 
 
 def _images(value: Any) -> int:
@@ -252,9 +262,7 @@ def _images(value: Any) -> int:
     if kind in _IMAGE_BLOCKS:
         return 1
     if kind in _UNBOUNDED_BLOCKS:
-        raise UnboundedMedia(
-            f"the model budget can't bound a {kind!r} block; send text or images, or add a bound"
-        )
+        raise UnboundedMedia(str(kind))
     return sum(_images(item) for item in value.values())
 
 

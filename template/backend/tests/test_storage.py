@@ -10,7 +10,7 @@ from pydantic import SecretStr
 
 from app.main import create_app
 from app.settings import Settings
-from app.storage import Storage, StorageDep, check_key
+from app.storage import InvalidStorageKey, ObjectNotFound, Storage, StorageDep, check_key
 
 pytestmark = pytest.mark.anyio
 
@@ -26,7 +26,7 @@ async def test_objects_round_trip(store: Storage) -> None:
     await store.put("notes/a.txt", b"hello", content_type="text/plain")
     assert await store.get("notes/a.txt") == b"hello"
     await store.delete("notes/a.txt")
-    with pytest.raises(store.client.exceptions.NoSuchKey):
+    with pytest.raises(ObjectNotFound):
         await store.get("notes/a.txt")
 
 
@@ -73,7 +73,7 @@ async def test_presigned_urls_are_signed_for_the_public_endpoint(
     "key", ["", "/abs", "a/../b", "..", "./a", "a/./b", "line\nbreak", "x" * 1025, "é" * 513]
 )
 def test_unsafe_keys_are_refused(key: str) -> None:
-    with pytest.raises(ValueError, match="not a storage key"):
+    with pytest.raises(InvalidStorageKey):
         check_key(key)
 
 
