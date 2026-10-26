@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import shutil
+from pathlib import Path
+
 import httpx
 import pytest
 from alembic import command
+from alembic.script import ScriptDirectory
 from asgi_lifespan import LifespanManager
 from fastapi import FastAPI
 from sqlalchemy import text
@@ -33,7 +37,7 @@ def test_every_model_has_a_migration(database_url: str) -> None:
 def test_migrations_downgrade_and_upgrade_cleanly(database_url: str) -> None:
     config = db.alembic_config(database_url)
     command.downgrade(config, "base")
-    command.upgrade(config, "head")
+    command.upgrade(config, "heads")
 
 
 async def test_requests_get_a_session(app: FastAPI, db_client: httpx.AsyncClient) -> None:
@@ -102,3 +106,34 @@ async def test_ping_gives_up_instead_of_hanging() -> None:
     with pytest.raises(TimeoutError):
         await ping(engine, seconds=0.5)
     await engine.dispose()
+
+
+def test_a_template_update_never_collides_with_project_migrations(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The template's migrations and the project's grow on separate branches, so a template
+    # update that ships a migration leaves one head per branch, and `upgrade heads` applies both.
+    scripts = tmp_path / "migrations"
+    shutil.copytree(db.BACKEND / "migrations", scripts)
+    config = db.alembic_config("postgresql+psycopg://app:app@localhost/unused")
+    config.set_main_option("script_location", str(scripts))
+    config.set_section_option("post_write_hooks", "hooks", "")  # no formatting needed here
+    command.revision(config, "a project table", head="app@head", rev_id="p1")
+    command.revision(config, "a later template change", head="template@head", rev_id="t9")
+
+    heads = ScriptDirectory.from_config(config)
+    assert sorted(heads.get_heads()) == ["p1", "t9"]
+    # Each new revision sits on its own branch's line.
+    assert heads.get_revision("p1").down_revision == "app_root"
+    assert heads.get_revision("t9").down_revision == "0004"
+    command.upgrade(config, "heads", sql=True)  # offline: writes the SQL, no database needed
+    sql = capsys.readouterr().out
+    assert "INSERT INTO alembic_version" in sql
+
+
+def test_only_the_project_root_starts_the_app_branch() -> None:
+    script = ScriptDirectory.from_config(db.alembic_config("postgresql+psycopg://unused/x"))
+    roots = {
+        rev.revision: rev.branch_labels for rev in script.walk_revisions() if not rev.down_revision
+    }
+    assert roots == {"0001": {"template"}, "app_root": {"app"}}

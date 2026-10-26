@@ -44,6 +44,16 @@ def apply_migrations(connection: Connection) -> None:
         )
 
 
+def migration_sql() -> list[str]:
+    """Every migration and its version row, for a fresh database: what `alembic upgrade heads
+    --sql` prints, since offline there is no database to ask which have already run."""
+    statements = []
+    for version, sql in enumerate(MIGRATIONS):
+        insert = f"INSERT INTO checkpoint_migrations (v) VALUES ({version})"  # noqa: S608 - an int
+        statements += [sql, insert]
+    return statements
+
+
 async def open_checkpointer(settings: Settings) -> tuple[AsyncPostgresSaver, AsyncConnectionPool]:
     # libpq takes the URL without SQLAlchemy's "+psycopg" driver suffix.
     url = make_url(settings.database_url.get_secret_value()).set(drivername="postgresql")

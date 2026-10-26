@@ -25,7 +25,11 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     with op.get_context().autocommit_block():
-        checkpoints.apply_migrations(op.get_bind())
+        if op.get_context().as_sql:  # `alembic upgrade heads --sql`: no database to ask
+            for statement in checkpoints.migration_sql():
+                op.execute(statement)
+        else:
+            checkpoints.apply_migrations(op.get_bind())
 
 
 def downgrade() -> None:

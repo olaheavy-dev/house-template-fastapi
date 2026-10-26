@@ -41,7 +41,7 @@ def database_url() -> str:
 
 
 def run_migrations_offline() -> None:
-    """Write the SQL to stdout (`alembic upgrade head --sql`) instead of running it."""
+    """Write the SQL to stdout (`alembic upgrade heads --sql`) instead of running it."""
     context.configure(
         url=database_url(),
         target_metadata=target_metadata,
