@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import yaml
 
@@ -39,4 +40,6 @@ def test_releases_start_at_0_1_with_v_tags():
     config = json.loads((ROOT / "release-please-config.json").read_text())
     assert config["include-v-in-tag"] and config["bump-minor-pre-major"]
     assert config["packages"]["."]["initial-version"] == "0.1.0"
-    assert json.loads((ROOT / ".release-please-manifest.json").read_text()) == {".": "0.0.0"}
+    # release-please moves the manifest to each release, so only its shape is fixed.
+    manifest = json.loads((ROOT / ".release-please-manifest.json").read_text())
+    assert manifest.keys() == {"."} and re.fullmatch(r"\d+\.\d+\.\d+", manifest["."])
