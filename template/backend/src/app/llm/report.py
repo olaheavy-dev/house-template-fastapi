@@ -129,15 +129,23 @@ async def stale(session: AsyncSession, older_than: timedelta = STALE_AFTER) -> i
     return int(count or 0)
 
 
+async def collect(
+    session: AsyncSession, *, days: int, by: Sequence[str], expire: bool
+) -> tuple[list[SpendRow], int]:
+    """The report's rows and how many reservations are still stuck. Expiring comes first, so the
+    rows include the calls it just closed (Codex review on PR 24)."""
+    if expire:
+        await expire_stale(session, older_than=STALE_AFTER)
+        await session.commit()
+    rows = await spend(session, since=utc_today() - timedelta(days=days - 1), by=by)
+    return rows, await stale(session)
+
+
 async def main(days: int, by: Sequence[str], expire: bool) -> None:
     engine = create_engine(get_settings())
     try:
         async with create_sessionmaker(engine)() as session:
-            rows = await spend(session, since=utc_today() - timedelta(days=days - 1), by=by)
-            stuck = await stale(session)
-            if expire and stuck:
-                stuck -= await expire_stale(session, older_than=STALE_AFTER)
-                await session.commit()
+            rows, stuck = await collect(session, days=days, by=by, expire=expire)
     finally:
         await engine.dispose()
     print(render(rows, by) if rows else f"No settled model calls in the last {days} days.")

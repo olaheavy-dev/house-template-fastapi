@@ -366,6 +366,23 @@ async def test_stale_reservations_are_closed_at_their_reserved_cost(
     assert await report.stale(db_session) == 0
 
 
+async def test_the_report_counts_the_reservations_it_just_expired(
+    db_session: AsyncSession,
+) -> None:
+    today_id = uuid.uuid4()
+    assert await reserve(
+        db_session, call_id=today_id, day=budget.utc_today(), model=MODEL, amount=700, cap=10**6
+    )
+    await db_session.execute(
+        update(LlmCall)
+        .where(LlmCall.id == today_id)
+        .values(created_at=func.now() - timedelta(hours=1))
+    )
+    rows, stuck = await report.collect(db_session, days=1, by=["model"], expire=True)
+    assert stuck == 0
+    assert sum(row.cost_usd for row in rows) == pytest.approx(700 / prices.MICRO_USD)
+
+
 @pytest.fixture
 def concurrent_day(database_url: str) -> Iterator[date]:
     """A day no other test uses, cleaned up afterwards: these reservations commit for real."""
