@@ -22,13 +22,20 @@ from app.settings import Settings
 
 
 @pytest.fixture
-async def gateway(request: pytest.FixtureRequest) -> AsyncIterator[Gateway]:
-    """The gateway on the real provider, its budget kept in the test database."""
+def api_key() -> str:
+    """Skips before anything starts: evals need the real model."""
     key = os.environ.get("ANTHROPIC_API_KEY")
     if not key:
         pytest.skip("evals call the real model: set ANTHROPIC_API_KEY and run make eval")
-    database_url: str = request.getfixturevalue("database_url")  # only once a key is set
-    settings = Settings(_env_file=None, app_env="test", anthropic_api_key=SecretStr(key))
+    return key
+
+
+@pytest.fixture
+async def gateway(api_key: str, database_url: str) -> AsyncIterator[Gateway]:
+    """The gateway on the real provider, its budget kept in the test database. api_key comes
+    first, so a missing key skips before the database starts; database_url is a plain
+    dependency, so its migrations run before this fixture's event loop does."""
+    settings = Settings(_env_file=None, app_env="test", anthropic_api_key=SecretStr(api_key))
     engine = create_async_engine(database_url)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     yield Gateway(settings, lambda: sessions)
