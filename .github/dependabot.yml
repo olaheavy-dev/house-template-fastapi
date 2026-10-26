@@ -46,3 +46,17 @@ updates:
     groups:
       backend-minor-and-patch:
         update-types: [minor, patch]
+
+  # The images the layer's compose file pins by digest (PostgreSQL with pgvector, RustFS). The
+  # Dockerfile is a template (its Python image follows the project's answer), so generated
+  # projects' own Dependabot updates that one.
+  - package-ecosystem: docker-compose
+    directory: /template/backend
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    labels: [dependencies]
+    commit-message:
+      prefix: fix
+      include: scope

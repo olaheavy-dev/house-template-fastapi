@@ -36,6 +36,9 @@ class Price:
     # Some models charge more for every token of a request whose prompt is longer than this.
     long_prompt_tokens: int | None = None
     long_rates: Rates | None = None
+    # Longest prompt these rates cover, when longer ones cost more and aren't priced here: the
+    # budget refuses them instead of under-recording their cost.
+    max_prompt_tokens: int | None = None
 
     def for_prompt(self, input_tokens: int) -> Rates:
         if self.long_rates and self.long_prompt_tokens and input_tokens > self.long_prompt_tokens:
@@ -64,10 +67,10 @@ PRICES: dict[str, Price] = {
         long_prompt_tokens=100_000,
         long_rates=_rates(0.50, 2.50, 0.05, 0.625, 1),
     ),
-    # OpenAI's prices for prompts up to 272K tokens. Longer prompts cost more and would be
-    # undercharged: add long_prompt_tokens and long_rates before sending one.
-    "openai:gpt-6.1-sol": Price(_rates(2, 10, 0.10, 2.50, 5)),
-    "openai:gpt-6-luna": Price(_rates(0.10, 0.50, 0.01, 0.125, 0.25)),
+    # OpenAI's prices for prompts up to 272K tokens. Longer prompts cost more and aren't priced
+    # here, so the budget refuses them (add long_prompt_tokens and long_rates to allow them).
+    "openai:gpt-6.1-sol": Price(_rates(2, 10, 0.10, 2.50, 5), max_prompt_tokens=272_000),
+    "openai:gpt-6-luna": Price(_rates(0.10, 0.50, 0.01, 0.125, 0.25), max_prompt_tokens=272_000),
 }
 
 
