@@ -192,13 +192,16 @@ def test_the_publish_workflow_follows_the_base_answer(render, project, images):
 
 
 def test_a_local_env_file_never_reaches_a_project(render):
-    # template/backend/.env holds a developer's keys for recording and evals.
+    # template/backend/.env holds a developer's keys for recording and evals. A real one serves as
+    # the probe; otherwise a throwaway one is written for the test.
     secret = TEMPLATE / "backend" / ".env"
-    assert not secret.exists(), "move your template/backend/.env aside to run this test"
-    secret.write_text("OPENAI_API_KEY=sk-never-copied\n")
+    created = not secret.exists()
+    if created:
+        secret.write_text("OPENAI_API_KEY=sk-never-copied\n")
     try:
         project = render()
     finally:
-        secret.unlink()
+        if created:
+            secret.unlink()
     assert not (project / "backend" / ".env").exists()
     assert (project / "backend" / ".env.example").exists()
