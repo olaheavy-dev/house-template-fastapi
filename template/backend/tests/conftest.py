@@ -1,9 +1,13 @@
 """Test fixtures: an app per test, driven in-process through httpx with its lifespan running,
-and a real database for the tests that ask for one (db_session, db_client)."""
+a real database for the tests that ask for one (db_session, db_client), and recorded model
+responses for the tests marked vcr (cassettes in tests/cassettes/, replayed, never re-recorded:
+`make record-llm` records them)."""
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator, Iterator
+from typing import Any
 
 import httpx
 import pytest
@@ -19,6 +23,11 @@ from app.main import create_app
 from app.settings import Settings
 from tests import db
 
+# Before langsmith first reads them (it caches them): tests never send traces or sync results to
+# LangSmith, whatever the developer's shell exports.
+os.environ["LANGSMITH_TRACING"] = "false"
+os.environ["LANGSMITH_TEST_TRACKING"] = "false"
+
 
 @pytest.fixture
 def anyio_backend() -> str:
@@ -27,7 +36,43 @@ def anyio_backend() -> str:
 
 @pytest.fixture
 def settings() -> Settings:
-    return Settings(_env_file=None, app_env="test")
+    # A key the cassettes were recorded with: the real one only while recording.
+    key = os.environ.get("ANTHROPIC_API_KEY", "test-key")
+    return Settings(_env_file=None, app_env="test", anthropic_api_key=SecretStr(key))
+
+
+# Sent with every recorded request, so never written to a cassette.
+SECRET_HEADERS = ["authorization", "x-api-key", "openai-organization", "openai-project"]
+
+
+def _keep_response_essentials(response: dict[str, Any]) -> dict[str, Any]:
+    # Response headers carry organisation ids and cookies; replay needs only the content type.
+    response["headers"] = {
+        name: value
+        for name, value in response["headers"].items()
+        if name.lower() in {"content-type", "content-encoding"}
+    }
+    return response
+
+
+@pytest.fixture(scope="session")
+def vcr_config() -> dict[str, Any]:
+    return {
+        "filter_headers": SECRET_HEADERS,
+        "before_record_response": _keep_response_essentials,
+        "decode_compressed_response": True,
+        # The body too: a changed prompt or setting is a cassette miss, not a stale answer.
+        "match_on": ["method", "scheme", "host", "port", "path", "query", "body"],
+        # The app's own in-process test client goes through httpx too; never record it.
+        "ignore_hosts": ["test"],
+    }
+
+
+@pytest.fixture
+def allowed_hosts() -> list[str]:
+    """Hosts a block_network test may still reach: this machine (the test database, Docker's
+    socket). Model providers are blocked unless a test is recording."""
+    return ["127.0.0.1", "localhost", "::1", "/.*"]
 
 
 @pytest.fixture
