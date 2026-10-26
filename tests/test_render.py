@@ -52,7 +52,9 @@ def test_layer_refuses_base_answers_without_the_fastapi_stack(render, project):
 def test_backend_files_need_no_per_project_values():
     # pyproject.toml and uv.lock stay plain files so Dependabot can update the template directly.
     backend = TEMPLATE / "backend"
-    assert not list(backend.rglob("*.jinja"))
+    # The one exception: the Dockerfile's Python image follows the python_version answer. Each
+    # generated project's Dependabot (base watches every Dockerfile) keeps its digests current.
+    assert [p.relative_to(backend) for p in backend.rglob("*.jinja")] == [Path("Dockerfile.jinja")]
     assert 'name = "backend"' in (backend / "pyproject.toml").read_text()
 
 
@@ -114,7 +116,8 @@ def test_base_answers_fixture_matches_the_pinned_base_version():
 def test_rendered_project_has_no_leftover_template_syntax(render):
     for path in Path(render()).rglob("*"):
         if path.is_file() and path.suffix in {".py", ".toml", ".md", ".mk", ".yml", ".txt"}:
-            assert "{{" not in path.read_text(), path
+            # GitHub Actions expressions (${{ ... }}) are meant to be there.
+            assert not re.search(r"(?<!\$)\{\{", path.read_text()), path
 
 
 def test_local_database_is_pinned_and_keeps_its_data():
@@ -143,3 +146,46 @@ def test_migrations_need_no_alembic_ini():
     backend = TEMPLATE / "backend"
     assert not (backend / "alembic.ini").exists()
     assert 'script_location = "migrations"' in (backend / "pyproject.toml").read_text()
+
+
+@pytest.mark.parametrize("python", ["3.14", "3.13", "3.12"])
+def test_the_image_is_pinned_to_the_answered_python_and_runs_as_non_root(render, python):
+    dockerfile = (render(python_version=python) / "backend" / "Dockerfile").read_text()
+    images = re.findall(r"^FROM (\S+)", dockerfile, flags=re.MULTILINE)
+    # uv, then the build and final stages on the same Python, everything pinned by digest.
+    assert len(images) == 3
+    assert all(re.search(r"@sha256:[0-9a-f]{64}$", image) for image in images)
+    assert images[1] == images[2]
+    assert images[1].startswith(f"python:{python}-slim-trixie@")
+    assert re.search(r"^USER 10001:10001$", dockerfile, flags=re.MULTILINE)
+    # Built from the lockfile, installed as a package (no source tree needed at runtime).
+    assert dockerfile.count("uv sync --locked") == 2
+    assert "--no-editable" in dockerfile
+
+
+def test_secrets_and_tests_stay_out_of_the_image(render):
+    ignored = (render() / "backend" / ".dockerignore").read_text().splitlines()
+    for entry in (".env", ".env.*", ".venv/", "tests/"):
+        assert entry in ignored
+
+
+def test_the_api_waits_for_migrations_that_run_once(render):
+    compose = yaml.safe_load((render() / "backend" / "compose.yaml").read_text())
+    migrate, api = compose["services"]["migrate"], compose["services"]["api"]
+    assert migrate["command"] == ["alembic", "upgrade", "head"]
+    assert migrate["restart"] == "no"
+    assert api["depends_on"]["migrate"] == {"condition": "service_completed_successfully"}
+    assert all(port.startswith("127.0.0.1:") for port in api["ports"])
+
+
+@pytest.mark.parametrize("images", [True, False])
+def test_the_publish_workflow_follows_the_base_answer(render, project, images):
+    dst = render(project(container_images=images))
+    workflow = dst / ".github" / "workflows" / "publish-api.yml"
+    owned = (dst / ".github/template-owned/fastapi.txt").read_text()
+    assert workflow.exists() is images
+    assert (".github/workflows/publish-api.yml" in owned) is images
+    if images:
+        jobs = yaml.safe_load(workflow.read_text())["jobs"]
+        assert jobs["api"]["uses"] == "./.github/workflows/publish-image.yml"
+        assert jobs["api"]["with"] == {"image": "api", "context": "backend"}

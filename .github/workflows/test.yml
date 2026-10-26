@@ -84,3 +84,11 @@ jobs:
           make migrate
           make storage-up
           docker compose down -v
+
+      - name: Run the backend from its image (migrations once, then the API)
+        working-directory: ${{ runner.temp }}/demo
+        run: |
+          make up
+          test "$(docker compose exec -T api id -u)" = 10001
+          curl -fsS http://127.0.0.1:8000/health/ready
+          docker compose down -v
