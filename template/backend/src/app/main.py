@@ -6,10 +6,12 @@ process (the database engine, model clients) are opened and closed in lifespan.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, MutableMapping
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
+from fastapi.telemetry import TelemetryConfig
 
 from app import db, health
 from app.llm import checkpoints
@@ -46,7 +48,26 @@ async def _database_ready(app: FastAPI) -> None:
     await db.ping(app.state.engine)
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def _not_health(scope: MutableMapping[str, Any]) -> bool:
+    # Probes hit /health every few seconds; their spans and metrics would drown the real traffic.
+    return str(scope.get("path", "")).startswith("/health/")
+
+
+def telemetry_config(
+    settings: Settings, overrides: TelemetryConfig | None = None
+) -> TelemetryConfig:
+    """FastAPI's native OpenTelemetry: request spans, HTTP metrics and exception logs. Nothing is
+    exported until FASTAPI_OTEL_AUTO_CONFIGURE=true and OTEL_EXPORTER_OTLP_ENDPOINT are set (or a
+    provider is passed in); tests never export."""
+    config: TelemetryConfig = {"exclude": _not_health}
+    if settings.app_env == "test":
+        config["auto_configure"] = False
+    return {**config, **(overrides or {})}
+
+
+def create_app(
+    settings: Settings | None = None, *, telemetry: TelemetryConfig | None = None
+) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings)
     docs = settings.docs_on
@@ -55,6 +76,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         docs_url="/docs" if docs else None,
         redoc_url=None,
         openapi_url="/openapi.json" if docs else None,
+        telemetry=telemetry_config(settings, telemetry),
     )
     app.state.settings = settings
     app.state.readiness_checks = {}
