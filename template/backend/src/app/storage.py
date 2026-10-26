@@ -8,7 +8,8 @@ URLs, so file bodies never pass through the API:
     @router.post("/uploads")
     async def start_upload(body: UploadIn, storage: StorageDep) -> UploadOut:
         key = f"uploads/{uuid.uuid4()}"
-        return UploadOut(key=key, url=storage.presigned_put(key, content_type=body.content_type))
+        url = storage.presigned_put(key, content_type=body.content_type, size=body.size)
+        return UploadOut(key=key, url=url)
 
 Storage is optional: with STORAGE_BUCKET unset there is no client, no readiness check, and
 StorageDep answers 503. The bucket is created outside the app (`make storage-up` locally; the
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 import re
 from typing import TYPE_CHECKING, Annotated
+from urllib.parse import quote
 
 import anyio
 import boto3
@@ -54,6 +56,8 @@ class Storage:
             raise ValueError("STORAGE_BUCKET is not set")
         self.bucket = settings.storage_bucket
         self.url_seconds = settings.storage_url_seconds
+        self.max_upload_bytes = settings.storage_max_upload_bytes
+        self.upload_types = settings.storage_upload_types
         self.client = _client(settings, settings.storage_endpoint_url)
         # Presigned URLs carry their host in the signature, so they are signed for the address
         # browsers use. Inside Compose that differs from the API's (storage:9000 vs localhost:9000);
@@ -61,20 +65,44 @@ class Storage:
         public = settings.storage_public_endpoint_url
         self.signer = _client(settings, public) if public else self.client
 
-    def presigned_get(self, key: str, *, seconds: int | None = None) -> str:
-        """A URL anyone holding it can download the object from until it expires."""
+    def presigned_get(
+        self, key: str, *, seconds: int | None = None, filename: str | None = None
+    ) -> str:
+        """A URL anyone holding it can download the object from until it expires. It downloads
+        as an attachment (optionally named), so a stored file never renders as a page on the
+        storage domain."""
+        disposition = "attachment"
+        if filename:
+            disposition += f"; filename*=UTF-8''{quote(filename, safe='')}"
         return self.signer.generate_presigned_url(
             "get_object",
-            Params={"Bucket": self.bucket, "Key": check_key(key)},
+            Params={
+                "Bucket": self.bucket,
+                "Key": check_key(key),
+                "ResponseContentDisposition": disposition,
+            },
             ExpiresIn=seconds or self.url_seconds,
         )
 
-    def presigned_put(self, key: str, *, content_type: str, seconds: int | None = None) -> str:
-        """A URL to upload one object with exactly this Content-Type (it is signed, so a different
-        one is refused). Browser uploads also need a CORS rule on the bucket."""
+    def presigned_put(
+        self, key: str, *, content_type: str, size: int, seconds: int | None = None
+    ) -> str:
+        """A URL to upload one object of exactly `size` bytes with exactly this Content-Type:
+        both are signed, so a different size or type is refused. The type must be one of
+        STORAGE_UPLOAD_TYPES and the size at most STORAGE_MAX_UPLOAD_BYTES (else 415 or 413).
+        Browser uploads also need a CORS rule on the bucket."""
+        if content_type not in self.upload_types:
+            raise Problem(415, detail="That type of file can't be uploaded.")
+        if not 0 < size <= self.max_upload_bytes:
+            raise Problem(413, detail=f"Files can be at most {self.max_upload_bytes} bytes.")
         return self.signer.generate_presigned_url(
             "put_object",
-            Params={"Bucket": self.bucket, "Key": check_key(key), "ContentType": content_type},
+            Params={
+                "Bucket": self.bucket,
+                "Key": check_key(key),
+                "ContentType": content_type,
+                "ContentLength": size,
+            },
             ExpiresIn=seconds or self.url_seconds,
         )
 

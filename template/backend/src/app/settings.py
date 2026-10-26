@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     # JSON logs in production; readable console logs everywhere else.
     log_json: bool = False
+    # Largest request body the API reads, in bytes; larger ones get a 413. Files go to storage
+    # through presigned URLs, not through the API.
+    max_request_bytes: int = Field(default=1_048_576, gt=0)
     # Interactive API docs at /docs. Unset means on everywhere except production.
     docs_enabled: bool | None = None
 
@@ -45,6 +48,24 @@ class Settings(BaseSettings):
     storage_secret_access_key: SecretStr | None = SecretStr("app-storage-secret")
     # How long presigned URLs work; R2 and S3 allow up to 7 days.
     storage_url_seconds: int = Field(default=900, gt=0, le=604_800)
+    # Largest file a presigned upload accepts, in bytes; its exact size is signed into the URL.
+    storage_max_upload_bytes: int = Field(default=26_214_400, gt=0)
+    # Content types uploads may declare. Never text/html or image/svg+xml: served back from the
+    # bucket's domain, they can run scripts. As JSON in the environment: ["image/png", ...].
+    storage_upload_types: frozenset[str] = frozenset(
+        {
+            "image/png",
+            "image/jpeg",
+            "image/webp",
+            "image/gif",
+            "application/pdf",
+            "text/plain",
+            "text/csv",
+            "text/markdown",
+            "application/json",
+            "application/zip",
+        }
+    )
 
     # The model the gateway calls, "provider:model id", with its prices in app/llm/prices.py.
     llm_model: str = "openai:gpt-6-luna"
