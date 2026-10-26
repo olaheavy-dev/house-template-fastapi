@@ -1,27 +1,25 @@
 # Stand-in recording: the request is exactly what the gateway sends; the response follows the
-# documented Messages API shape (no live call was made). `make record-llm` with a real
-# ANTHROPIC_API_KEY replaces it with a real recording.
+# documented Chat Completions shape (no live call was made). `make record-llm` with a real
+# OPENAI_API_KEY replaces it with a real recording.
 interactions:
 - request:
-    body: '{"max_tokens":1024,"messages":[{"role":"user","content":"Reply with one
-      word: hello."}],"model":"claude-haiku-5-5"}'
+    body: '{"model":"gpt-6-luna","stream":false,"messages":[{"content":"Reply with
+      one word: hello.","role":"user"}],"max_completion_tokens":1024}'
     headers:
       accept:
       - application/json
       accept-encoding:
       - gzip, deflate, zstd
-      anthropic-version:
-      - '2023-06-01'
       connection:
       - keep-alive
       content-length:
-      - '115'
+      - '135'
       content-type:
       - application/json
       host:
-      - api.anthropic.com
+      - api.openai.com
       user-agent:
-      - langchain-anthropic/1.7.6
+      - AsyncOpenAI/Python 3.37.0
       x-stainless-arch:
       - arm64
       x-stainless-async:
@@ -31,9 +29,9 @@ interactions:
       x-stainless-os:
       - MacOS
       x-stainless-package-version:
-      - 1.17.0
+      - 3.37.0
       x-stainless-raw-response:
-      - raw
+      - 'true'
       x-stainless-read-timeout:
       - '60.0'
       x-stainless-retry-count:
@@ -42,16 +40,16 @@ interactions:
       - CPython
       x-stainless-runtime-version:
       - 3.14.5
-      x-stainless-timeout:
-      - NOT_GIVEN
     method: POST
-    uri: https://api.anthropic.com/v1/messages
+    uri: https://api.openai.com/v1/chat/completions
   response:
     body:
-      string: '{"id": "msg_stub_0001", "type": "message", "role": "assistant", "model":
-        "claude-haiku-5-5", "content": [{"type": "text", "text": "Hello."}], "stop_reason":
-        "end_turn", "stop_sequence": null, "usage": {"input_tokens": 14, "output_tokens":
-        4, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}'
+      string: '{"id": "chatcmpl-stub0001", "object": "chat.completion", "created":
+        1761480000, "model": "gpt-6-luna", "choices": [{"index": 0, "message": {"role":
+        "assistant", "content": "Hello.", "refusal": null}, "finish_reason": "stop",
+        "logprobs": null}], "usage": {"prompt_tokens": 14, "completion_tokens": 4,
+        "total_tokens": 18, "prompt_tokens_details": {"cached_tokens": 0}, "completion_tokens_details":
+        {"reasoning_tokens": 0}}}'
     headers:
       content-type:
       - application/json

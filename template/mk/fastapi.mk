@@ -53,12 +53,10 @@ migration: ## Write a migration from model changes: make migration name="add cou
 	@test -n "$(name)" || { echo 'usage: make migration name="what changed"'; exit 2; }
 	$(BACKEND) alembic revision --autogenerate -m "$(name)"
 
-record-llm: ## Re-record the model cassettes with real calls: ANTHROPIC_API_KEY=... make record-llm [budget=0.50]
-	@test -n "$$ANTHROPIC_API_KEY" || { echo 'set ANTHROPIC_API_KEY to record'; exit 2; }
+record-llm: ## Re-record the model cassettes with real calls, with LLM_MODEL's provider key set: make record-llm [budget=0.50]
 	LLM_DAILY_BUDGET_USD=$(or $(budget),0.50) $(BACKEND) pytest -m vcr --record-mode=rewrite
 
-eval: ## Run the evals against the real model: ANTHROPIC_API_KEY=... make eval [budget=1] (uploads to LangSmith when LANGSMITH_API_KEY is set)
-	@test -n "$$ANTHROPIC_API_KEY" || { echo 'evals call the real model: set ANTHROPIC_API_KEY'; exit 2; }
+eval: ## Run the evals against the real model, with LLM_MODEL's provider key set: make eval [budget=1] (uploads to LangSmith when LANGSMITH_API_KEY is set)
 	LLM_EVAL=1 LLM_DAILY_BUDGET_USD=$(or $(budget),1) \
 	LANGSMITH_TEST_TRACKING=$$([ -n "$$LANGSMITH_API_KEY" ] && echo true || echo false) \
 	LANGSMITH_TRACING=$$([ -n "$$LANGSMITH_API_KEY" ] && echo true || echo false) \

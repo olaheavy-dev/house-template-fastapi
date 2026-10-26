@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from app.db import get_session
+from app.llm.gateway import key_setting
 from app.main import create_app
 from app.settings import Settings
 from app.storage import create_bucket
@@ -37,11 +38,34 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
+def provider_key() -> tuple[str, str | None]:
+    """The environment variable holding LLM_MODEL's provider key, and its value if set."""
+    name = key_setting(Settings(_env_file=None).llm_model).upper()
+    return name, os.environ.get(name)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def recording_needs_a_real_key(request: pytest.FixtureRequest) -> None:
+    # Replaying needs no key; recording with a placeholder would save the provider's 401.
+    if request.config.getoption("--record-mode") in (None, "none"):
+        return
+    name, value = provider_key()
+    if not value:
+        pytest.exit(f"recording calls the real model: set {name}", returncode=2)
+
+
 @pytest.fixture
 def settings() -> Settings:
-    # A key the cassettes were recorded with: the real one only while recording.
-    key = os.environ.get("ANTHROPIC_API_KEY", "test-key")
-    return Settings(_env_file=None, app_env="test", anthropic_api_key=SecretStr(key))
+    # Placeholder keys for replay; the real ones, from the environment, only while recording.
+    def key(name: str) -> SecretStr:
+        return SecretStr(os.environ.get(name, "test-key"))
+
+    return Settings(
+        _env_file=None,
+        app_env="test",
+        openai_api_key=key("OPENAI_API_KEY"),
+        anthropic_api_key=key("ANTHROPIC_API_KEY"),
+    )
 
 
 # Sent with every recorded request, so never written to a cassette.
