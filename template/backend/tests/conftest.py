@@ -6,6 +6,7 @@ responses for the tests marked vcr (cassettes in tests/cassettes/, replayed, nev
 from __future__ import annotations
 
 import os
+import uuid
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
@@ -21,7 +22,8 @@ from sqlalchemy.pool import NullPool
 from app.db import get_session
 from app.main import create_app
 from app.settings import Settings
-from tests import db
+from app.storage import create_bucket
+from tests import db, storage
 
 # Before langsmith first reads them (it caches them): tests never send traces or sync results to
 # LangSmith, whatever the developer's shell exports. `make eval` (LLM_EVAL=1) decides for itself.
@@ -87,6 +89,27 @@ async def client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
         transport = httpx.ASGITransport(app=manager.app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             yield client
+
+
+@pytest.fixture(scope="session")
+def storage_endpoint() -> Iterator[str]:
+    """A running S3-compatible storage for the whole test session (see tests/storage.py)."""
+    yield from storage.storage_endpoint()
+
+
+@pytest.fixture
+def storage_settings(storage_endpoint: str) -> Settings:
+    """Settings for a fresh bucket of its own on the test storage."""
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        storage_bucket=f"test-{uuid.uuid4().hex[:12]}",
+        storage_endpoint_url=storage_endpoint,
+        storage_access_key_id=SecretStr(storage.ACCESS_KEY),
+        storage_secret_access_key=SecretStr(storage.SECRET_KEY),
+    )
+    create_bucket(settings)
+    return settings
 
 
 @pytest.fixture(scope="session")

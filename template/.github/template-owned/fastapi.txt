@@ -18,4 +18,6 @@ backend/compose.yaml
 backend/migrations/env.py
 backend/migrations/script.py.mako
 backend/tests/db.py
+backend/tests/storage.py
+backend/src/app/storage.py
 backend/tests/evals/conftest.py

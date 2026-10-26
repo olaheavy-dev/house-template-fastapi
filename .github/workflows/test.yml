@@ -74,10 +74,13 @@ jobs:
         working-directory: ${{ runner.temp }}/demo
         run: make install && make check
 
-      - name: Start the local database from the root compose file and migrate it
+      - name: Start the local database and storage from the root compose file
         working-directory: ${{ runner.temp }}/demo
+        env:
+          STORAGE_BUCKET: app
         run: |
           docker compose config --quiet
           make db-up
           make migrate
+          make storage-up
           docker compose down -v

@@ -24,6 +24,7 @@ dependencies = [
     "langgraph>=1.2.17",
     "langgraph-checkpoint-postgres>=3.2.0",
     "psycopg-pool>=3.3.3",
+    "boto3>=1.43.118",
 ]
 
 [dependency-groups]
@@ -37,6 +38,7 @@ dev = [
     "pyyaml>=6.0.3",
     "ruff>=0.17.2",
     "testcontainers[postgres]>=4.15.0",
+    "types-boto3[s3]>=1.43.118",
     "types-pyyaml>=6.0.12",
     # 8.2 added httpx2, which the openai and anthropic SDKs use; 9.2 adds filter_sensitive_data.
     "vcrpy>=9.2.0",

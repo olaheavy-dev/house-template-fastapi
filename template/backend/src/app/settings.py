@@ -32,6 +32,17 @@ class Settings(BaseSettings):
     db_pool_size: int = 5
     db_max_overflow: int = 10
 
+    # S3-compatible object storage (app/storage.py). Unset STORAGE_BUCKET means no storage.
+    # Locally: RustFS from backend/compose.yaml. Production on R2: the account's
+    # https://<account id>.r2.cloudflarestorage.com endpoint, region "auto" and an R2 API token.
+    storage_bucket: str | None = None
+    storage_endpoint_url: str | None = "http://localhost:9000"
+    storage_region: str = "us-east-1"
+    storage_access_key_id: SecretStr | None = SecretStr("app-storage")
+    storage_secret_access_key: SecretStr | None = SecretStr("app-storage-secret")
+    # How long presigned URLs work; R2 and S3 allow up to 7 days.
+    storage_url_seconds: int = Field(default=900, gt=0, le=604_800)
+
     # The model the gateway calls, "provider:model id", with its prices in app/llm/prices.py.
     llm_model: str = "anthropic:claude-haiku-5-5"
     # Read by the gateway only; the provider's own variable names, so the usual secret works.
