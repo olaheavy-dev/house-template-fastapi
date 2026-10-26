@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
+from langchain_core.exceptions import ModelConnectionError, ModelRateLimitError, ModelTimeoutError
 from langchain_core.language_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage
 from langchain_core.messages.ai import UsageMetadata
@@ -16,8 +17,16 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.llm import prices
-from app.llm.budget import BudgetExhausted, BudgetGuard, LlmCall, LlmSpendDay, reserve, settle
+from app.llm import budget, prices
+from app.llm.budget import (
+    BudgetExhausted,
+    BudgetGuard,
+    LlmCall,
+    LlmSpendDay,
+    UnboundedMedia,
+    reserve,
+    settle,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -40,9 +49,10 @@ class FailingModel(GenericFakeChatModel):
     """Fails like a provider would: at once, or after streaming part of an answer."""
 
     stream_first: bool = False
+    error: Exception = ModelTimeoutError("request timed out")
 
     async def _agenerate(self, *args: Any, **kwargs: Any) -> ChatResult:
-        raise ConnectionError("provider unreachable")
+        raise self.error
 
     async def _astream(
         self,
@@ -56,7 +66,7 @@ class FailingModel(GenericFakeChatModel):
             if run_manager:
                 await run_manager.on_llm_new_token("Fo", chunk=chunk)
             yield chunk
-        raise ConnectionError("stream broken")
+        raise self.error
 
 
 class StreamingModel(GenericFakeChatModel):
@@ -150,23 +160,45 @@ async def test_a_streamed_call_is_settled_from_its_final_usage(
     assert (call.status, call.cost_micro_usd) == ("settled", 7_000)
 
 
-async def test_a_failed_call_releases_its_reservation(
+async def test_a_call_the_provider_rejected_releases_its_reservation(
     guard: Callable[..., BudgetGuard], db_session: AsyncSession
 ) -> None:
-    model = FailingModel(messages=iter([]), callbacks=[guard()])
-    with pytest.raises(ConnectionError):
+    model = FailingModel(
+        messages=iter([]), error=ModelRateLimitError("slow down"), callbacks=[guard()]
+    )
+    with pytest.raises(ModelRateLimitError):
         await model.ainvoke(QUESTION)
     [call] = await calls(db_session)
     assert (call.status, call.cost_micro_usd) == ("failed", 0)
     assert await committed(db_session) == 0
 
 
+@pytest.mark.parametrize(
+    "error", [ModelTimeoutError("timed out"), ModelConnectionError("reset"), RuntimeError("?")]
+)
+async def test_a_call_that_may_have_been_processed_keeps_its_reservation(
+    guard: Callable[..., BudgetGuard], db_session: AsyncSession, error: Exception
+) -> None:
+    # A timeout or a dropped connection can come after the provider generated (and billed).
+    model = FailingModel(messages=iter([]), error=error, callbacks=[guard()])
+    with pytest.raises(type(error)):
+        await model.ainvoke(QUESTION)
+    [call] = await calls(db_session)
+    assert call.status == "failed"
+    assert call.cost_micro_usd == call.reserved_micro_usd == await committed(db_session)
+
+
 async def test_a_stream_that_breaks_midway_keeps_its_reservation(
     guard: Callable[..., BudgetGuard], db_session: AsyncSession
 ) -> None:
     # The provider may bill what it generated before the break, and nothing reports how much.
-    model = FailingModel(messages=iter([]), stream_first=True, callbacks=[guard()])
-    with pytest.raises(ConnectionError):
+    model = FailingModel(
+        messages=iter([]),
+        stream_first=True,
+        error=ModelRateLimitError("even a rejection"),
+        callbacks=[guard()],
+    )
+    with pytest.raises(ModelRateLimitError):
         _ = [chunk async for chunk in model.astream(QUESTION)]
     [call] = await calls(db_session)
     assert call.status == "failed"
@@ -188,6 +220,30 @@ async def test_a_larger_bound_limit_is_reserved_for(guard: Callable[..., BudgetG
     model = GenericFakeChatModel(messages=iter([answer("4")]), callbacks=[guard(cap=10_000)])
     with pytest.raises(BudgetExhausted):
         await model.bind(max_tokens=5_000).ainvoke(QUESTION)
+
+
+async def test_images_are_reserved_at_their_maximum_however_they_are_sent(
+    guard: Callable[..., BudgetGuard], db_session: AsyncSession
+) -> None:
+    image = {"type": "image", "url": "https://example.com/chart.png"}
+    model = GenericFakeChatModel(messages=iter([answer("4"), answer("4")]), callbacks=[guard()])
+    await model.ainvoke(QUESTION)
+    await model.ainvoke([HumanMessage(content=[image, {"type": "text", "text": "What is 2 + 2?"}])])
+    text_only, with_image = sorted(c.reserved_micro_usd for c in await calls(db_session))
+    # At least IMAGE_TOKENS more input at the highest input rate ($4/M for 1h cache writes).
+    assert with_image - text_only >= budget.IMAGE_TOKENS * 4
+
+
+async def test_media_the_budget_cant_bound_is_refused_before_sending(
+    guard: Callable[..., BudgetGuard], db_session: AsyncSession
+) -> None:
+    pdf = {"type": "file", "url": "https://example.com/report.pdf", "mime_type": "application/pdf"}
+    sent = iter([answer("4")])
+    model = GenericFakeChatModel(messages=sent, callbacks=[guard()])
+    with pytest.raises(UnboundedMedia, match="'file'"):
+        await model.ainvoke([HumanMessage(content=[pdf])])
+    assert next(sent).text == "4"
+    assert await calls(db_session) == []
 
 
 async def test_settling_twice_changes_nothing(db_session: AsyncSession) -> None:

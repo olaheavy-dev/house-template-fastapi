@@ -6,9 +6,13 @@ LLM_DAILY_BUDGET_USD: a reservation that would cross it is refused with a 503 an
 never sent. When the call ends, its row is settled with the real cost from usage_metadata and the
 day's total moves by the difference.
 
-A failed call is settled at zero (providers don't bill a request they rejected), unless it had
-already streamed tokens; a call whose usage is missing, or whose settlement fails, keeps its
-reservation. Both err towards counting too much. Days are UTC.
+A call the provider rejected (401, 403, 400, 404, 429, context overflow) is settled at zero: it
+was never processed. Any other failure (a timeout, a dropped connection, a 5xx, a stream that
+broke midway) may still be billed, so it keeps its reservation, as does a call whose usage is
+missing or whose settlement fails. Every doubt errs towards counting too much. Days are UTC.
+
+Images are reserved at IMAGE_TOKENS each, however they are sent. Documents, audio and video have
+no per-item bound (a PDF costs per page), so a call carrying one is refused before it is sent.
 
 The guard is a LangChain callback attached to the model, so it covers every way of calling it
 (ainvoke, astream, with_structured_output, tools, agents), but only when the call is awaited:
@@ -26,6 +30,14 @@ from typing import Any
 
 import structlog
 from langchain_core.callbacks import AsyncCallbackHandler
+from langchain_core.exceptions import (
+    ContextOverflowError,
+    ModelAuthenticationError,
+    ModelInvalidRequestError,
+    ModelNotFoundError,
+    ModelPermissionDeniedError,
+    ModelRateLimitError,
+)
 from langchain_core.messages import BaseMessage
 from langchain_core.messages.ai import UsageMetadata
 from langchain_core.outputs import ChatGeneration, LLMResult
@@ -43,6 +55,21 @@ log = structlog.get_logger()
 # Added to every reservation's input: message framing, and the system prompt a provider adds
 # when tools are bound (Anthropic documents a few hundred tokens).
 INPUT_MARGIN_TOKENS = 1024
+# Per image, above Anthropic's documented maximum of 4,784 (high-resolution models, vision docs,
+# checked 26 Oct 2026). Check the provider's image pricing before sending images to another one.
+IMAGE_TOKENS = 6_000
+_IMAGE_BLOCKS = {"image", "image_url", "input_image"}
+_UNBOUNDED_BLOCKS = {"document", "file", "input_file", "audio", "input_audio", "video"}
+# Errors that mean the provider rejected the request without processing it (LangChain's
+# provider-independent classes, keyed to the HTTP status).
+_REJECTED = (
+    ModelAuthenticationError,
+    ModelPermissionDeniedError,
+    ModelInvalidRequestError,
+    ModelNotFoundError,
+    ModelRateLimitError,
+    ContextOverflowError,
+)
 
 
 class LlmSpendDay(Base):
@@ -159,13 +186,35 @@ async def settle(
     )
 
 
+class UnboundedMedia(ValueError):
+    """A message carries content whose token cost the budget can't bound in advance."""
+
+
+def _images(value: Any) -> int:
+    """Image blocks anywhere in a message's content (tool results can hold them too)."""
+    if isinstance(value, list):
+        return sum(_images(item) for item in value)
+    if not isinstance(value, dict):
+        return 0
+    kind = value.get("type")
+    if kind in _IMAGE_BLOCKS:
+        return 1
+    if kind in _UNBOUNDED_BLOCKS:
+        raise UnboundedMedia(
+            f"the model budget can't bound a {kind!r} block; send text or images, or add a bound"
+        )
+    return sum(_images(item) for item in value.values())
+
+
 def input_bound(messages: Sequence[BaseMessage], invocation_params: dict[str, Any]) -> int:
     """More input tokens than the request can hold: its UTF-8 bytes (byte-level BPE tokenizers
-    never use more than one token per byte) plus a margin. Tools and schemas are in the params."""
+    never use more than one token per byte), IMAGE_TOKENS per image (an image sent by URL or file
+    id is only a few bytes here), plus a margin. Tools and schemas are in the params."""
     payload = json.dumps(
         [[m.model_dump() for m in messages], invocation_params], default=str, ensure_ascii=False
     )
-    return len(payload.encode()) + INPUT_MARGIN_TOKENS
+    images = sum(_images(m.content) for m in messages)
+    return len(payload.encode()) + images * IMAGE_TOKENS + INPUT_MARGIN_TOKENS
 
 
 def _usage(response: LLMResult) -> UsageMetadata | None:
@@ -253,7 +302,8 @@ class BudgetGuard(AsyncCallbackHandler):
     async def on_llm_error(self, error: BaseException, *, run_id: uuid.UUID, **kwargs: Any) -> None:
         streamed = run_id in self._streamed
         self._streamed.discard(run_id)
-        await self._settle(run_id, "failed", None if streamed else 0, None)
+        rejected = isinstance(error, _REJECTED) and not streamed
+        await self._settle(run_id, "failed", 0 if rejected else None, None)
 
     async def _settle(
         self, run_id: uuid.UUID, status: str, cost: int | None, usage: UsageMetadata | None
