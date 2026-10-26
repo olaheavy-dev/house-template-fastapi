@@ -309,6 +309,27 @@ async def test_a_refusal_by_the_day_cap_leaves_the_users_total_alone(
     assert await user_total(db_session, "u_3") is None
 
 
+async def test_a_call_that_never_reserved_against_the_user_leaves_their_total_alone(
+    db_session: AsyncSession,
+) -> None:
+    # Codex review on PR 21: during a rollout an uncapped worker's call for the same user may
+    # settle after a capped worker created the user's row; it must not subtract from it.
+    capped, uncapped = uuid.uuid4(), uuid.uuid4()
+    call = {"day": DAY, "model": MODEL, "amount": 900, "cap": 1_000_000}
+    assert (
+        await reserve_for(db_session, user_ref="u_4", user_cap=10_000, call_id=capped, **call)
+        is None
+    )
+    assert (
+        await reserve_for(db_session, user_ref="u_4", user_cap=None, call_id=uncapped, **call)
+        is None
+    )
+    await settle(db_session, call_id=uncapped, status="settled", cost=100)
+    assert await user_total(db_session, "u_4") == 900
+    await settle(db_session, call_id=capped, status="settled", cost=100)
+    assert await user_total(db_session, "u_4") == 100
+
+
 @pytest.fixture
 def concurrent_day(database_url: str) -> Iterator[date]:
     """A day no other test uses, cleaned up afterwards: these reservations commit for real."""

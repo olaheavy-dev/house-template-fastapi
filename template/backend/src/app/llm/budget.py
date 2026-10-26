@@ -136,6 +136,9 @@ class LlmCall(Base):
     # for (never a name or an email), so cost can be read per feature and per user.
     feature: Mapped[str | None] = mapped_column(String(100), index=True)
     user_ref: Mapped[str | None] = mapped_column(String(200))
+    # Whether this call reserved against the user's daily cap, so settlement adjusts that total
+    # only for calls that added to it (a worker without the cap may serve the same user).
+    user_reserved: Mapped[bool] = mapped_column(server_default=false())
 
 
 class BudgetExhausted(Problem):
@@ -165,6 +168,7 @@ async def reserve(
     prompt_sha: str | None = None,
     feature: str | None = None,
     user_ref: str | None = None,
+    user_reserved: bool = False,
 ) -> bool:
     """Add `amount` to the day's total and record the call, or change nothing and return False if
     that would cross `cap`. One statement: Postgres locks the day's row, so concurrent
@@ -199,6 +203,7 @@ async def reserve(
             prompt_sha=prompt_sha,
             feature=feature,
             user_ref=user_ref,
+            user_reserved=user_reserved,
             status="reserved",
             reserved_micro_usd=amount,
         )
@@ -242,25 +247,31 @@ async def settle(
                 **details,
             )
             .returning(
-                LlmCall.day, LlmCall.user_ref, LlmCall.reserved_micro_usd, LlmCall.cost_micro_usd
+                LlmCall.day,
+                LlmCall.user_ref,
+                LlmCall.user_reserved,
+                LlmCall.reserved_micro_usd,
+                LlmCall.cost_micro_usd,
             )
         )
     ).first()
     if row is None:
         return
-    day, user_ref, reserved, charged = row
+    day, user_ref, user_reserved, reserved, charged = row
     difference = (charged or 0) - reserved
-    await session.execute(
-        update(LlmSpendDay)
-        .where(LlmSpendDay.day == day)
-        .values(committed_micro_usd=LlmSpendDay.committed_micro_usd + difference)
-    )
-    if user_ref is not None:  # no row unless a per-user cap was in force: then this does nothing
+    # The user's row before the day's: the order reservations lock them in, so a settlement and
+    # a reservation for the same user can't deadlock.
+    if user_reserved:
         await session.execute(
             update(LlmSpendUserDay)
             .where(LlmSpendUserDay.day == day, LlmSpendUserDay.user_ref == user_ref)
             .values(committed_micro_usd=LlmSpendUserDay.committed_micro_usd + difference)
         )
+    await session.execute(
+        update(LlmSpendDay)
+        .where(LlmSpendDay.day == day)
+        .values(committed_micro_usd=LlmSpendDay.committed_micro_usd + difference)
+    )
 
 
 class UserBudgetExhausted(Problem):
@@ -289,7 +300,8 @@ async def reserve_for(
     **call: Any,
 ) -> str | None:
     """reserve(), plus the user's own daily cap when one is set. Both totals move together or
-    neither does (one savepoint). Returns None when reserved, else what refused it: "day" or
+    neither does (one savepoint). Rows are locked user first, then day; settle() keeps that
+    order. Returns None when reserved, else what refused it: "day" or
     "user"."""
     try:
         async with session.begin_nested():
@@ -298,7 +310,7 @@ async def reserve_for(
                 session, call["day"], str(user_ref), call["amount"], int(user_cap or 0)
             ):
                 raise _Refused("user")
-            if not await reserve(session, user_ref=user_ref, **call):
+            if not await reserve(session, user_ref=user_ref, user_reserved=capped, **call):
                 raise _Refused("day")
     except _Refused as refused:
         return refused.scope
