@@ -5,3 +5,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .import_linter_cache/
+# Local keys (template/backend/.env for recording and evals): never committed, never copied.
+.env
+.env.*
+!.env.example

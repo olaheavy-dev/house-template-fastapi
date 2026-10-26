@@ -17,6 +17,7 @@ import pytest
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.llm import checkpoints
 from app.llm.gateway import Gateway, key_setting
 from app.settings import Settings
 
@@ -36,12 +37,15 @@ def api_key() -> str:
 
 @pytest.fixture
 async def gateway(api_key: str, database_url: str) -> AsyncIterator[Gateway]:
-    """The gateway on the real provider, its budget kept in the test database. api_key comes
-    first, so a missing key stops before the database starts; database_url is a plain
-    dependency, so its migrations run before this fixture's event loop does."""
-    settings = Settings(_env_file=None, app_env="test")
+    """The gateway on the real provider, its budget and agent threads kept in the test database.
+    api_key comes first, so a missing key stops before the database starts; database_url is a
+    plain dependency, so its migrations run before this fixture's event loop does."""
+    settings = Settings(_env_file=None, app_env="test", database_url=SecretStr(database_url))
     settings = settings.model_copy(update={key_setting(settings.llm_model): SecretStr(api_key)})
     engine = create_async_engine(database_url)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
-    yield Gateway(settings, lambda: sessions)
+    gateway = Gateway(settings, lambda: sessions)
+    gateway.checkpointer, pool = await checkpoints.open_checkpointer(settings)
+    yield gateway
+    await pool.close()
     await engine.dispose()

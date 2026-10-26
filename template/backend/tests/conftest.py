@@ -27,10 +27,10 @@ from app.storage import create_bucket
 from tests import db, storage
 
 # Before langsmith first reads them (it caches them): tests never send traces or sync results to
-# LangSmith, whatever the developer's shell exports. `make eval` (LLM_EVAL=1) decides for itself.
-if os.environ.get("LLM_EVAL") != "1":
-    os.environ["LANGSMITH_TRACING"] = "false"
-    os.environ["LANGSMITH_TEST_TRACKING"] = "false"
+# LangSmith, whatever the developer's shell exports. Evals (`make eval`, LLM_EVAL=1) upload an
+# experiment and its traces when a LangSmith key is set, from the shell or backend/.env.
+_upload = os.environ.get("LLM_EVAL") == "1" and bool(os.environ.get("LANGSMITH_API_KEY"))
+os.environ["LANGSMITH_TRACING"] = os.environ["LANGSMITH_TEST_TRACKING"] = str(_upload).lower()
 
 
 @pytest.fixture

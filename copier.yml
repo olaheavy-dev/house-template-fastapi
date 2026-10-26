@@ -25,6 +25,10 @@ _exclude:
   - .ruff_cache
   - .pytest_cache
   - .import_linter_cache
+  # A developer's keys in template/backend/.env must never reach a generated project.
+  - .env
+  - .env.*
+  - "!.env.example"
 _external_data:
   base: .copier-answers.base.yml
 # The project owns its lockfile after the first copy: a template update changes
