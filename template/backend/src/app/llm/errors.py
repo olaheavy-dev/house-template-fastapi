@@ -24,6 +24,7 @@ from langchain_core.exceptions import (
     ModelRateLimitError,
     ModelTimeoutError,
 )
+from langgraph.errors import GraphRecursionError
 
 from app.problems import problem_response
 
@@ -73,5 +74,15 @@ async def _model_error(request: Request, exc: Exception) -> JSONResponse:
     )
 
 
+async def _step_limit(request: Request, exc: Exception) -> JSONResponse:
+    log.warning("agent_step_limit", path=request.url.path)
+    return problem_response(
+        422,
+        detail="The assistant couldn't finish this within its step limit.",
+        instance=request.url.path,
+    )
+
+
 def install_model_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(ModelError, _model_error)
+    app.add_exception_handler(GraphRecursionError, _step_limit)

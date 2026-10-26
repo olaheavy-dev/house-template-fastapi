@@ -13,6 +13,7 @@ from langchain_core.language_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage
 from langchain_core.messages.ai import UsageMetadata
 from langchain_core.outputs import ChatGenerationChunk, ChatResult
+from langchain_core.runnables import RunnableConfig
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -23,8 +24,11 @@ from app.llm.budget import (
     BudgetGuard,
     LlmCall,
     LlmSpendDay,
+    LlmSpendUserDay,
     UnboundedMedia,
+    UserBudgetExhausted,
     reserve,
+    reserve_for,
     settle,
 )
 
@@ -253,6 +257,56 @@ async def test_settling_twice_changes_nothing(db_session: AsyncSession) -> None:
     await settle(db_session, call_id=call_id, status="settled", cost=100)
     await settle(db_session, call_id=call_id, status="settled", cost=50)
     assert await committed(db_session) == 100
+
+
+async def user_total(session: AsyncSession, user_ref: str) -> int | None:
+    return await session.scalar(
+        select(LlmSpendUserDay.committed_micro_usd).where(
+            LlmSpendUserDay.day == DAY, LlmSpendUserDay.user_ref == user_ref
+        )
+    )
+
+
+async def test_one_users_cap_refuses_only_that_user(
+    db_session: AsyncSession, guard: Callable[..., BudgetGuard]
+) -> None:
+    capped = guard()
+    capped.user_cap = 1_000_000
+    as_user: RunnableConfig = {"metadata": {"user_ref": "u_1"}}
+    first = GenericFakeChatModel(messages=iter([answer("4"), answer("4")]), callbacks=[capped])
+    await first.ainvoke(QUESTION, config=as_user)
+    # The first call settled at 7,000; a cap just short of 7,000 plus a fresh reservation
+    # leaves no room for a second call.
+    reservation = await db_session.scalar(select(LlmCall.reserved_micro_usd))
+    assert reservation is not None
+    capped.user_cap = 7_000 + reservation - 1
+    with pytest.raises(UserBudgetExhausted) as refused:
+        await first.ainvoke(QUESTION, config=as_user)
+    assert (refused.value.status, int(refused.value.headers["Retry-After"]) > 0) == (429, True)
+    # Someone else is unaffected, and the refusal left the day's total as it was.
+    before = await committed(db_session)
+    other = GenericFakeChatModel(messages=iter([answer("4")]), callbacks=[capped])
+    await other.ainvoke(QUESTION, config={"metadata": {"user_ref": "u_2"}})
+    assert await user_total(db_session, "u_1") == 7_000
+    assert await user_total(db_session, "u_2") == 7_000
+    assert await committed(db_session) == (before or 0) + 7_000
+
+
+async def test_a_refusal_by_the_day_cap_leaves_the_users_total_alone(
+    db_session: AsyncSession,
+) -> None:
+    refused = await reserve_for(
+        db_session,
+        user_ref="u_3",
+        user_cap=1_000_000,
+        call_id=uuid.uuid4(),
+        day=DAY,
+        model=MODEL,
+        amount=500,
+        cap=100,
+    )
+    assert refused == "day"
+    assert await user_total(db_session, "u_3") is None
 
 
 @pytest.fixture

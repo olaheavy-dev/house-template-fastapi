@@ -25,7 +25,7 @@ is closed": run one loop and process jobs inside it.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 import anyio
 from fastapi import Depends, Request
@@ -33,6 +33,7 @@ from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langchain_core.tracers.langchain import LangChainTracer, wait_for_all_tracers
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -41,8 +42,10 @@ from langsmith import Client
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.auth import User
 from app.llm import prices
 from app.llm.budget import BudgetGuard
+from app.llm.prompts import Prompt
 from app.problems import Problem
 from app.settings import Settings
 
@@ -55,12 +58,18 @@ class Gateway:
         if price is None:
             raise ValueError(f"LLM_MODEL {settings.llm_model!r} has no price in app/llm/prices.py")
         self.name = settings.llm_model
+        self.max_steps = settings.agent_max_steps
         # Set in the lifespan once the checkpoint pool is open (app/llm/checkpoints.py).
         self.checkpointer: BaseCheckpointSaver[Any] | None = None
         self.guard = BudgetGuard(
             model=settings.llm_model,
             price=price,
             cap_micro_usd=int(settings.llm_daily_budget_usd * prices.MICRO_USD),
+            user_cap_micro_usd=(
+                int(settings.llm_user_daily_budget_usd * prices.MICRO_USD)
+                if settings.llm_user_daily_budget_usd
+                else None
+            ),
             max_tokens=settings.llm_max_tokens,
             sessionmaker=sessionmaker,
         )
@@ -107,13 +116,32 @@ class Gateway:
         For anything beyond a plain tool loop, build a LangGraph StateGraph whose nodes call
         gateway.model(), and compile it with checkpointer=gateway.checkpointer.
         """
-        return create_agent(
+        agent = create_agent(
             self.model(),
             list(tools),
             system_prompt=system_prompt,
             checkpointer=self.checkpointer,
             **options,
         )
+        # A loop that never settles stops here (AGENT_MAX_STEPS) instead of at LangGraph's 10,007.
+        return agent.with_config(recursion_limit=self.max_steps)
+
+    def call_config(
+        self, user: User | None, feature: str, prompt: Prompt | None = None, **config: Any
+    ) -> RunnableConfig:
+        """The config for a model or agent call: what it is for (feature), whom for (counted
+        against their daily cap), and the prompt's version.
+
+            answer = await gateway.model().ainvoke(
+                messages, config=gateway.call_config(user, "answer", prompt)
+            )
+        """
+        merged: dict[str, Any] = {**(prompt.config() if prompt else {}), **config}
+        metadata = {**(prompt.config().get("metadata", {}) if prompt else {}), "feature": feature}
+        if user is not None:
+            metadata["user_ref"] = user.id
+        merged["metadata"] = {**metadata, **config.get("metadata", {})}
+        return cast(RunnableConfig, merged)
 
     async def aclose(self) -> None:
         if self.tracer:
