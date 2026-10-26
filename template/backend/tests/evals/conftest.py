@@ -17,25 +17,30 @@ import pytest
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.llm.gateway import Gateway
+from app.llm.gateway import Gateway, key_setting
 from app.settings import Settings
 
 
 @pytest.fixture
 def api_key() -> str:
-    """Skips before anything starts: evals need the real model."""
-    key = os.environ.get("ANTHROPIC_API_KEY")
+    """The real key for LLM_MODEL's provider. Under `make eval` a missing key stops the run (an
+    all-skipped eval run would look like a pass); elsewhere the evals skip."""
+    name = key_setting(Settings(_env_file=None).llm_model).upper()
+    key = os.environ.get(name)
     if not key:
-        pytest.skip("evals call the real model: set ANTHROPIC_API_KEY and run make eval")
+        if os.environ.get("LLM_EVAL") == "1":
+            pytest.exit(f"evals call the real model: set {name}", returncode=2)
+        pytest.skip(f"evals call the real model: set {name} and run make eval")
     return key
 
 
 @pytest.fixture
 async def gateway(api_key: str, database_url: str) -> AsyncIterator[Gateway]:
     """The gateway on the real provider, its budget kept in the test database. api_key comes
-    first, so a missing key skips before the database starts; database_url is a plain
+    first, so a missing key stops before the database starts; database_url is a plain
     dependency, so its migrations run before this fixture's event loop does."""
-    settings = Settings(_env_file=None, app_env="test", anthropic_api_key=SecretStr(api_key))
+    settings = Settings(_env_file=None, app_env="test")
+    settings = settings.model_copy(update={key_setting(settings.llm_model): SecretStr(api_key)})
     engine = create_async_engine(database_url)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     yield Gateway(settings, lambda: sessions)

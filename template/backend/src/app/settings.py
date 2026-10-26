@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     storage_url_seconds: int = Field(default=900, gt=0, le=604_800)
 
     # The model the gateway calls, "provider:model id", with its prices in app/llm/prices.py.
-    llm_model: str = "anthropic:claude-haiku-5-5"
+    llm_model: str = "openai:gpt-6-luna"
     # Read by the gateway only; the provider's own variable names, so the usual secret works.
     anthropic_api_key: SecretStr | None = None
     openai_api_key: SecretStr | None = None

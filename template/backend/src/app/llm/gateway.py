@@ -33,6 +33,7 @@ from langchain_core.tracers.langchain import LangChainTracer, wait_for_all_trace
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 from langsmith import Client
+from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.llm import prices
@@ -63,11 +64,7 @@ class Gateway:
         if self.tracer:
             callbacks.append(self.tracer)
 
-        provider = settings.llm_model.split(":", 1)[0]
-        api_key = {
-            "anthropic": settings.anthropic_api_key,
-            "openai": settings.openai_api_key,
-        }.get(provider)
+        api_key: SecretStr | None = getattr(settings, key_setting(settings.llm_model))
         # Without a key there is no model, and calls get a 503 instead of reaching the provider.
         self._model: BaseChatModel | None = None
         if api_key is not None:
@@ -117,6 +114,20 @@ class Gateway:
         if self.tracer:
             # Traces are sent from a background thread; send what's left before the process ends.
             await anyio.to_thread.run_sync(wait_for_all_tracers)
+
+
+# The setting (and environment variable, upper-cased) that holds each provider's key.
+KEY_SETTINGS = {"anthropic": "anthropic_api_key", "openai": "openai_api_key"}
+
+
+def key_setting(model: str) -> str:
+    """The setting holding the key for LLM_MODEL's provider, e.g. "openai_api_key"."""
+    provider = model.split(":", 1)[0]
+    if provider not in KEY_SETTINGS:
+        raise ValueError(
+            f"LLM_MODEL {model!r} names no supported provider ({sorted(KEY_SETTINGS)})"
+        )
+    return KEY_SETTINGS[provider]
 
 
 def _tracer(settings: Settings) -> LangChainTracer | None:

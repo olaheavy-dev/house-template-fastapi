@@ -41,7 +41,7 @@ async def test_a_replayed_call_is_answered_and_its_cost_settled(
     assert response.json()["text"]
 
     [call] = (await db_session.scalars(select(LlmCall))).all()
-    assert call.model == "anthropic:claude-haiku-5-5"
+    assert call.model == "openai:gpt-6-luna"
     assert call.status == "settled"
     assert (call.input_tokens, call.output_tokens) == (14, 4)
     # 14 x $0.10/M + 4 x $0.50/M = 3.4 micro-USD, rounded up.
@@ -102,5 +102,12 @@ def test_prompt_names_cannot_leave_the_prompts_directory(tmp_path: Path) -> None
 def test_cassettes_hold_no_credentials() -> None:
     for cassette in CASSETTES.rglob("*.yaml"):
         text = cassette.read_text().lower()
-        for marker in ("x-api-key", "authorization", "sk-ant-", "anthropic-organization-id"):
+        for marker in (
+            "x-api-key",
+            "authorization",
+            "sk-ant-",
+            "sk-proj-",
+            "anthropic-organization-id",
+            "openai-organization",
+        ):
             assert marker not in text, (cassette.name, marker)
