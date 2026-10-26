@@ -58,6 +58,13 @@ class Settings(BaseSettings):
     llm_max_retries: int = Field(default=2, ge=0)
     # Model spend allowed per UTC day across every process; calls past it get a 503.
     llm_daily_budget_usd: Decimal = Field(default=Decimal("5"), gt=0)
+    # Each user's share of a day, for calls tagged with their id (Gateway.call_config). Unset
+    # means no per-user cap; set it whenever users can trigger model calls, so one caller can't
+    # spend the whole day's budget.
+    llm_user_daily_budget_usd: Decimal | None = Field(default=None, gt=0)
+    # Most steps (model calls and tool runs) an agent may take for one request. LangGraph's own
+    # default is 10,007.
+    agent_max_steps: int = Field(default=25, gt=0)
     # Connections for agent checkpoints (LangGraph), opened only while agents run.
     agent_pool_size: int = Field(default=4, gt=0)
 

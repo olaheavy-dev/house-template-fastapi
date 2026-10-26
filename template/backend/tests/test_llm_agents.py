@@ -18,9 +18,12 @@ from psycopg_pool import AsyncConnectionPool
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import User
 from app.llm import checkpoints
 from app.llm.budget import LlmCall
 from app.llm.gateway import Gateway
+from app.llm.prompts import Prompt
+from app.settings import Settings
 
 pytestmark = pytest.mark.anyio
 
@@ -81,6 +84,54 @@ async def test_an_agent_runs_its_tools_and_keeps_its_thread(
     # Every model call in the loop went through the budget.
     statuses = (await db_session.scalars(select(LlmCall.status))).all()
     assert statuses == ["settled", "settled"]
+
+
+async def test_an_agent_that_never_finishes_stops_at_its_step_limit(
+    app: FastAPI, db_client: httpx.AsyncClient
+) -> None:
+    gateway: Gateway = app.state.gateway
+    gateway.max_steps = 4
+    # A model that asks for the tool again every turn, as a confused one would.
+    endless = (
+        AIMessage(
+            "",
+            tool_calls=[{"name": "add", "args": {"a": 1, "b": 1}, "id": f"call-{turn}"}],
+            usage_metadata=USAGE,
+        )
+        for turn in range(50)
+    )
+    gateway._model = ToolCallingFake(messages=endless, callbacks=[gateway.guard])
+    thread_id = f"test-{uuid.uuid4()}"
+
+    @app.post("/loop")
+    async def loop() -> None:
+        agent = gateway.agent([add])
+        await agent.ainvoke(
+            {"messages": [HumanMessage("Add forever")]},
+            config={"configurable": {"thread_id": thread_id}},
+        )
+
+    try:
+        response = await db_client.post("/loop")
+    finally:
+        assert gateway.checkpointer is not None
+        await gateway.checkpointer.adelete_thread(thread_id)
+    assert response.status_code == 422
+    assert "step limit" in response.json()["detail"]
+
+
+def test_call_config_tags_the_feature_the_user_and_the_prompt(app: FastAPI) -> None:
+    gateway = Gateway(Settings(_env_file=None, app_env="test"), lambda: None)  # type: ignore[arg-type,return-value]
+    prompt = Prompt(name="ask", text="Answer briefly.")
+    config = gateway.call_config(User(id="u_9"), "answer", prompt, tags=["extra"])
+    assert config["metadata"] == {
+        "prompt": "ask",
+        "prompt_sha": prompt.sha,
+        "feature": "answer",
+        "user_ref": "u_9",
+    }
+    assert config["tags"] == ["extra"]
+    assert gateway.call_config(None, "digest")["metadata"] == {"feature": "digest"}
 
 
 def string_models(source: str) -> list[int]:
