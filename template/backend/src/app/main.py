@@ -21,7 +21,7 @@ from app.llm import checkpoints
 from app.llm.errors import install_model_error_handlers
 from app.llm.gateway import Gateway
 from app.log import REQUEST_ID_HEADER, configure_logging, request_context
-from app.problems import install_problem_handlers
+from app.problems import UnhandledErrors, install_problem_handlers
 from app.settings import Settings, get_settings
 from app.storage import Storage
 
@@ -94,6 +94,9 @@ def create_app(
     app.add_middleware(BodyLimit, max_bytes=settings.max_request_bytes)
     install_model_error_handlers(app)
     app.middleware("http")(request_context)
+    # Outside request_context (so it knows the request id), inside CORS and the headers (so an
+    # unexpected 500 still carries them).
+    app.add_middleware(UnhandledErrors)
     # Outermost, in this order: hosts are checked first, then CORS answers preflights.
     app.add_middleware(SecurityHeaders)
     if settings.cors_origins:

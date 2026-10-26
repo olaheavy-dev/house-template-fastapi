@@ -16,6 +16,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.log import REQUEST_ID_HEADER
 
@@ -115,12 +116,43 @@ async def _validation_error(request: Request, exc: Exception) -> JSONResponse:
 
 
 async def _unexpected(request: Request, exc: Exception) -> JSONResponse:
+    # Called from inside an `except`, so the traceback logged is the original one.
     log.exception("unhandled_error", path=request.url.path)
     response = problem_response(500, instance=request.url.path)
     request_id = getattr(request.state, "request_id", None)
     if request_id:
         response.headers[REQUEST_ID_HEADER] = request_id
     return response
+
+
+class UnhandledErrors:
+    """Turns an unexpected exception into the bare 500 problem response inside the app's own
+    middleware. Starlette runs its catch-all handler outermost, outside CORS and the security
+    headers, so a 500 from there reaches a browser as a CORS error with no request id; caught
+    here, it passes back out through them. The registered handler stays as a last resort."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        started = False
+
+        async def watched(message: Message) -> None:
+            nonlocal started
+            started = started or message["type"] == "http.response.start"
+            await send(message)
+
+        try:
+            await self.app(scope, receive, watched)
+        except Exception:
+            if started:  # too late to answer: let the server log it and drop the connection
+                raise
+            request = Request(scope)
+            response = await _unexpected(request, Exception())
+            await response(scope, receive, send)
 
 
 def install_problem_handlers(app: FastAPI) -> None:

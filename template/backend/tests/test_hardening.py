@@ -131,3 +131,22 @@ async def test_the_budget_has_its_own_pool(app: FastAPI) -> None:
         budget = app.state.budget_sessionmaker.kw["bind"]
         assert budget is not app.state.engine
         assert budget.pool.size() == 2
+
+
+async def test_an_unexpected_error_still_carries_cors_and_the_headers() -> None:
+    # Codex review on PR 23: Starlette's catch-all 500 handler runs outside the app's middleware.
+    app = create_app(
+        Settings(_env_file=None, app_env="test", cors_origins=["https://app.example.com"])
+    )
+
+    @app.get("/boom")
+    async def boom() -> None:
+        raise RuntimeError("database password is hunter2")
+
+    response = await request(app, "GET", "/boom", Origin="https://app.example.com")
+    assert response.status_code == 500
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.headers["access-control-allow-origin"] == "https://app.example.com"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert len(response.headers["x-request-id"]) == 32
+    assert "hunter2" not in response.text
