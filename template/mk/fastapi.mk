@@ -7,7 +7,7 @@ INSTALLS += install-fastapi
 CHECKS += check-fastapi
 FAST_CHECKS += check-fast-fastapi
 
-.PHONY: install-fastapi check-fastapi check-fast-fastapi lock dev test db-up storage-up migrate migration record-llm eval
+.PHONY: install-fastapi check-fastapi check-fast-fastapi lock dev test db-up storage-up migrate migration record-llm eval image up
 
 install-fastapi: ## Install the backend's Python and dependencies (from backend/uv.lock)
 	uv --directory backend sync --locked
@@ -39,6 +39,12 @@ db-up: ## Start the local PostgreSQL with pgvector (backend/compose.yaml) and wa
 storage-up: ## Start the local S3-compatible storage (RustFS, backend/compose.yaml) and create the bucket
 	docker compose up -d --wait storage
 	$(BACKEND) python -m app.storage
+
+image: ## Build the API image from backend/Dockerfile
+	docker compose build api
+
+up: ## Run the backend from its image: database, migrations once, then the API on http://127.0.0.1:8000
+	docker compose up -d --build --wait api
 
 migrate: ## Apply migrations to DATABASE_URL (the local db by default)
 	$(BACKEND) alembic upgrade head

@@ -1,5 +1,6 @@
 # Owned by house-template-fastapi. Included by the root compose.yaml (house-template-base), so
-# `make db-up` and `make storage-up` start the local services for `make dev`.
+# `make db-up` and `make storage-up` start the local services for `make dev`; `make up` runs the
+# whole backend from its image (migrate once, then the API), as production would.
 # Local credentials only; production gets its URLs and keys from its environment.
 
 services:
@@ -48,6 +49,65 @@ services:
       retries: 10
       start_period: 30s
       start_interval: 1s
+
+  # Applies migrations once, then exits; the API starts only if it succeeded. Production runs the
+  # same image with the same command as a one-off job before each rollout.
+  migrate:
+    # Both services build the same Dockerfile (the second build is cached): Compose names the
+    # image after the project, so two projects never share one.
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment: &api-environment
+      APP_ENV: local
+      LOG_JSON: "false"
+      # Service names, not localhost: these run inside Compose's network.
+      DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
+      STORAGE_ENDPOINT_URL: http://storage:9000
+      # Presigned URLs go to browsers on this machine, which reach the storage here.
+      STORAGE_PUBLIC_ENDPOINT_URL: http://localhost:${STORAGE_PORT:-9000}
+    env_file:
+      # Keys and other settings from backend/.env, when there is one; the values above win.
+      - path: .env
+        required: false
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: .
+    environment: *api-environment
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      # Set API_PORT to run two projects side by side.
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+    healthcheck:
+      # The slim image has no curl; Python is there.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+      start_interval: 1s
+    develop:
+      # `docker compose watch`: rebuild the image when the app or its dependencies change.
+      # `make dev` (fastapi dev on the host) reloads faster while writing code.
+      watch:
+        - action: rebuild
+          path: src
+        - action: rebuild
+          path: migrations
+        - action: rebuild
+          path: pyproject.toml
+        - action: rebuild
+          path: uv.lock
 
 volumes:
   db-data:

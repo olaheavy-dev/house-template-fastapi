@@ -1,0 +1,18 @@
+# Owned by house-template-fastapi. Kept out of the image's build context: secrets, local
+# environments and caches, and what the image doesn't run.
+.env
+.env.*
+!.env.example
+.venv/
+**/__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.import_linter_cache/
+.coverage
+htmlcov/
+dist/
+tests/
+compose.yaml
+Dockerfile

@@ -5,7 +5,8 @@
 mk/fastapi.mk
 .claude/rules/fastapi.md
 .github/template-owned/fastapi.txt
-backend/.gitignore
+{% if _external_data.base.container_images %}.github/workflows/publish-api.yml
+{% endif %}backend/.gitignore
 backend/src/app/log.py
 backend/src/app/problems.py
 backend/src/app/health.py
@@ -15,6 +16,8 @@ backend/src/app/llm/checkpoints.py
 backend/src/app/llm/gateway.py
 backend/src/app/llm/prompts.py
 backend/compose.yaml
+backend/Dockerfile
+backend/.dockerignore
 backend/migrations/env.py
 backend/migrations/script.py.mako
 backend/tests/db.py

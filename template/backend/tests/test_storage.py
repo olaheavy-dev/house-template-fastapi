@@ -47,6 +47,28 @@ async def test_a_presigned_upload_only_takes_the_signed_content_type(store: Stor
     assert refused.status_code == 403
 
 
+async def test_presigned_urls_are_signed_for_the_public_endpoint(
+    storage_settings: Settings,
+) -> None:
+    # The API reaches the storage at one address and browsers at another (Compose: storage:9000
+    # and localhost:9000). Here: localhost for the API, 127.0.0.1 for the "browser".
+    internal = storage_settings.storage_endpoint_url
+    assert internal is not None
+    public = internal.replace("localhost", "127.0.0.1")
+    assert public != internal, "the test storage should be addressed as localhost"
+    store = Storage(storage_settings.model_copy(update={"storage_public_endpoint_url": public}))
+    try:
+        await store.put("a.txt", b"hi", content_type="text/plain")
+        url = store.presigned_get("a.txt")
+        assert url.startswith(f"{public}/")
+        async with httpx.AsyncClient() as http:
+            assert (await http.get(url)).content == b"hi"
+            # The same URL sent to the other host fails: the host is part of the signature.
+            assert (await http.get(url.replace(public, internal))).status_code == 403
+    finally:
+        store.close()
+
+
 @pytest.mark.parametrize(
     "key", ["", "/abs", "a/../b", "..", "./a", "a/./b", "line\nbreak", "x" * 1025, "é" * 513]
 )

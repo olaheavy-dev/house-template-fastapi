@@ -24,14 +24,16 @@ The layer reads the project name and stacks from `.copier-answers.base.yml` and 
 | `backend/src/app/llm/`, `prompts/` | The model gateway: one LangChain chat model built from `LLM_MODEL` (Anthropic or OpenAI, pinned id) with a token limit, a timeout and the SDK's retries; a daily budget that reserves each call's worst-case cost in Postgres before it is sent and settles the real cost from `usage_metadata`, one `llm_call` row per call; an integer price table; versioned prompt files whose hash is recorded with each call; optional LangSmith tracing with sampling and hidden inputs; `gateway.agent()` for LangChain `create_agent` tool loops on the gateway's model, with threads kept by LangGraph's Postgres checkpointer (tables from an Alembic migration, pool opened only when used). `lint-imports` keeps `langchain` and the provider SDKs inside it, and a test rejects agents or models built from a model string |
 | `backend/migrations/` | Alembic (async, configured in `pyproject.toml`, no `alembic.ini`); the first migration enables pgvector, and new revisions are lint-clean |
 | `backend/src/app/storage.py` | Optional S3-compatible object storage (on when `STORAGE_BUCKET` is set): one boto3 client from the lifespan, presigned GET and PUT URLs so browsers move files directly, network calls in a worker thread, safe keys and a readiness check. R2 in production |
-| `backend/compose.yaml` | Local PostgreSQL 18 with pgvector 0.8.7 and RustFS 1.0.4 storage, pinned by digest and reachable only from this machine; included by base's root `compose.yaml` |
+| `backend/Dockerfile`, `.dockerignore` | The API image, following uv's Docker guide: a build stage syncs the lockfile into a virtualenv (`--locked`, `--no-editable`, bytecode compiled), and the final stage on the same digest-pinned `python:<version>-slim-trixie` holds only that virtualenv, the migrations and `pyproject.toml`, running `fastapi run` as UID 10001 |
+| `.github/workflows/publish-api.yml` | When base's `container_images` is on: every push to main publishes the image through base's reusable workflow (GHCR, by digest, with provenance and SBOM attestations) |
+| `backend/compose.yaml` | Local PostgreSQL 18 with pgvector 0.8.7 and RustFS 1.0.4 storage, pinned by digest, plus the image's one-off `migrate` service and the `api` that waits for it; reachable only from this machine and included by base's root `compose.yaml` |
 | `backend/tests/` | Async tests that drive the app in-process with its lifespan running, and database tests against a real PostgreSQL (testcontainers, or `TEST_DATABASE_URL`), each rolled back afterwards; storage tests against a real RustFS with a bucket per test; `alembic check` and a downgrade/upgrade round trip run with them. Model calls replay recorded responses (pytest-recording and vcrpy, network blocked, credentials filtered); `make record-llm` re-records them with a real key under a spending cap. Evals in `tests/evals/` use LangSmith's pytest integration and run only with `make eval` |
 | `backend/pyproject.toml`, `backend/uv.lock` | uv project; ruff, mypy (strict), import-linter and pytest configuration |
-| `mk/fastapi.mk` | `install-fastapi`, `check-fastapi`, `check-fast-fastapi`, `lock`, `dev`, `test`, `db-up`, `storage-up`, `migrate`, `migration`, `record-llm`, `eval`, joined to the base targets |
+| `mk/fastapi.mk` | `install-fastapi`, `check-fastapi`, `check-fast-fastapi`, `lock`, `dev`, `test`, `db-up`, `storage-up`, `image`, `up`, `migrate`, `migration`, `record-llm`, `eval`, joined to the base targets |
 | `.claude/rules/fastapi.md` | Backend rules for coding agents, loaded only when they touch `backend/` |
 | `.python-version` | The backend's Python (3.14 by default; 3.12 is the oldest supported) |
 
-Still to come, through reviewed pull requests: the container image with the API and a one-off migration service in Compose.
+The layer now covers everything in its plan.
 
 ## Develop the template
 

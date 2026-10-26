@@ -1,0 +1,35 @@
+# Owned by house-template-fastapi. Publishes the API image (backend/Dockerfile) through base's
+# reusable workflow, which builds it, pushes it by digest to GHCR and attests its provenance and
+# SBOM. Every push to main publishes; deploy the digest this run outputs, never a tag.
+name: Publish API image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - backend/**
+      - .github/workflows/publish-api.yml
+      - .github/workflows/publish-image.yml
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: {% raw %}${{ github.workflow }}-${{ github.ref }}{% endraw %}
+  cancel-in-progress: false
+
+jobs:
+  api:
+    name: Publish the API image
+    # zizmor prefers GitHub's newer self-repository form ($/...), but actionlint 1.7.12 (the latest)
+    # rejects it in a reusable workflow call. Switch once actionlint accepts it.
+    uses: ./.github/workflows/publish-image.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read # check out the code
+      packages: write # push to GHCR
+      id-token: write # sign attestations with Sigstore
+      attestations: write # store attestations
+      artifact-metadata: write # storage record for the image
+    with:
+      image: api
+      context: backend
