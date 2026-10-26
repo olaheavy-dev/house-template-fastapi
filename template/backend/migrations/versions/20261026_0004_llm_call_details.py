@@ -1,4 +1,5 @@
-"""Model call details: reasoning and cache tokens, latency, feature and user tags
+"""Model call details: reasoning and cache tokens, latency, feature and user tags; the
+daily budget warning flag
 
 Every new column is nullable: calls recorded before this migration keep NULL for them (their
 details were never captured). The feature index is built with a plain CREATE INDEX, which blocks
@@ -31,9 +32,14 @@ def upgrade() -> None:
     op.add_column("llm_call", sa.Column("feature", sa.String(length=100), nullable=True))
     op.add_column("llm_call", sa.Column("user_ref", sa.String(length=200), nullable=True))
     op.create_index(op.f("ix_llm_call_feature"), "llm_call", ["feature"], unique=False)
+    op.add_column(
+        "llm_spend_day",
+        sa.Column("warned", sa.Boolean(), server_default=sa.false(), nullable=False),
+    )
 
 
 def downgrade() -> None:
+    op.drop_column("llm_spend_day", "warned")
     op.drop_index(op.f("ix_llm_call_feature"), table_name="llm_call")
     op.drop_column("llm_call", "user_ref")
     op.drop_column("llm_call", "feature")

@@ -42,7 +42,16 @@ from langchain_core.exceptions import (
 from langchain_core.messages import BaseMessage
 from langchain_core.messages.ai import UsageMetadata
 from langchain_core.outputs import ChatGeneration, LLMResult
-from sqlalchemy import BigInteger, CheckConstraint, DateTime, Integer, String, func, update
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    Integer,
+    String,
+    false,
+    func,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Mapped, mapped_column
@@ -82,6 +91,9 @@ class LlmSpendDay(Base):
 
     day: Mapped[date] = mapped_column(primary_key=True)
     committed_micro_usd: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    # Set by the first reservation to reach WARN_SHARE of the cap, so the day warns once even
+    # though settlements below their reservation lower the total again.
+    warned: Mapped[bool] = mapped_column(server_default=false())
 
 
 class LlmCall(Base):
@@ -153,8 +165,9 @@ async def reserve(
     committed = (await session.execute(upsert)).scalar()
     if committed is None:
         return False
-    # Once per day: the reservation that takes the day's total past WARN_SHARE of the cap.
-    if committed - amount < cap * WARN_SHARE <= committed:
+    # Once per day: the first reservation to bring the total to WARN_SHARE of the cap claims the
+    # day's warning (one UPDATE, so only one process can win it).
+    if committed >= cap * WARN_SHARE and await _claim_warning(session, day):
         log.warning(
             "llm_budget_nearly_used",
             day=day.isoformat(),
@@ -175,6 +188,16 @@ async def reserve(
         )
     )
     return True
+
+
+async def _claim_warning(session: AsyncSession, day: date) -> bool:
+    claimed = await session.execute(
+        update(LlmSpendDay)
+        .where(LlmSpendDay.day == day, LlmSpendDay.warned.is_(False))
+        .values(warned=True)
+        .returning(LlmSpendDay.day)
+    )
+    return claimed.first() is not None
 
 
 async def settle(

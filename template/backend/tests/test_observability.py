@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
 from app.llm import prices, report
-from app.llm.budget import BudgetGuard, LlmCall, reserve
+from app.llm.budget import BudgetGuard, LlmCall, reserve, settle
 from app.main import create_app
 from app.settings import Settings
 
@@ -100,6 +100,21 @@ async def test_crossing_80_percent_of_the_cap_logs_one_warning(db_session: Async
     warnings = [log for log in logs if log["event"] == "llm_budget_nearly_used"]
     assert len(warnings) == 1
     assert warnings[0]["committed_micro_usd"] == 850
+
+
+async def test_the_warning_stays_once_a_day_when_settlements_lower_the_total(
+    db_session: AsyncSession,
+) -> None:
+    # Codex review on PR 17: reservations settled below their amount lower the total, so a
+    # later reservation can cross 80% again; the day must still warn once.
+    with capture_logs() as logs:
+        for _ in range(3):
+            call_id = uuid.uuid4()
+            assert await reserve(
+                db_session, call_id=call_id, day=DAY, model=MODEL, amount=850, cap=1_000
+            )
+            await settle(db_session, call_id=call_id, status="settled", cost=10)
+    assert [log["event"] for log in logs].count("llm_budget_nearly_used") == 1
 
 
 def points(reader: InMemoryMetricReader, name: str) -> list[Any]:
