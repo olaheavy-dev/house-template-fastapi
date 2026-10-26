@@ -130,6 +130,11 @@ async def test_an_agent_uses_its_tool_and_keeps_its_thread(
 
 
 @pytest.mark.langsmith
+# With LangSmith tracing on, the refusal stops LangChain before it awaits the tracer's own
+# chat-model-start callback, and Python warns that coroutine was never awaited. Harmless (the call
+# is still refused and nothing is sent), so only that warning is allowed here.
+@pytest.mark.filterwarnings("ignore:coroutine 'ahandle_event' was never awaited:RuntimeWarning")
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnraisableExceptionWarning")
 async def test_the_budget_refuses_a_call_before_sending_it(
     gateway: Gateway, new_calls: NewCalls
 ) -> None:

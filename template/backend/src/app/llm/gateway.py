@@ -15,6 +15,11 @@ it through GatewayDep and always awaits it:
 
 Never build a model elsewhere or hand a "provider:model" string to LangChain: that skips the
 budget. lint-imports allows `langchain` and the provider SDKs only in this package.
+
+Use the model from one event loop per process, as the app does. langchain-openai and
+langchain-anthropic cache one HTTP client per process whose connections belong to the loop that
+opened them, so a worker that calls asyncio.run() per job fails on its second job with "Event loop
+is closed": run one loop and process jobs inside it.
 """
 
 from __future__ import annotations
