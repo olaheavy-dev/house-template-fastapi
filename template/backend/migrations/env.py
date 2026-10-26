@@ -62,7 +62,14 @@ def do_run_migrations(connection: Connection) -> None:
 
 
 async def run_async_migrations() -> None:
-    engine = create_async_engine(database_url(), poolclass=pool.NullPool)
+    # A migration that waits on a lock queues every later query on that table behind it: give up
+    # after 5 s instead (retry the rollout when traffic is quieter). Statements themselves may run
+    # long (building an index on a big table), so their limit is generous.
+    engine = create_async_engine(
+        database_url(),
+        poolclass=pool.NullPool,
+        connect_args={"options": "-c lock_timeout=5s -c statement_timeout=15min"},
+    )
     async with engine.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await engine.dispose()

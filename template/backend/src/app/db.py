@@ -48,12 +48,21 @@ class Base(AsyncAttrs, DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
-def create_engine(settings: Settings) -> AsyncEngine:
+def create_engine(
+    settings: Settings, *, pool_size: int | None = None, max_overflow: int | None = None
+) -> AsyncEngine:
+    options = (
+        f"-c statement_timeout={settings.db_statement_timeout_ms}"
+        f" -c idle_in_transaction_session_timeout={settings.db_idle_in_transaction_timeout_ms}"
+    )
     return create_async_engine(
         settings.database_url.get_secret_value(),
         pool_pre_ping=True,
-        pool_size=settings.db_pool_size,
-        max_overflow=settings.db_max_overflow,
+        pool_size=settings.db_pool_size if pool_size is None else pool_size,
+        max_overflow=settings.db_max_overflow if max_overflow is None else max_overflow,
+        # Fail fast instead of queueing for 30 s when the pool is exhausted.
+        pool_timeout=10,
+        connect_args={"options": options, "connect_timeout": 5, "application_name": "api"},
     )
 
 

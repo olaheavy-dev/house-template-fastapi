@@ -85,7 +85,12 @@ def test_a_model_without_a_price_is_refused_at_startup() -> None:
 
 
 def test_tracing_follows_the_settings_and_is_never_on_in_tests() -> None:
-    on = {"langsmith_tracing": True, "langsmith_project": "demo", "langsmith_api_key": "lsv2-x"}
+    on = {
+        "langsmith_tracing": True,
+        "langsmith_project": "demo",
+        "langsmith_api_key": "lsv2-x",
+        "database_url": "postgresql+psycopg://app:secret@db.internal:5432/app",
+    }
     production = Gateway(Settings(_env_file=None, app_env="production", **on), lambda: None)  # type: ignore[arg-type,return-value]
     assert isinstance(production.tracer, LangChainTracer)
     assert production.tracer.project_name == "demo"

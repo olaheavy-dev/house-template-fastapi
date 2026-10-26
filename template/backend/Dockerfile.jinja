@@ -38,12 +38,20 @@ WORKDIR /app
 COPY --from=build /app/.venv /app/.venv
 COPY pyproject.toml /app/pyproject.toml
 COPY migrations /app/migrations
+# UVICORN_* set uvicorn's options. On SIGTERM it stops accepting connections and gives requests
+# in flight this long to finish: keep it under the platform's grace period (30 s on Kubernetes)
+# and above LLM_TIMEOUT_SECONDS for answers worth finishing. FORWARDED_ALLOW_IPS: the proxies
+# whose X-Forwarded-* headers to trust; set it to the load balancer's addresses.
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     APP_ENV=production \
-    LOG_JSON=true
+    LOG_JSON=true \
+    UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN=25 \
+    FORWARDED_ALLOW_IPS=127.0.0.1
 USER 10001:10001
 EXPOSE 8000
 # One process per container: scale with replicas. Migrations run separately (`alembic upgrade
-# head`, the compose file's migrate service), never at start-up in every replica.
-CMD ["fastapi", "run", "--port", "8000"]
+# heads`, the compose file's migrate service), never at start-up in every replica. uvicorn
+# directly rather than `fastapi run`: its options (graceful shutdown) come from UVICORN_*, and the
+# app writes the access log itself as JSON.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
