@@ -7,7 +7,7 @@ INSTALLS += install-fastapi
 CHECKS += check-fastapi
 FAST_CHECKS += check-fast-fastapi
 
-.PHONY: install-fastapi check-fastapi check-fast-fastapi lock dev test db-up migrate migration
+.PHONY: install-fastapi check-fastapi check-fast-fastapi lock dev test db-up migrate migration record-llm
 
 install-fastapi: ## Install the backend's Python and dependencies (from backend/uv.lock)
 	uv --directory backend sync --locked
@@ -42,3 +42,7 @@ migrate: ## Apply migrations to DATABASE_URL (the local db by default)
 migration: ## Write a migration from model changes: make migration name="add courses"
 	@test -n "$(name)" || { echo 'usage: make migration name="what changed"'; exit 2; }
 	$(BACKEND) alembic revision --autogenerate -m "$(name)"
+
+record-llm: ## Re-record the model cassettes with real calls: ANTHROPIC_API_KEY=... make record-llm [budget=0.50]
+	@test -n "$$ANTHROPIC_API_KEY" || { echo 'set ANTHROPIC_API_KEY to record'; exit 2; }
+	LLM_DAILY_BUDGET_USD=$(or $(budget),0.50) $(BACKEND) pytest -m vcr --record-mode=rewrite

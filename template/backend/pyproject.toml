@@ -10,6 +10,12 @@ dependencies = [
     # FastAPI 0.x minors can break, so stay on one minor and move deliberately.
     "fastapi[standard-no-fastapi-cloud-cli]>=0.162.0,<0.163",
     "alembic>=1.20.1",
+    # LangChain 1.x; the provider packages are both installed so LLM_MODEL alone picks one.
+    "langchain>=1.4.7",
+    "langchain-anthropic>=1.7.6",
+    "langchain-core>=1.7.0",
+    "langchain-openai>=1.7.2",
+    "langsmith>=0.14.12",
     "pgvector>=0.5.1",
     "psycopg[binary,pool]>=3.3.6",
     "pydantic-settings>=2.16.1",
@@ -23,10 +29,13 @@ dev = [
     "import-linter>=2.15",
     "mypy>=2.4.0",
     "pytest>=9.1.1",
+    "pytest-recording>=0.14.0",
     "pyyaml>=6.0.3",
     "ruff>=0.17.2",
     "testcontainers[postgres]>=4.15.0",
     "types-pyyaml>=6.0.12",
+    # 8.2 added httpx2, which the openai and anthropic SDKs use; 9.2 adds filter_sensitive_data.
+    "vcrpy>=9.2.0",
 ]
 
 [build-system]
@@ -88,4 +97,7 @@ include_external_packages = true
 name = "Only the model gateway talks to model providers"
 type = "forbidden"
 source_modules = ["app"]
-forbidden_modules = ["openai", "anthropic", "langchain_openai", "langchain_anthropic"]
+# `langchain` too: init_chat_model would build a model that skips the budget. langchain_core
+# (messages, prompts, runnables) is fine anywhere.
+forbidden_modules = ["openai", "anthropic", "langchain", "langchain_openai", "langchain_anthropic"]
+ignore_imports = ["app.llm.** -> langchain"]

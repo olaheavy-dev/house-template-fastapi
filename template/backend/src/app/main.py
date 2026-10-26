@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app import db, health
+from app.llm.gateway import Gateway
 from app.log import configure_logging, request_context
 from app.problems import install_problem_handlers
 from app.settings import Settings, get_settings
@@ -22,9 +23,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine = db.create_engine(app.state.settings)
     app.state.engine = engine
     app.state.sessionmaker = db.create_sessionmaker(engine)
+    # The budget looks the sessionmaker up per call, so tests can swap it after startup.
+    app.state.gateway = Gateway(app.state.settings, lambda: app.state.sessionmaker)
     try:
         yield
     finally:
+        await app.state.gateway.aclose()
         await engine.dispose()
 
 
