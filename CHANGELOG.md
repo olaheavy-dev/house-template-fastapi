@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.6.0](https://github.com/olaheavy-dev/house-template-fastapi/compare/v0.5.0...v0.6.0) (2026-10-26)
+
+
+### Features
+
+* a request body limit, and presigned uploads limited by signed size and allowed types ([#22](https://github.com/olaheavy-dev/house-template-fastapi/issues/22)) ([3a6c2b3](https://github.com/olaheavy-dev/house-template-fastapi/commit/3a6c2b3e755ec3325c3ba07e70b6edd3bcf91d8e))
+* an authentication hook, a per-user model budget and an agent step limit ([#21](https://github.com/olaheavy-dev/house-template-fastapi/issues/21)) ([da31eb8](https://github.com/olaheavy-dev/house-template-fastapi/commit/da31eb80eded65d516d530159bd9d615a08c02f2))
+* observability with OpenTelemetry request traces and llm metrics, call details, a spend report and a budget warning ([#17](https://github.com/olaheavy-dev/house-template-fastapi/issues/17)) ([f2aecda](https://github.com/olaheavy-dev/house-template-fastapi/commit/f2aecda93460895479d38f0a34353636099775f6))
+* problem responses for model and storage failures, and JSON logs for the app, uvicorn and libraries ([#20](https://github.com/olaheavy-dev/house-template-fastapi/issues/20)) ([f6fdc9f](https://github.com/olaheavy-dev/house-template-fastapi/commit/f6fdc9f41e3b3c878966d43a89f52a74da3d53a4))
+* production hardening with timeouts, a budget pool, graceful shutdown, CORS, allowed hosts and security headers ([#23](https://github.com/olaheavy-dev/house-template-fastapi/issues/23)) ([ab54d64](https://github.com/olaheavy-dev/house-template-fastapi/commit/ab54d64ee3d68433895d837324e9586e62ddc134))
+* versioned API conventions with a /v1 router, an example protected route and cursor pagination ([#25](https://github.com/olaheavy-dev/house-template-fastapi/issues/25)) ([d632913](https://github.com/olaheavy-dev/house-template-fastapi/commit/d63291385a078fb38ea0d7eb93381c3e25903449))
+
+
+### Bug Fixes
+
+* close stuck reservations, refuse unpriced long prompts, and keep the compose images updated ([#24](https://github.com/olaheavy-dev/house-template-fastapi/issues/24)) ([6b5587e](https://github.com/olaheavy-dev/house-template-fastapi/commit/6b5587e2ef98f85bf80b62f2ab11abfd56ee06b5))
+* keep template and project migrations on separate Alembic branches ([#19](https://github.com/olaheavy-dev/house-template-fastapi/issues/19)) ([a9e452f](https://github.com/olaheavy-dev/house-template-fastapi/commit/a9e452fc01564f4c9aac7272967c034d16dbeaad))
+
 ## [0.5.0](https://github.com/olaheavy-dev/house-template-fastapi/compare/v0.4.0...v0.5.0) (2026-10-26)
 
 
