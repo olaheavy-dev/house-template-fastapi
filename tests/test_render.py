@@ -189,3 +189,16 @@ def test_the_publish_workflow_follows_the_base_answer(render, project, images):
         jobs = yaml.safe_load(workflow.read_text())["jobs"]
         assert jobs["api"]["uses"] == "./.github/workflows/publish-image.yml"
         assert jobs["api"]["with"] == {"image": "api", "context": "backend"}
+
+
+def test_a_local_env_file_never_reaches_a_project(render):
+    # template/backend/.env holds a developer's keys for recording and evals.
+    secret = TEMPLATE / "backend" / ".env"
+    assert not secret.exists(), "move your template/backend/.env aside to run this test"
+    secret.write_text("OPENAI_API_KEY=sk-never-copied\n")
+    try:
+        project = render()
+    finally:
+        secret.unlink()
+    assert not (project / "backend" / ".env").exists()
+    assert (project / "backend" / ".env.example").exists()

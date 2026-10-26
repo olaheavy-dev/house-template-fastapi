@@ -27,7 +27,7 @@ The layer reads the project name and stacks from `.copier-answers.base.yml` and 
 | `backend/Dockerfile`, `.dockerignore` | The API image, following uv's Docker guide: a build stage syncs the lockfile into a virtualenv (`--locked`, `--no-editable`, bytecode compiled), and the final stage on the same digest-pinned `python:<version>-slim-trixie` holds only that virtualenv, the migrations and `pyproject.toml`, running `fastapi run` as UID 10001 |
 | `.github/workflows/publish-api.yml` | When base's `container_images` is on: every push to main publishes the image through base's reusable workflow (GHCR, by digest, with provenance and SBOM attestations) |
 | `backend/compose.yaml` | Local PostgreSQL 18 with pgvector 0.8.7 and RustFS 1.0.4 storage, pinned by digest, plus the image's one-off `migrate` service and the `api` that waits for it; reachable only from this machine and included by base's root `compose.yaml` |
-| `backend/tests/` | Async tests that drive the app in-process with its lifespan running, and database tests against a real PostgreSQL (testcontainers, or `TEST_DATABASE_URL`), each rolled back afterwards; storage tests against a real RustFS with a bucket per test; `alembic check` and a downgrade/upgrade round trip run with them. Model calls replay recorded responses (pytest-recording and vcrpy, network blocked, credentials filtered); `make record-llm` re-records them with a real key under a spending cap. Evals in `tests/evals/` use LangSmith's pytest integration and run only with `make eval` |
+| `backend/tests/` | Async tests that drive the app in-process with its lifespan running, and database tests against a real PostgreSQL (testcontainers, or `TEST_DATABASE_URL`), each rolled back afterwards; storage tests against a real RustFS with a bucket per test; `alembic check` and a downgrade/upgrade round trip run with them. Model calls replay recorded responses (pytest-recording and vcrpy, network blocked, credentials filtered); `make record-llm` re-records them with a real key under a spending cap. Evals in `tests/evals/` use LangSmith's pytest integration and run only with `make eval`; the shipped ones check the gateway against the real provider (real cost settled, streamed usage, structured output, an agent's tool loop, the budget refusing). Both read keys from `backend/.env` |
 | `backend/pyproject.toml`, `backend/uv.lock` | uv project; ruff, mypy (strict), import-linter and pytest configuration |
 | `mk/fastapi.mk` | `install-fastapi`, `check-fastapi`, `check-fast-fastapi`, `lock`, `dev`, `test`, `db-up`, `storage-up`, `image`, `up`, `migrate`, `migration`, `record-llm`, `eval`, joined to the base targets |
 | `.claude/rules/fastapi.md` | Backend rules for coding agents, loaded only when they touch `backend/` |
@@ -36,6 +36,13 @@ The layer reads the project name and stacks from `.copier-answers.base.yml` and 
 The layer now covers everything in its plan.
 
 ## Develop the template
+
+To re-record the model cassette or run the evals here, put `OPENAI_API_KEY=...` (and optionally `LANGSMITH_API_KEY=...`) in `template/backend/.env`, which git ignores and Copier never copies, then from `template/backend`:
+
+```sh
+LLM_DAILY_BUDGET_USD=0.50 uv run --env-file .env pytest -m vcr --record-mode=rewrite   # make record-llm
+LLM_EVAL=1 LLM_DAILY_BUDGET_USD=1 uv run --env-file .env pytest tests/evals -m eval   # make eval
+```
 
 `uv run pytest` renders the layer and checks it. CI also generates a real project from house-template-base plus this layer and runs its `make check`. After changing `template/backend/pyproject.toml`, run `uv lock --directory template/backend`.
 

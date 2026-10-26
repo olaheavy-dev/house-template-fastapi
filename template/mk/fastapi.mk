@@ -2,6 +2,9 @@
 # checks to `make install`, `make check` and `make check-fast`.
 
 BACKEND := uv --directory backend run --locked
+# Recording and evals call the real model, so they also read keys from backend/.env when it exists.
+# Variables already set (the budget caps below) win over the file. The tests ignore it.
+LIVE := uv --directory backend run --locked $(if $(wildcard backend/.env),--env-file .env)
 
 INSTALLS += install-fastapi
 CHECKS += check-fastapi
@@ -54,10 +57,7 @@ migration: ## Write a migration from model changes: make migration name="add cou
 	$(BACKEND) alembic revision --autogenerate -m "$(name)"
 
 record-llm: ## Re-record the model cassettes with real calls, with LLM_MODEL's provider key set: make record-llm [budget=0.50]
-	LLM_DAILY_BUDGET_USD=$(or $(budget),0.50) $(BACKEND) pytest -m vcr --record-mode=rewrite
+	LLM_DAILY_BUDGET_USD=$(or $(budget),0.50) $(LIVE) pytest -m vcr --record-mode=rewrite
 
 eval: ## Run the evals against the real model, with LLM_MODEL's provider key set: make eval [budget=1] (uploads to LangSmith when LANGSMITH_API_KEY is set)
-	LLM_EVAL=1 LLM_DAILY_BUDGET_USD=$(or $(budget),1) \
-	LANGSMITH_TEST_TRACKING=$$([ -n "$$LANGSMITH_API_KEY" ] && echo true || echo false) \
-	LANGSMITH_TRACING=$$([ -n "$$LANGSMITH_API_KEY" ] && echo true || echo false) \
-	$(BACKEND) pytest tests/evals -m eval
+	LLM_EVAL=1 LLM_DAILY_BUDGET_USD=$(or $(budget),1) $(LIVE) pytest tests/evals -m eval
