@@ -130,6 +130,15 @@ def test_local_database_is_pinned_and_keeps_its_data():
     assert "pg_isready -h 127.0.0.1" in db["healthcheck"]["test"][1]
 
 
+def test_local_storage_is_pinned_private_and_healthchecked():
+    compose = yaml.safe_load((TEMPLATE / "backend/compose.yaml").read_text())
+    storage = compose["services"]["storage"]
+    assert re.fullmatch(r"rustfs/rustfs:\d+\.\d+\.\d+@sha256:[0-9a-f]{64}", storage["image"])
+    assert all(port.startswith("127.0.0.1:") for port in storage["ports"])
+    assert storage["volumes"] == ["storage-data:/data"]
+    assert "/health" in storage["healthcheck"]["test"][-1]
+
+
 def test_migrations_need_no_alembic_ini():
     backend = TEMPLATE / "backend"
     assert not (backend / "alembic.ini").exists()

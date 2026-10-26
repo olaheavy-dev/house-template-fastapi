@@ -1,6 +1,6 @@
 # Owned by house-template-fastapi. Included by the root compose.yaml (house-template-base), so
-# `docker compose up -d db` from the project root starts the local database for `make dev`.
-# Local credentials only; production gets DATABASE_URL from its environment.
+# `make db-up` and `make storage-up` start the local services for `make dev`.
+# Local credentials only; production gets its URLs and keys from its environment.
 
 services:
   db:
@@ -27,5 +27,28 @@ services:
       start_interval: 1s
     shm_size: 256mb
 
+  storage:
+    # RustFS 1.0.4 (S3-compatible; MinIO stopped publishing images), pinned by digest.
+    image: rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2
+    environment:
+      RUSTFS_ACCESS_KEY: app-storage
+      RUSTFS_SECRET_KEY: app-storage-secret
+    ports:
+      # Set STORAGE_PORT (and the port in STORAGE_ENDPOINT_URL) to run two projects side by side.
+      - "127.0.0.1:${STORAGE_PORT:-9000}:9000"
+      # The web console, signed in with the keys above.
+      - "127.0.0.1:${STORAGE_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      # The image runs as UID 10001 and owns /data; a named volume keeps that ownership.
+      - storage-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+      start_interval: 1s
+
 volumes:
   db-data:
+  storage-data:

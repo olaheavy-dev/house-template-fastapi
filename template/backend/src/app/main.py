@@ -17,6 +17,7 @@ from app.llm.gateway import Gateway
 from app.log import configure_logging, request_context
 from app.problems import install_problem_handlers
 from app.settings import Settings, get_settings
+from app.storage import Storage
 
 
 @asynccontextmanager
@@ -24,6 +25,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine = db.create_engine(app.state.settings)
     app.state.engine = engine
     app.state.sessionmaker = db.create_sessionmaker(engine)
+    settings: Settings = app.state.settings
+    app.state.storage = Storage(settings) if settings.storage_bucket else None
     # The budget looks the sessionmaker up per call, so tests can swap it after startup.
     app.state.gateway = Gateway(app.state.settings, lambda: app.state.sessionmaker)
     app.state.gateway.checkpointer, checkpoint_pool = await checkpoints.open_checkpointer(
@@ -34,6 +37,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         await app.state.gateway.aclose()
         await checkpoint_pool.close()
+        if app.state.storage:
+            app.state.storage.close()
         await engine.dispose()
 
 
@@ -57,6 +62,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.middleware("http")(request_context)
     app.include_router(health.router)
     health.add_readiness_check(app, "database", lambda: _database_ready(app))
+    if settings.storage_bucket:
+        health.add_readiness_check(app, "storage", lambda: app.state.storage.ping())
     return app
 
 
