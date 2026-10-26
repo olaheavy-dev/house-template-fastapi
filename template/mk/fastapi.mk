@@ -7,7 +7,7 @@ INSTALLS += install-fastapi
 CHECKS += check-fastapi
 FAST_CHECKS += check-fast-fastapi
 
-.PHONY: install-fastapi check-fastapi check-fast-fastapi lock dev test db-up migrate migration record-llm
+.PHONY: install-fastapi check-fastapi check-fast-fastapi lock dev test db-up migrate migration record-llm eval
 
 install-fastapi: ## Install the backend's Python and dependencies (from backend/uv.lock)
 	uv --directory backend sync --locked
@@ -46,3 +46,10 @@ migration: ## Write a migration from model changes: make migration name="add cou
 record-llm: ## Re-record the model cassettes with real calls: ANTHROPIC_API_KEY=... make record-llm [budget=0.50]
 	@test -n "$$ANTHROPIC_API_KEY" || { echo 'set ANTHROPIC_API_KEY to record'; exit 2; }
 	LLM_DAILY_BUDGET_USD=$(or $(budget),0.50) $(BACKEND) pytest -m vcr --record-mode=rewrite
+
+eval: ## Run the evals against the real model: ANTHROPIC_API_KEY=... make eval [budget=1] (uploads to LangSmith when LANGSMITH_API_KEY is set)
+	@test -n "$$ANTHROPIC_API_KEY" || { echo 'evals call the real model: set ANTHROPIC_API_KEY'; exit 2; }
+	LLM_EVAL=1 LLM_DAILY_BUDGET_USD=$(or $(budget),1) \
+	LANGSMITH_TEST_TRACKING=$$([ -n "$$LANGSMITH_API_KEY" ] && echo true || echo false) \
+	LANGSMITH_TRACING=$$([ -n "$$LANGSMITH_API_KEY" ] && echo true || echo false) \
+	$(BACKEND) pytest tests/evals -m eval

@@ -19,15 +19,19 @@ budget. lint-imports allows `langchain` and the provider SDKs only in this packa
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Annotated
+from collections.abc import Callable, Sequence
+from typing import Annotated, Any
 
 import anyio
 from fastapi import Depends, Request
+from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
+from langchain_core.tools import BaseTool
 from langchain_core.tracers.langchain import LangChainTracer, wait_for_all_tracers
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.graph.state import CompiledStateGraph
 from langsmith import Client
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -45,6 +49,8 @@ class Gateway:
         if price is None:
             raise ValueError(f"LLM_MODEL {settings.llm_model!r} has no price in app/llm/prices.py")
         self.name = settings.llm_model
+        # Set in the lifespan once the checkpoint pool is open (app/llm/checkpoints.py).
+        self.checkpointer: BaseCheckpointSaver[Any] | None = None
         self.guard = BudgetGuard(
             model=settings.llm_model,
             price=price,
@@ -79,6 +85,33 @@ class Gateway:
         if self._model is None:
             raise Problem(503, detail="The language model isn't configured.")
         return self._model
+
+    def agent(
+        self,
+        tools: Sequence[BaseTool | Callable[..., Any]] = (),
+        *,
+        system_prompt: str | None = None,
+        **options: Any,
+    ) -> CompiledStateGraph[Any, Any, Any, Any]:
+        """A tool-calling agent (LangChain's create_agent) on the gateway's model, its threads
+        saved in Postgres. Pass a thread id with each call:
+
+            agent = gateway.agent([search_courses], system_prompt=prompt.text)
+            state = await agent.ainvoke(
+                {"messages": [HumanMessage(question)]},
+                config={**prompt.config(), "configurable": {"thread_id": thread_id}},
+            )
+
+        For anything beyond a plain tool loop, build a LangGraph StateGraph whose nodes call
+        gateway.model(), and compile it with checkpointer=gateway.checkpointer.
+        """
+        return create_agent(
+            self.model(),
+            list(tools),
+            system_prompt=system_prompt,
+            checkpointer=self.checkpointer,
+            **options,
+        )
 
     async def aclose(self) -> None:
         if self.tracer:

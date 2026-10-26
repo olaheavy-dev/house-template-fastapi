@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     llm_max_retries: int = Field(default=2, ge=0)
     # Model spend allowed per UTC day across every process; calls past it get a 503.
     llm_daily_budget_usd: Decimal = Field(default=Decimal("5"), gt=0)
+    # Connections for agent checkpoints (LangGraph), opened only while agents run.
+    agent_pool_size: int = Field(default=4, gt=0)
 
     # LangSmith tracing of model calls (https://docs.langchain.com/langsmith). Never on in tests.
     langsmith_tracing: bool = False

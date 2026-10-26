@@ -24,9 +24,10 @@ from app.settings import Settings
 from tests import db
 
 # Before langsmith first reads them (it caches them): tests never send traces or sync results to
-# LangSmith, whatever the developer's shell exports.
-os.environ["LANGSMITH_TRACING"] = "false"
-os.environ["LANGSMITH_TEST_TRACKING"] = "false"
+# LangSmith, whatever the developer's shell exports. `make eval` (LLM_EVAL=1) decides for itself.
+if os.environ.get("LLM_EVAL") != "1":
+    os.environ["LANGSMITH_TRACING"] = "false"
+    os.environ["LANGSMITH_TEST_TRACKING"] = "false"
 
 
 @pytest.fixture

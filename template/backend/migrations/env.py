@@ -16,6 +16,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
 import app.models
+from app.llm import checkpoints
 from app.settings import get_settings
 
 config = context.config
@@ -25,6 +26,12 @@ logging.getLogger("alembic").setLevel(logging.INFO)
 if not logging.getLogger().handlers:
     logging.basicConfig(format="%(message)s")
 target_metadata = app.models.Base.metadata
+
+
+def include_name(name: str | None, type_: str, parent_names: object) -> bool:
+    # LangGraph's checkpoint tables are created by its own migrations (app/llm/checkpoints.py),
+    # so autogenerate must neither drop them nor report them as unmodelled.
+    return not (type_ == "table" and name in checkpoints.TABLES)
 
 
 def database_url() -> str:
@@ -38,6 +45,7 @@ def run_migrations_offline() -> None:
     context.configure(
         url=database_url(),
         target_metadata=target_metadata,
+        include_name=include_name,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
@@ -46,7 +54,9 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection, target_metadata=target_metadata, include_name=include_name
+    )
     with context.begin_transaction():
         context.run_migrations()
 
