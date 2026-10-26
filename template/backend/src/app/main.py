@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.telemetry import TelemetryConfig
 
 from app import db, health
+from app.limits import BodyLimit
 from app.llm import checkpoints
 from app.llm.errors import install_model_error_handlers
 from app.llm.gateway import Gateway
@@ -82,6 +83,8 @@ def create_app(
     app.state.settings = settings
     app.state.readiness_checks = {}
     install_problem_handlers(app)
+    # Registered before request_context, which therefore wraps it: a 413 still gets an access line.
+    app.add_middleware(BodyLimit, max_bytes=settings.max_request_bytes)
     install_model_error_handlers(app)
     app.middleware("http")(request_context)
     app.include_router(health.router)

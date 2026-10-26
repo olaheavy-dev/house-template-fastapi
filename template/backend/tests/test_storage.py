@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from pydantic import SecretStr
 
 from app.main import create_app
+from app.problems import Problem
 from app.settings import Settings
 from app.storage import InvalidStorageKey, ObjectNotFound, Storage, StorageDep, check_key
 
@@ -31,9 +32,10 @@ async def test_objects_round_trip(store: Storage) -> None:
 
 
 async def test_presigned_urls_upload_and_download_without_the_api(store: Storage) -> None:
-    put = store.presigned_put("uploads/report.csv", content_type="text/csv")
+    body = b"a,b\n1,2\n"
+    put = store.presigned_put("uploads/report.csv", content_type="text/csv", size=len(body))
     async with httpx.AsyncClient() as http:
-        uploaded = await http.put(put, content=b"a,b\n1,2\n", headers={"Content-Type": "text/csv"})
+        uploaded = await http.put(put, content=body, headers={"Content-Type": "text/csv"})
         assert uploaded.status_code == 200
         downloaded = await http.get(store.presigned_get("uploads/report.csv"))
     assert downloaded.status_code == 200
@@ -41,7 +43,7 @@ async def test_presigned_urls_upload_and_download_without_the_api(store: Storage
 
 
 async def test_a_presigned_upload_only_takes_the_signed_content_type(store: Storage) -> None:
-    put = store.presigned_put("uploads/photo.png", content_type="image/png")
+    put = store.presigned_put("uploads/photo.png", content_type="image/png", size=6)
     async with httpx.AsyncClient() as http:
         refused = await http.put(put, content=b"<html>", headers={"Content-Type": "text/html"})
     assert refused.status_code == 403
@@ -67,6 +69,36 @@ async def test_presigned_urls_are_signed_for_the_public_endpoint(
             assert (await http.get(url.replace(public, internal))).status_code == 403
     finally:
         store.close()
+
+
+async def test_a_presigned_upload_only_takes_the_signed_size(store: Storage) -> None:
+    put = store.presigned_put("uploads/a.txt", content_type="text/plain", size=5)
+    async with httpx.AsyncClient() as http:
+        longer = await http.put(put, content=b"0123456789", headers={"Content-Type": "text/plain"})
+    assert longer.status_code == 403
+
+
+def test_uploads_are_limited_by_type_and_size(store: Storage) -> None:
+    with pytest.raises(Problem) as html:
+        store.presigned_put("page.html", content_type="text/html", size=10)
+    assert html.value.status == 415
+    with pytest.raises(Problem) as huge:
+        store.presigned_put("big.bin", content_type="application/zip", size=10**12)
+    assert huge.value.status == 413
+    with pytest.raises(Problem) as empty:
+        store.presigned_put("none.txt", content_type="text/plain", size=0)
+    assert empty.value.status == 413
+
+
+async def test_downloads_come_as_attachments(store: Storage) -> None:
+    await store.put("notes/x.txt", b"hi", content_type="text/plain")
+    async with httpx.AsyncClient() as http:
+        plain = await http.get(store.presigned_get("notes/x.txt"))
+        named = await http.get(store.presigned_get("notes/x.txt", filename="Week 1 notes.txt"))
+    assert plain.headers["content-disposition"] == "attachment"
+    assert (
+        named.headers["content-disposition"] == "attachment; filename*=UTF-8''Week%201%20notes.txt"
+    )
 
 
 @pytest.mark.parametrize(
