@@ -42,27 +42,16 @@ class Storage:
             raise ValueError("STORAGE_BUCKET is not set")
         self.bucket = settings.storage_bucket
         self.url_seconds = settings.storage_url_seconds
-        key_id, secret = settings.storage_access_key_id, settings.storage_secret_access_key
-        self.client: S3Client = boto3.session.Session().client(
-            "s3",
-            endpoint_url=settings.storage_endpoint_url,
-            region_name=settings.storage_region,
-            aws_access_key_id=key_id.get_secret_value() if key_id else None,
-            aws_secret_access_key=secret.get_secret_value() if secret else None,
-            config=Config(
-                signature_version="s3v4",
-                # Path-style: RustFS serves virtual-host buckets only with RUSTFS_SERVER_DOMAINS
-                # set; R2 accepts both.
-                s3={"addressing_style": "path"},
-                connect_timeout=5,
-                read_timeout=30,
-                retries={"mode": "standard", "max_attempts": 3},
-            ),
-        )
+        self.client = _client(settings, settings.storage_endpoint_url)
+        # Presigned URLs carry their host in the signature, so they are signed for the address
+        # browsers use. Inside Compose that differs from the API's (storage:9000 vs localhost:9000);
+        # signing makes no network call, so the second client never connects.
+        public = settings.storage_public_endpoint_url
+        self.signer = _client(settings, public) if public else self.client
 
     def presigned_get(self, key: str, *, seconds: int | None = None) -> str:
         """A URL anyone holding it can download the object from until it expires."""
-        return self.client.generate_presigned_url(
+        return self.signer.generate_presigned_url(
             "get_object",
             Params={"Bucket": self.bucket, "Key": check_key(key)},
             ExpiresIn=seconds or self.url_seconds,
@@ -71,7 +60,7 @@ class Storage:
     def presigned_put(self, key: str, *, content_type: str, seconds: int | None = None) -> str:
         """A URL to upload one object with exactly this Content-Type (it is signed, so a different
         one is refused). Browser uploads also need a CORS rule on the bucket."""
-        return self.client.generate_presigned_url(
+        return self.signer.generate_presigned_url(
             "put_object",
             Params={"Bucket": self.bucket, "Key": check_key(key), "ContentType": content_type},
             ExpiresIn=seconds or self.url_seconds,
@@ -106,6 +95,28 @@ class Storage:
 
     def close(self) -> None:
         self.client.close()
+        if self.signer is not self.client:
+            self.signer.close()
+
+
+def _client(settings: Settings, endpoint_url: str | None) -> S3Client:
+    key_id, secret = settings.storage_access_key_id, settings.storage_secret_access_key
+    return boto3.session.Session().client(
+        "s3",
+        endpoint_url=endpoint_url,
+        region_name=settings.storage_region,
+        aws_access_key_id=key_id.get_secret_value() if key_id else None,
+        aws_secret_access_key=secret.get_secret_value() if secret else None,
+        config=Config(
+            signature_version="s3v4",
+            # Path-style: RustFS serves virtual-host buckets only with RUSTFS_SERVER_DOMAINS set;
+            # R2 accepts both.
+            s3={"addressing_style": "path"},
+            connect_timeout=5,
+            read_timeout=30,
+            retries={"mode": "standard", "max_attempts": 3},
+        ),
+    )
 
 
 def check_key(key: str) -> str:

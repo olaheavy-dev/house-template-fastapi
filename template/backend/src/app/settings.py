@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     # https://<account id>.r2.cloudflarestorage.com endpoint, region "auto" and an R2 API token.
     storage_bucket: str | None = None
     storage_endpoint_url: str | None = "http://localhost:9000"
+    # Where browsers reach the storage, when that differs from the endpoint above (the Compose
+    # API reaches storage:9000; a browser, localhost:9000). Presigned URLs are signed for it.
+    storage_public_endpoint_url: str | None = None
     storage_region: str = "us-east-1"
     storage_access_key_id: SecretStr | None = SecretStr("app-storage")
     storage_secret_access_key: SecretStr | None = SecretStr("app-storage-secret")
