@@ -54,11 +54,11 @@ up: ## Run the backend from its image: database, migrations once, then the API o
 	docker compose up -d --build --wait api
 
 migrate: ## Apply migrations to DATABASE_URL (the local db by default)
-	$(BACKEND) alembic upgrade head
+	$(BACKEND) alembic upgrade heads
 
 migration: ## Write a migration from model changes: make migration name="add courses"
 	@test -n "$(name)" || { echo 'usage: make migration name="what changed"'; exit 2; }
-	$(BACKEND) alembic revision --autogenerate -m "$(name)"
+	$(BACKEND) alembic revision --autogenerate --head app@head -m "$(name)"
 
 record-llm: ## Re-record the model cassettes with real calls, with LLM_MODEL's provider key set: make record-llm [budget=0.50]
 	LLM_DAILY_BUDGET_USD=$(or $(budget),0.50) $(LIVE) pytest -m vcr --record-mode=rewrite

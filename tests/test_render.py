@@ -172,7 +172,7 @@ def test_secrets_and_tests_stay_out_of_the_image(render):
 def test_the_api_waits_for_migrations_that_run_once(render):
     compose = yaml.safe_load((render() / "backend" / "compose.yaml").read_text())
     migrate, api = compose["services"]["migrate"], compose["services"]["api"]
-    assert migrate["command"] == ["alembic", "upgrade", "head"]
+    assert migrate["command"] == ["alembic", "upgrade", "heads"]
     assert migrate["restart"] == "no"
     assert api["depends_on"]["migrate"] == {"condition": "service_completed_successfully"}
     assert all(port.startswith("127.0.0.1:") for port in api["ports"])

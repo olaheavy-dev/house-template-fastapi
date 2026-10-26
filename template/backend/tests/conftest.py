@@ -140,7 +140,7 @@ def storage_settings(storage_endpoint: str) -> Settings:
 def database_url() -> Iterator[str]:
     """A migrated database for the whole test session (see tests/db.py)."""
     for url in db.database_url():
-        command.upgrade(db.alembic_config(url), "head")
+        command.upgrade(db.alembic_config(url), "heads")
         yield url
 
 

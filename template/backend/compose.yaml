@@ -56,7 +56,7 @@ services:
     # Both services build the same Dockerfile (the second build is cached): Compose names the
     # image after the project, so two projects never share one.
     build: .
-    command: ["alembic", "upgrade", "head"]
+    command: ["alembic", "upgrade", "heads"]
     environment: &api-environment
       APP_ENV: local
       LOG_JSON: "false"
