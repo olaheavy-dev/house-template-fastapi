@@ -22,6 +22,18 @@ from app.llm.gateway import Gateway, key_setting
 from app.settings import Settings
 
 
+@pytest.fixture(scope="session")
+def anyio_backend() -> str:
+    return "asyncio"
+
+
+@pytest.fixture(scope="session", autouse=True)
+async def one_event_loop() -> None:
+    """All evals share one event loop, as the app does. The provider integrations cache one HTTP
+    client per process, and its connections belong to the loop that opened them; a fresh loop
+    per test would find them closed ("Event loop is closed")."""
+
+
 @pytest.fixture
 def api_key() -> str:
     """The real key for LLM_MODEL's provider. Under `make eval` a missing key stops the run (an

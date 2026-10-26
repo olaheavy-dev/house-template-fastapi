@@ -9,10 +9,12 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from langchain_core.messages import HumanMessage
+from langchain_core.messages.ai import UsageMetadata
 from langchain_core.tracers.langchain import LangChainTracer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.llm import prices
 from app.llm.budget import LlmCall
 from app.llm.gateway import Gateway, GatewayDep
 from app.llm.prompts import load_prompt
@@ -43,9 +45,16 @@ async def test_a_replayed_call_is_answered_and_its_cost_settled(
     [call] = (await db_session.scalars(select(LlmCall))).all()
     assert call.model == "openai:gpt-6-luna"
     assert call.status == "settled"
-    assert (call.input_tokens, call.output_tokens) == (14, 4)
-    # 14 x $0.10/M + 4 x $0.50/M = 3.4 micro-USD, rounded up.
-    assert call.cost_micro_usd == 4
+    # Whatever the recording's usage, the row settles at exactly its price-table cost (re-recording
+    # changes the counts; gpt-6 models count reasoning tokens as output).
+    assert call.input_tokens
+    assert call.output_tokens
+    usage: UsageMetadata = {
+        "input_tokens": call.input_tokens,
+        "output_tokens": call.output_tokens,
+        "total_tokens": call.input_tokens + call.output_tokens,
+    }
+    assert call.cost_micro_usd == prices.cost(prices.PRICES[call.model], usage) > 0
     assert call.reserved_micro_usd >= call.cost_micro_usd
 
 
