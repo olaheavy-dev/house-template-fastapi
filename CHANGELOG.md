@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/olaheavy-dev/house-template-fastapi/compare/v0.6.0...v0.6.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* meter embeddings and refuse calls billed beyond the price table ([#26](https://github.com/olaheavy-dev/house-template-fastapi/issues/26)) ([6fda88f](https://github.com/olaheavy-dev/house-template-fastapi/commit/6fda88f960a0817655bcae44c34bb556a9302a58))
+
 ## [0.6.0](https://github.com/olaheavy-dev/house-template-fastapi/compare/v0.5.0...v0.6.0) (2026-10-26)
 
 
