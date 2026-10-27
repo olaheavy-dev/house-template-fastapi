@@ -45,6 +45,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.auth import User
 from app.llm import prices
 from app.llm.budget import BudgetGuard
+from app.llm.embeddings import GatewayEmbeddings, openai_client
 from app.llm.prompts import Prompt
 from app.problems import Problem
 from app.settings import Settings
@@ -78,6 +79,28 @@ class Gateway:
         if self.tracer:
             callbacks.append(self.tracer)
 
+        embedding_price = prices.EMBEDDING_PRICES.get(settings.embedding_model)
+        if embedding_price is None:
+            raise ValueError(
+                f"EMBEDDING_MODEL {settings.embedding_model!r} has no price in "
+                "app/llm/prices.py EMBEDDING_PRICES"
+            )
+        # Without OpenAI's key there are no embeddings, and asking for them gets a 503.
+        self._embeddings: GatewayEmbeddings | None = None
+        if settings.openai_api_key is not None:
+            self._embeddings = GatewayEmbeddings(
+                model=settings.embedding_model,
+                price=embedding_price,
+                client=openai_client(
+                    settings.openai_api_key,
+                    timeout=settings.llm_timeout_seconds,
+                    max_retries=settings.llm_max_retries,
+                ),
+                cap_micro_usd=self.guard.cap,
+                user_cap_micro_usd=self.guard.user_cap,
+                sessionmaker=sessionmaker,
+            )
+
         api_key: SecretStr | None = getattr(settings, key_setting(settings.llm_model))
         # Without a key there is no model, and calls get a 503 instead of reaching the provider.
         self._model: BaseChatModel | None = None
@@ -96,6 +119,16 @@ class Gateway:
         if self._model is None:
             raise Problem(503, detail="The language model isn't configured.")
         return self._model
+
+    def embeddings(self) -> GatewayEmbeddings:
+        """Embeddings under the same daily budget; always await them:
+
+        vectors = await gateway.embeddings().aembed_documents(texts, feature="ingest")
+        query = await gateway.embeddings().aembed_query(question, user_ref=user.id)
+        """
+        if self._embeddings is None:
+            raise Problem(503, detail="The embedding model isn't configured.")
+        return self._embeddings
 
     def agent(
         self,

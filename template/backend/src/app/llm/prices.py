@@ -74,6 +74,14 @@ PRICES: dict[str, Price] = {
 }
 
 
+# Keyed by the EMBEDDING_MODEL value. Embeddings are billed for input tokens only.
+# https://developers.openai.com/api/docs/pricing, checked on 27 Oct 2026.
+EMBEDDING_PRICES: dict[str, Price] = {
+    "openai:text-embedding-3-small": Price(_rates(0.02, 0, 0, 0, 0)),
+    "openai:text-embedding-3-large": Price(_rates(0.13, 0, 0, 0, 0)),
+}
+
+
 def cost(price: Price, usage: UsageMetadata) -> int:
     """The cost of one call in micro-USD, rounded up, from the usage LangChain reports.
 
