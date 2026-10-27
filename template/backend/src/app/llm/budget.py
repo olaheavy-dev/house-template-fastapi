@@ -14,6 +14,10 @@ missing or whose settlement fails. Every doubt errs towards counting too much. D
 Images are reserved at IMAGE_TOKENS each, however they are sent. Documents, audio and video have
 no per-item bound (a PDF costs per page), so a call carrying one is refused before it is sent.
 
+prices.py prices tokens at the standard tier only, so a call that would be billed for more is
+refused before it is sent: one binding a tool the provider runs itself (web search, file search,
+code execution: billed per use on top of tokens), or asking for a dearer service tier (priority).
+
 The guard is a LangChain callback attached to the model, so it covers every way of calling it
 (ainvoke, astream, with_structured_output, tools, agents), but only when the call is awaited:
 LangChain swallows errors from async callbacks on the synchronous path, so never call a gateway
@@ -387,6 +391,35 @@ def input_bound(messages: Sequence[BaseMessage], invocation_params: dict[str, An
     return len(payload.encode()) + images * IMAGE_TOKENS + INPUT_MARGIN_TOKENS
 
 
+# Tools the app runs itself, which cost only the tokens of the call: OpenAI's "function" and
+# "custom" tools, and Anthropic's untyped ones. Any other type is a tool the provider runs.
+_TOKEN_ONLY_TOOL_TYPES = frozenset({None, "function", "custom"})
+# Service tiers billed at prices.py's standard rates or less (flex is cheaper, which only ever
+# over-records).
+_PRICED_SERVICE_TIERS = frozenset({None, "auto", "default", "flex", "standard_only"})
+
+
+class UnpricedRequest(ValueError):
+    """A call that would be billed for something prices.py doesn't price: a mistake in the code
+    that made it, refused before anything is reserved or sent."""
+
+
+def check_priced(invocation_params: dict[str, Any]) -> None:
+    for tool in invocation_params.get("tools") or ():
+        kind = tool.get("type") if isinstance(tool, dict) else None
+        if kind not in _TOKEN_ONLY_TOOL_TYPES:
+            raise UnpricedRequest(
+                f"The provider runs the {kind!r} tool and bills it per use, which "
+                "app/llm/prices.py doesn't price: use a tool the app runs instead."
+            )
+    tier = invocation_params.get("service_tier")
+    if tier not in _PRICED_SERVICE_TIERS:
+        raise UnpricedRequest(
+            f"The {tier!r} service tier costs more than the standard rates app/llm/prices.py "
+            "holds: add its prices before using it."
+        )
+
+
 def _usage(response: LLMResult) -> UsageMetadata | None:
     for generations in response.generations:
         for generation in generations:
@@ -439,6 +472,7 @@ class BudgetGuard(AsyncCallbackHandler):
         **kwargs: Any,
     ) -> None:
         params: dict[str, Any] = kwargs.get("invocation_params") or {}
+        check_priced(params)
         # A caller may bind a larger limit than the gateway's; reserve for whichever is larger.
         bound = [params.get(k) for k in ("max_tokens", "max_completion_tokens")]
         output = max([self.max_tokens, *(b for b in bound if isinstance(b, int))])

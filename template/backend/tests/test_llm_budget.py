@@ -27,6 +27,7 @@ from app.llm.budget import (
     LlmSpendUserDay,
     PromptTooLong,
     UnboundedMedia,
+    UnpricedRequest,
     UserBudgetExhausted,
     expire_stale,
     reserve,
@@ -424,3 +425,49 @@ async def test_concurrent_reservations_never_overshoot_the_cap(
     await engine.dispose()
     assert results.count(True) == 3
     assert total == 900
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        {"type": "web_search"},  # OpenAI, billed per search
+        {"type": "web_search_20250305", "name": "web_search", "max_uses": 3},  # Anthropic
+        {"type": "file_search", "vector_store_ids": ["vs_1"]},
+        {"type": "code_interpreter", "container": {"type": "auto"}},
+    ],
+)
+async def test_a_tool_the_provider_runs_and_bills_per_use_is_refused_before_reserving(
+    db_session: AsyncSession, guard: Callable[..., BudgetGuard], tool: dict[str, Any]
+) -> None:
+    model = GenericFakeChatModel(messages=iter([answer("4")]), callbacks=[guard()])
+    with pytest.raises(UnpricedRequest, match=str(tool["type"])):
+        await model.bind(tools=[tool]).ainvoke(QUESTION)
+    assert await calls(db_session) == []
+
+
+async def test_tools_the_app_runs_cost_only_tokens_and_are_allowed(
+    db_session: AsyncSession, guard: Callable[..., BudgetGuard]
+) -> None:
+    openai_style = {"type": "function", "function": {"name": "f", "parameters": {}}}
+    anthropic_style = {"name": "f", "description": "d", "input_schema": {"type": "object"}}
+    model = GenericFakeChatModel(messages=iter([answer("4")]), callbacks=[guard()])
+    await model.bind(tools=[openai_style, anthropic_style]).ainvoke(QUESTION)
+    assert [c.status for c in await calls(db_session)] == ["settled"]
+
+
+@pytest.mark.parametrize("tier", ["priority", "scale"])
+async def test_a_service_tier_priced_above_the_standard_rates_is_refused(
+    db_session: AsyncSession, guard: Callable[..., BudgetGuard], tier: str
+) -> None:
+    model = GenericFakeChatModel(messages=iter([answer("4")]), callbacks=[guard()])
+    with pytest.raises(UnpricedRequest, match=tier):
+        await model.bind(service_tier=tier).ainvoke(QUESTION)
+    assert await calls(db_session) == []
+
+
+@pytest.mark.parametrize("tier", ["auto", "default", "flex", "standard_only"])
+async def test_service_tiers_at_or_below_the_standard_rates_are_allowed(
+    guard: Callable[..., BudgetGuard], tier: str
+) -> None:
+    model = GenericFakeChatModel(messages=iter([answer("4")]), callbacks=[guard()])
+    await model.bind(service_tier=tier).ainvoke(QUESTION)

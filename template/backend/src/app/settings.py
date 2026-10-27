@@ -89,6 +89,10 @@ class Settings(BaseSettings):
 
     # The model the gateway calls, "provider:model id", with its prices in app/llm/prices.py.
     llm_model: str = "openai:gpt-6-luna"
+    # The embedding model gateway.embeddings() calls, "openai:model id", priced in
+    # app/llm/prices.py EMBEDDING_PRICES. OpenAI only (Anthropic has no embeddings), so it needs
+    # OPENAI_API_KEY whichever provider LLM_MODEL names. 1,536 dimensions, as the models use.
+    embedding_model: str = "openai:text-embedding-3-small"
     # Read by the gateway only; the provider's own variable names, so the usual secret works.
     anthropic_api_key: SecretStr | None = None
     openai_api_key: SecretStr | None = None

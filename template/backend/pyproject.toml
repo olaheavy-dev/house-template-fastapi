@@ -109,4 +109,6 @@ source_modules = ["app"]
 # `langchain` too: init_chat_model would build a model that skips the budget. langchain_core
 # (messages, prompts, runnables) is fine anywhere.
 forbidden_modules = ["openai", "anthropic", "langchain", "langchain_openai", "langchain_anthropic"]
-ignore_imports = ["app.llm.** -> langchain"]
+# The embeddings module calls OpenAI's SDK itself: LangChain's embeddings drop the usage the budget
+# settles from.
+ignore_imports = ["app.llm.** -> langchain", "app.llm.embeddings -> openai"]
