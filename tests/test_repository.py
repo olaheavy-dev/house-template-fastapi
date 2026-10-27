@@ -32,6 +32,9 @@ def test_required_checks_are_jobs_the_workflows_run_on_pull_requests():
 def test_ruleset_gates_merges_on_code_scanning_and_squash_only():
     rules = {r["type"]: r for r in json.loads((ROOT / ".github/rulesets/main.json").read_text())["rules"]}
     assert {t["tool"] for t in rules["code_scanning"]["parameters"]["code_scanning_tools"]} == {"CodeQL", "zizmor"}
+    # Zero findings: an alert of any severity, from either tool, blocks a merge.
+    assert all((t["alerts_threshold"], t["security_alerts_threshold"]) == ("all", "all")
+               for t in rules["code_scanning"]["parameters"]["code_scanning_tools"])
     assert rules["pull_request"]["parameters"]["allowed_merge_methods"] == ["squash"]
 
 
