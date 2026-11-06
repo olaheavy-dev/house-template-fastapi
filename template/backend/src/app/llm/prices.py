@@ -152,7 +152,8 @@ def cost(price: Price, usage: UsageMetadata) -> int:
     short_write = tokens("ephemeral_5m_input_tokens")
     # A write count with no lifetime (`cache_creation` alone, as langchain-openai 1.7.2 reports
     # it) could be either lifetime, so it is charged at the dearer rate: the cost can be
-    # over-recorded, never under-recorded. With a split present, langchain-anthropic 1.7.6 sets `cache_creation` to 0.
+    # over-recorded, never under-recorded. With a split present, langchain-anthropic 1.7.6 sets
+    # `cache_creation` to 0.
     undivided_write = tokens("cache_creation")
     plain = max(input_tokens - cache_read - long_write - short_write - undivided_write, 0)
     total = (
