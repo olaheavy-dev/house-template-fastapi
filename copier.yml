@@ -1,11 +1,14 @@
 # house-template-fastapi: the Python backend layer. Apply it after house-template-base, in the same
 # project, with its own answers file:
 #   copier copy --trust -a .copier-answers.fastapi.yml gh:olaheavy-dev/house-template-fastapi .
-# It owns backend/, mk/fastapi.mk, .python-version and its rules file, and reads the base answers
-# (project name, slug, domain, stacks) through _external_data instead of asking again.
+# It owns backend/, mk/fastapi.mk, .python-version and its rules file. It checks the base answers
+# (stacks) and copies container_images from them; template files never read _external_data (#49).
+# Updating needs --trust: Copier counts any `_tasks` entry as unsafe, even one whose `when` is false.
 # Copier docs: https://copier.readthedocs.io/en/stable/configuring/
 
-_min_copier_version: "9.19.0"
+# 9.19.1: the sync validator on container_images relies on Copier dropping a failing last answer,
+# which is undocumented and proven only on 9.19.1 (tests/test_update.py guards it).
+_min_copier_version: "9.19.1"
 _subdirectory: template
 _answers_file: .copier-answers.fastapi.yml
 _templates_suffix: .jinja
@@ -37,13 +40,15 @@ _skip_if_exists:
   - backend/uv.lock
 # Docs: https://copier.readthedocs.io/en/v9.19.1/configuring/ (`_tasks`, `when`, `_copier_operation`).
 # `_copier_operation` works only in tasks, not in validators, question `when` or file names. The task
-# runs on copy and recopy and not on update, whose temporary copies have no base file.
+# runs on copy and recopy and not on update, whose temporary copies have no base file. `--skip-tasks`
+# bypasses the refusal (the user opts in).
 _tasks:
   - when: "{{ _copier_operation == 'copy' and not _external_data.base }}"
     command: >-
-      echo "Apply house-template-base first: .copier-answers.base.yml is missing. This run has
-      already written files here; remove them with git clean -fd and git checkout . (or delete
-      the directory), apply the base template, then run this again." >&2; exit 1
+      echo "Apply house-template-base first: .copier-answers.base.yml is missing. This run may have
+      already written files here. If this directory had no uncommitted work before this run (check
+      git status), undo it with git clean -fd and git checkout . Otherwise remove only the files
+      this run added. Then apply the base template and run this again." >&2; exit 1
 _message_after_copy: |
   The FastAPI layer is in backend/. Next:
     1. make install && make check

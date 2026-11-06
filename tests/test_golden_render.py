@@ -140,7 +140,7 @@ def test_a_missing_baseline_ref_fails_with_a_fetch_hint():
 def git(cwd: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false",
-         "-c", "core.hooksPath=/dev/null", *args],
+         "-c", "tag.gpgSign=false", "-c", "core.hooksPath=/dev/null", *args],
         cwd=cwd, capture_output=True, text=True, check=True)
     return result.stdout
 

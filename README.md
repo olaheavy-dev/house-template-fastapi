@@ -17,18 +17,18 @@ make db-up && make migrate && make dev
 make storage-up                    # for file storage, with STORAGE_BUCKET set in backend/.env
 ```
 
-The layer reads the project name and stacks from `.copier-answers.base.yml` and refuses to apply without them. It records the base's `container_images` as its own answer (`container_images` in `.copier-answers.fastapi.yml`), which is what lets `copier update` work. If the files were already written when the refusal came (a `-d container_images=...` run without the base answers), clean up with `git clean -fd` and `git checkout .`, apply the base first, and run it again.
+The layer checks the base answers (the fastapi stack) and copies `container_images` from them into its own answer in `.copier-answers.fastapi.yml`, which is what lets `copier update` work; template files never read the base answers. `copy` and `recopy` refuse without `.copier-answers.base.yml`; `update` cannot check for it and carries on. The refusal comes after an interactive answer or `-d container_images=...` (without either, Copier stops earlier with "Question container_images is required"; the interactive flow is untested), and by then files may already be written. If this directory had no uncommitted work before the run (check `git status`), undo it with `git clean -fd` and `git checkout .`; otherwise remove only the files the run added. Then apply the base first and run it again.
 
 ## Upgrading
 
-From this release on, update the layer with `copier update -a .copier-answers.fastapi.yml`. The project owns `backend/uv.lock`, so after an update that changes dependencies, run `make lock` and commit the lockfile before `make install`. The update prints a harmless `MissingFileWarning` for `.copier-answers.base.yml`.
+From v0.7.0 on, update the layer with `copier update --trust -a .copier-answers.fastapi.yml`. `--trust` is required: Copier refuses any template that has `_tasks` without it, even when the task does not run in an update. The project owns `backend/uv.lock`, so after an update that changes dependencies, run `make lock` and commit the lockfile before `make install`. The update prints a harmless `MissingFileWarning` for `.copier-answers.base.yml`.
 
 If the base's `container_images` changes, the next update follows it: it deletes `.github/workflows/publish-api.yml` when it turns off and adds it when it turns on. If you edited that file, expect a conflict (untested).
 
 Projects made from v0.6.1 or earlier cannot `copier update` (their old version refuses without the base file; #49). Move them once with `recopy`, then update normally:
 
 1. Commit everything, so `git diff` shows exactly what the next step changes.
-2. `copier recopy --trust --defaults --overwrite -a .copier-answers.fastapi.yml --vcs-ref <tag>`. It applies the layer again as if new and overwrites your edits to any file it renders; it keeps `backend/uv.lock` and your own files.
+2. `copier recopy --trust --defaults --overwrite -a .copier-answers.fastapi.yml --vcs-ref <tag>`, with `<tag>` v0.7.0 or newer. It applies the layer again as if new and overwrites your edits to any file it renders; it keeps `backend/uv.lock` and your own files.
 3. Review `git diff` and restore your own edits (especially to the template-owned files listed in `.github/template-owned/fastapi.txt`).
 4. `make lock && make install && make check`, then commit.
 
