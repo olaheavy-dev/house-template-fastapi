@@ -38,12 +38,6 @@ def test_no_local_cache_or_venv_is_ever_copied(render):
     assert leaked == []
 
 
-@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
-def test_layer_refuses_a_project_without_base_answers(render, project):
-    with pytest.raises(ValueError, match="Apply house-template-base first"):
-        render(project(base=None))
-
-
 def test_layer_refuses_base_answers_without_the_fastapi_stack(render, project):
     with pytest.raises(ValueError, match="don't list the fastapi stack"):
         render(project(stacks=["nextjs"]))

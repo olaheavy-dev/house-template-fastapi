@@ -34,6 +34,7 @@ BASELINE_REF = "d67ca3807ae74a78cc9728bf20da829be035117c"
 # Not compared: file modes, symlinks and empty directories (the template has no tracked
 # executables today).
 INTENDED: dict[str, str] = {
+    ".copier-answers.fastapi.yml": "records container_images, copied from the base answers (#49)",
     ".claude/rules/fastapi.md": "rule text moved after backend/.env (#41)",
     "mk/fastapi.mk": "record-llm help says provider keys (#41)",
     "backend/src/app/llm/prices.py": "comment matches the UTC+1 date rule (#41)",
@@ -139,7 +140,7 @@ def test_a_missing_baseline_ref_fails_with_a_fetch_hint():
 def git(cwd: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false",
-         "-c", "core.hooksPath=/dev/null", *args],
+         "-c", "tag.gpgSign=false", "-c", "core.hooksPath=/dev/null", *args],
         cwd=cwd, capture_output=True, text=True, check=True)
     return result.stdout
 

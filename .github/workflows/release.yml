@@ -1,7 +1,7 @@
 # Releases of this template. release-please reads the Conventional Commit titles merged to main,
 # keeps a release PR with the next version and changelog, and on merge tags vX.Y.Z and publishes the
 # release. Copier updates generated projects from these tags
-# (`copier update -a .copier-answers.fastapi.yml`), and base's weekly update workflow watches them.
+# (`copier update --trust -a .copier-answers.fastapi.yml`), and base's weekly update workflow watches them.
 # A release PR opened with GITHUB_TOKEN doesn't start CI, and main requires CI to pass, so set a
 # RELEASE_PLEASE_TOKEN secret in the `release` environment (a GitHub App token or a fine-grained
 # token with contents and pull-requests write) for the release PR to be mergeable. https://github.com/googleapis/release-please-action
