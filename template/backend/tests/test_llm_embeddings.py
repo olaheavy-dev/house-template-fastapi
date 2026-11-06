@@ -20,10 +20,11 @@ from app.llm.budget import BudgetExhausted, LlmCall, LlmSpendDay, UserBudgetExha
 from app.llm.embeddings import GatewayEmbeddings
 from app.llm.gateway import Gateway
 from app.settings import Settings
+from tests.models import EMBEDDING_MODEL
 
 pytestmark = pytest.mark.anyio
 
-MODEL = "openai:text-embedding-3-small"
+MODEL = EMBEDDING_MODEL
 DAY = date(2026, 1, 3)
 
 
@@ -175,5 +176,5 @@ def test_an_embedding_model_without_a_price_is_refused_at_startup() -> None:
     settings = Settings(
         _env_file=None, app_env="test", embedding_model="openai:text-embedding-ada-002"
     )
-    with pytest.raises(ValueError, match="EMBEDDING_MODEL"):
+    with pytest.raises(ValueError, match=r"EMBEDDING_MODEL.*EMBEDDING_PRICES"):
         Gateway(settings, lambda: None)  # type: ignore[arg-type,return-value]

@@ -38,7 +38,7 @@ async def one_event_loop() -> None:
 def api_key() -> str:
     """The real key for LLM_MODEL's provider. Under `make eval` a missing key stops the run (an
     all-skipped eval run would look like a pass); elsewhere the evals skip."""
-    name = key_setting(Settings(_env_file=None).llm_model).upper()
+    name = key_setting(os.environ["LLM_MODEL"]).upper()
     key = os.environ.get(name)
     if not key:
         if os.environ.get("LLM_EVAL") == "1":
@@ -52,8 +52,14 @@ async def gateway(api_key: str, database_url: str) -> AsyncIterator[Gateway]:
     """The gateway on the real provider, its budget and agent threads kept in the test database.
     api_key comes first, so a missing key stops before the database starts; database_url is a
     plain dependency, so its migrations run before this fixture's event loop does."""
-    settings = Settings(_env_file=None, app_env="test", database_url=SecretStr(database_url))
-    settings = settings.model_copy(update={key_setting(settings.llm_model): SecretStr(api_key)})
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        database_url=SecretStr(database_url),
+    )
+    settings = settings.model_copy(
+        update={key_setting(os.environ["LLM_MODEL"]): SecretStr(api_key)}
+    )
     engine = create_async_engine(database_url)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     gateway = Gateway(settings, lambda: sessions)

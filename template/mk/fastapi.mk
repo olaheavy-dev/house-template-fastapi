@@ -21,7 +21,7 @@ check-fastapi: ## Backend: lint, format, types, import contracts and tests (test
 	$(BACKEND) ruff format --check
 	$(BACKEND) mypy
 	$(BACKEND) lint-imports
-	$(BACKEND) pytest
+	env -u LLM_EVAL $(BACKEND) pytest
 
 check-fast-fastapi: ## Backend: lint, format and types (the pre-push and stop-hook checks)
 	$(BACKEND) ruff check
@@ -34,8 +34,8 @@ lock: ## Update backend/uv.lock after changing backend/pyproject.toml
 dev: ## Run the API with reload on http://127.0.0.1:8000
 	$(BACKEND) fastapi dev
 
-test: ## Run the backend tests
-	$(BACKEND) pytest
+test: ## Run the backend tests (LLM_EVAL is for make eval only, so it is unset here)
+	env -u LLM_EVAL $(BACKEND) pytest
 
 db-up: ## Start the local PostgreSQL with pgvector (backend/compose.yaml) and wait until it's healthy
 	docker compose up -d --wait db
@@ -60,8 +60,8 @@ migration: ## Write a migration from model changes: make migration name="add cou
 	@test -n "$(name)" || { echo 'usage: make migration name="what changed"'; exit 2; }
 	$(BACKEND) alembic revision --autogenerate --head app@head -m "$(name)"
 
-record-llm: ## Re-record the model cassettes with real calls, with LLM_MODEL's provider key set: make record-llm [budget=0.50]
-	LLM_DAILY_BUDGET_USD=$(or $(budget),0.50) $(LIVE) pytest -m vcr --record-mode=rewrite
+record-llm: ## Re-record the cassettes with the models pinned in tests/models.py, with their provider key set (shell or backend/.env): make record-llm [budget=0.50]
+	env -u LLM_EVAL LLM_DAILY_BUDGET_USD=$(or $(budget),0.50) $(LIVE) pytest -m vcr --record-mode=rewrite
 
-eval: ## Run the evals against the real model, with LLM_MODEL's provider key set: make eval [budget=1] (uploads to LangSmith when LANGSMITH_API_KEY is set)
+eval: ## Run the evals against the real model, with your LLM_MODEL, EMBEDDING_MODEL and its provider key set (shell or backend/.env): make eval [budget=1] (uploads to LangSmith when LANGSMITH_API_KEY is set)
 	LLM_EVAL=1 LLM_DAILY_BUDGET_USD=$(or $(budget),1) $(LIVE) pytest tests/evals -m eval

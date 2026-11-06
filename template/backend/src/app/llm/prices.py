@@ -2,17 +2,20 @@
 
 LangChain reports tokens but no cost, so the gateway prices calls itself. Integers keep the budget
 arithmetic exact. A model the gateway may call must be listed here (the gateway refuses to start
-otherwise), so add a model's prices before switching LLM_MODEL to it.
+otherwise), so add a model's prices before setting LLM_MODEL to it. The template sets no model: you
+choose LLM_MODEL and EMBEDDING_MODEL, and these entries are examples to copy from.
 
-Prices are the providers' standard-tier list prices, checked on 26 Oct 2026:
-https://platform.claude.com/docs/en/about-claude/pricing and
-https://developers.openai.com/api/docs/pricing. Re-check them when you change models.
+Every entry records `checked` (the ISO date you read the price) and `source` (the provider's pricing
+page, an https URL), and an entry without both is refused. Prices are the providers' standard-tier
+list prices: read the page on the day you add or change an entry and never type one from memory.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
+from urllib.parse import urlparse
 
 from langchain_core.messages.ai import UsageMetadata
 
@@ -25,7 +28,8 @@ class Rates:
     input: int
     output: int
     cache_read: int
-    # Anthropic prices cache writes by lifetime; OpenAI reports one kind, priced as the shorter.
+    # The cache-write rates of the shorter and the longer lifetime: Anthropic's pricing page lists
+    # 5-minute and 1-hour writes, OpenAI's lists 30-minute and 12-hour writes.
     cache_write_short: int
     cache_write_long: int
 
@@ -33,12 +37,34 @@ class Rates:
 @dataclass(frozen=True, slots=True)
 class Price:
     rates: Rates
+    # When the price was read (ISO date, YYYY-MM-DD) and the provider's pricing page it came from.
+    checked: str = field(kw_only=True)
+    source: str = field(kw_only=True)
     # Some models charge more for every token of a request whose prompt is longer than this.
     long_prompt_tokens: int | None = None
     long_rates: Rates | None = None
     # Longest prompt these rates cover, when longer ones cost more and aren't priced here: the
     # budget refuses them instead of under-recording their cost.
     max_prompt_tokens: int | None = None
+
+    def __post_init__(self) -> None:
+        # Not compared with today's date: a clock that is a day off must not stop the app starting
+        # (a test checks that no entry is dated after today, UTC).
+        try:
+            exact = date.fromisoformat(self.checked).isoformat() == self.checked
+        except ValueError:
+            exact = False
+        if not exact:
+            raise ValueError(f"Price.checked must be a date as YYYY-MM-DD, not {self.checked!r}")
+        try:
+            url = urlparse(self.source)
+            valid_url = url.scheme == "https" and bool(url.hostname)
+        except ValueError:
+            valid_url = False
+        if not valid_url:
+            raise ValueError(
+                f"Price.source must be the pricing page's https URL, not {self.source!r}"
+            )
 
     def for_prompt(self, input_tokens: int) -> Rates:
         if self.long_rates and self.long_prompt_tokens and input_tokens > self.long_prompt_tokens:
@@ -57,28 +83,52 @@ def _rates(input: float, output: float, cache_read: float, short: float, long: f
     return Rates(micro(input), micro(output), micro(cache_read), micro(short), micro(long))
 
 
+CLAUDE_PRICING = "https://platform.claude.com/docs/en/about-claude/pricing"
+OPENAI_PRICING = "https://developers.openai.com/api/docs/pricing"
+
 # Keyed by the LLM_MODEL value, "provider:model id". USD per million tokens:
 # input, output, cache read, cache write (short-lived), cache write (long-lived).
 PRICES: dict[str, Price] = {
-    "anthropic:claude-opus-5-5": Price(_rates(4, 20, 0.20, 5, 8)),
-    "anthropic:claude-sonnet-5-5": Price(_rates(2, 10, 0.10, 2.50, 4)),
+    "anthropic:claude-opus-5-5": Price(
+        _rates(4, 20, 0.20, 5, 8), checked="2026-11-06", source=CLAUDE_PRICING
+    ),
+    "anthropic:claude-sonnet-5-5": Price(
+        _rates(2, 10, 0.10, 2.50, 4), checked="2026-11-06", source=CLAUDE_PRICING
+    ),
     "anthropic:claude-haiku-5-5": Price(
         _rates(0.10, 0.50, 0.01, 0.125, 0.20),
+        checked="2026-11-06",
+        source=CLAUDE_PRICING,
         long_prompt_tokens=100_000,
         long_rates=_rates(0.50, 2.50, 0.05, 0.625, 1),
     ),
     # OpenAI's prices for prompts up to 272K tokens. Longer prompts cost more and aren't priced
-    # here, so the budget refuses them (add long_prompt_tokens and long_rates to allow them).
-    "openai:gpt-6.1-sol": Price(_rates(2, 10, 0.10, 2.50, 5), max_prompt_tokens=272_000),
-    "openai:gpt-6-luna": Price(_rates(0.10, 0.50, 0.01, 0.125, 0.25), max_prompt_tokens=272_000),
+    # here, so the budget refuses them (add long_prompt_tokens and long_rates to allow them). The
+    # page defines short context as "<=272K input tokens" without saying what K is; 272_000 reads it
+    # as 1,000. The last two rates are the page's 30-minute and 12-hour cache-write columns.
+    "openai:gpt-6.1-sol": Price(
+        _rates(2, 10, 0.10, 2.50, 5),
+        checked="2026-11-06",
+        source=OPENAI_PRICING,
+        max_prompt_tokens=272_000,
+    ),
+    "openai:gpt-6-luna": Price(
+        _rates(0.10, 0.50, 0.01, 0.125, 0.25),
+        checked="2026-11-06",
+        source=OPENAI_PRICING,
+        max_prompt_tokens=272_000,
+    ),
 }
 
 
 # Keyed by the EMBEDDING_MODEL value. Embeddings are billed for input tokens only.
-# https://developers.openai.com/api/docs/pricing, checked on 27 Oct 2026.
 EMBEDDING_PRICES: dict[str, Price] = {
-    "openai:text-embedding-3-small": Price(_rates(0.02, 0, 0, 0, 0)),
-    "openai:text-embedding-3-large": Price(_rates(0.13, 0, 0, 0, 0)),
+    "openai:text-embedding-3-small": Price(
+        _rates(0.02, 0, 0, 0, 0), checked="2026-11-06", source=OPENAI_PRICING
+    ),
+    "openai:text-embedding-3-large": Price(
+        _rates(0.13, 0, 0, 0, 0), checked="2026-11-06", source=OPENAI_PRICING
+    ),
 }
 
 
@@ -99,13 +149,18 @@ def cost(price: Price, usage: UsageMetadata) -> int:
 
     cache_read = tokens("cache_read")
     long_write = tokens("ephemeral_1h_input_tokens")
-    short_write = tokens("ephemeral_5m_input_tokens") + tokens("cache_creation")
-    plain = max(input_tokens - cache_read - long_write - short_write, 0)
+    short_write = tokens("ephemeral_5m_input_tokens")
+    # A write count with no lifetime (`cache_creation` alone, as langchain-openai 1.7.2 reports
+    # it) could be either lifetime, so it is charged at the dearer rate: the cost can be
+    # over-recorded, never under-recorded. With a split present, langchain-anthropic 1.7.6 sets
+    # `cache_creation` to 0.
+    undivided_write = tokens("cache_creation")
+    plain = max(input_tokens - cache_read - long_write - short_write - undivided_write, 0)
     total = (
         plain * rates.input
         + cache_read * rates.cache_read
         + short_write * rates.cache_write_short
-        + long_write * rates.cache_write_long
+        + (long_write + undivided_write) * rates.cache_write_long
         + usage["output_tokens"] * rates.output
     )
     return -(-total // _PER_MILLION)

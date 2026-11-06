@@ -19,6 +19,7 @@ from app.llm.budget import LlmCall
 from app.llm.gateway import Gateway, GatewayDep
 from app.llm.prompts import load_prompt
 from app.settings import Settings
+from tests.models import CHAT_MODEL, EMBEDDING_MODEL
 
 pytestmark = pytest.mark.anyio
 
@@ -43,7 +44,7 @@ async def test_a_replayed_call_is_answered_and_its_cost_settled(
     assert response.json()["text"]
 
     [call] = (await db_session.scalars(select(LlmCall))).all()
-    assert call.model == "openai:gpt-6-luna"
+    assert call.model == app.state.gateway.name  # the pinned test model, or the one being recorded
     assert call.status == "settled"
     # Whatever the recording's usage, the row settles at exactly its price-table cost (re-recording
     # changes the counts; gpt-6 models count reasoning tokens as output).
@@ -78,8 +79,42 @@ async def test_without_a_key_calls_get_a_503(client: httpx.AsyncClient, app: Fas
     assert response.json()["detail"] == "The language model isn't configured."
 
 
+def test_gateway_refuses_to_start_without_llm_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    settings = Settings(_env_file=None, embedding_model=EMBEDDING_MODEL)
+    assert settings.llm_model is None
+    with pytest.raises(ValueError, match=r"LLM_MODEL is not set.*app/llm/prices\.py"):
+        Gateway(settings, lambda: None)  # type: ignore[arg-type,return-value]
+
+
+@pytest.mark.parametrize("blank", ["", " ", "  \t\n"])
+def test_a_blank_llm_model_counts_as_unset(blank: str) -> None:
+    settings = Settings(_env_file=None, llm_model=blank, embedding_model=EMBEDDING_MODEL)
+    with pytest.raises(ValueError, match=r"LLM_MODEL is not set"):
+        Gateway(settings, lambda: None)  # type: ignore[arg-type,return-value]
+
+
+def test_gateway_refuses_to_start_without_embedding_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("EMBEDDING_MODEL", raising=False)
+    settings = Settings(_env_file=None, llm_model=CHAT_MODEL)
+    assert settings.embedding_model is None
+    with pytest.raises(ValueError, match=r"EMBEDDING_MODEL is not set.*EMBEDDING_PRICES"):
+        Gateway(settings, lambda: None)  # type: ignore[arg-type,return-value]
+
+
+@pytest.mark.parametrize("blank", ["", " ", "  \t\n"])
+def test_a_blank_embedding_model_counts_as_unset(blank: str) -> None:
+    settings = Settings(_env_file=None, llm_model=CHAT_MODEL, embedding_model=blank)
+    with pytest.raises(ValueError, match=r"EMBEDDING_MODEL is not set.*EMBEDDING_PRICES"):
+        Gateway(settings, lambda: None)  # type: ignore[arg-type,return-value]
+
+
 def test_a_model_without_a_price_is_refused_at_startup() -> None:
-    settings = Settings(_env_file=None, llm_model="anthropic:claude-unpriced")
+    settings = Settings(
+        _env_file=None, llm_model="anthropic:claude-unpriced", embedding_model=EMBEDDING_MODEL
+    )
     with pytest.raises(ValueError, match="no price"):
         Gateway(settings, lambda: None)  # type: ignore[arg-type,return-value]
 

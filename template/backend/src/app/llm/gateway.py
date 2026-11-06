@@ -55,15 +55,28 @@ class Gateway:
     def __init__(
         self, settings: Settings, sessionmaker: Callable[[], async_sessionmaker[AsyncSession]]
     ) -> None:
-        price = prices.PRICES.get(settings.llm_model)
+        llm_model = (settings.llm_model or "").strip()
+        if not llm_model:
+            raise ValueError(
+                "LLM_MODEL is not set. Set it to a '<provider>:<model-id>' whose prices are in "
+                "app/llm/prices.py (add them there first, from the provider's pricing page)"
+            )
+        embedding_model = (settings.embedding_model or "").strip()
+        if not embedding_model:
+            raise ValueError(
+                "EMBEDDING_MODEL is not set. Set it to an '<provider>:<model-id>' whose prices are "
+                "in app/llm/prices.py EMBEDDING_PRICES (add them there first, from the provider's "
+                "pricing page)"
+            )
+        price = prices.PRICES.get(llm_model)
         if price is None:
-            raise ValueError(f"LLM_MODEL {settings.llm_model!r} has no price in app/llm/prices.py")
-        self.name = settings.llm_model
+            raise ValueError(f"LLM_MODEL {llm_model!r} has no price in app/llm/prices.py")
+        self.name = llm_model
         self.max_steps = settings.agent_max_steps
         # Set in the lifespan once the checkpoint pool is open (app/llm/checkpoints.py).
         self.checkpointer: BaseCheckpointSaver[Any] | None = None
         self.guard = BudgetGuard(
-            model=settings.llm_model,
+            model=llm_model,
             price=price,
             cap_micro_usd=int(settings.llm_daily_budget_usd * prices.MICRO_USD),
             user_cap_micro_usd=(
@@ -79,17 +92,17 @@ class Gateway:
         if self.tracer:
             callbacks.append(self.tracer)
 
-        embedding_price = prices.EMBEDDING_PRICES.get(settings.embedding_model)
+        embedding_price = prices.EMBEDDING_PRICES.get(embedding_model)
         if embedding_price is None:
             raise ValueError(
-                f"EMBEDDING_MODEL {settings.embedding_model!r} has no price in "
+                f"EMBEDDING_MODEL {embedding_model!r} has no price in "
                 "app/llm/prices.py EMBEDDING_PRICES"
             )
         # Without OpenAI's key there are no embeddings, and asking for them gets a 503.
         self._embeddings: GatewayEmbeddings | None = None
         if settings.openai_api_key is not None:
             self._embeddings = GatewayEmbeddings(
-                model=settings.embedding_model,
+                model=embedding_model,
                 price=embedding_price,
                 client=openai_client(
                     settings.openai_api_key,
@@ -101,12 +114,12 @@ class Gateway:
                 sessionmaker=sessionmaker,
             )
 
-        api_key: SecretStr | None = getattr(settings, key_setting(settings.llm_model))
+        api_key: SecretStr | None = getattr(settings, key_setting(llm_model))
         # Without a key there is no model, and calls get a 503 instead of reaching the provider.
         self._model: BaseChatModel | None = None
         if api_key is not None:
             self._model = init_chat_model(
-                settings.llm_model,
+                llm_model,
                 api_key=api_key,
                 max_tokens=settings.llm_max_tokens,
                 timeout=settings.llm_timeout_seconds,

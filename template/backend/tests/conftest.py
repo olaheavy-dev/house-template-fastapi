@@ -25,6 +25,7 @@ from app.main import create_app
 from app.settings import Settings
 from app.storage import create_bucket
 from tests import db, storage
+from tests.models import CHAT_MODEL, EMBEDDING_MODEL
 
 # Before langsmith first reads them (it caches them): tests never send traces or sync results to
 # LangSmith, whatever the developer's shell exports. Evals (`make eval`, LLM_EVAL=1) upload an
@@ -38,20 +39,46 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
-def provider_key() -> tuple[str, str | None]:
-    """The environment variable holding LLM_MODEL's provider key, and its value if set."""
-    name = key_setting(Settings(_env_file=None).llm_model).upper()
-    return name, os.environ.get(name)
+def is_eval_run() -> bool:
+    """`make eval` (LLM_EVAL=1): the evals call the project's own model, so they follow the
+    LLM_MODEL and EMBEDDING_MODEL it set (shell or backend/.env). `make check` unsets LLM_EVAL, so
+    a shell that exports it cannot turn the normal tests live. Recording does not follow them: it
+    uses the models pinned in tests/models.py, so replay keeps matching what was recorded."""
+    return os.environ.get("LLM_EVAL") == "1"
+
+
+def is_recording(config: pytest.Config) -> bool:
+    return config.getoption("--record-mode") not in (None, "none")
+
+
+@pytest.fixture(autouse=True)
+def test_models(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The template has no default model, so a test names the models the cassettes were recorded
+    # with (replaying and recording alike), whatever the developer's shell exports. A test of the
+    # missing-model refusal deletes them again. Only the evals keep the environment's own models.
+    if is_eval_run():
+        return
+    monkeypatch.setenv("LLM_MODEL", CHAT_MODEL)
+    monkeypatch.setenv("EMBEDDING_MODEL", EMBEDDING_MODEL)
 
 
 @pytest.fixture(scope="session", autouse=True)
-def recording_needs_a_real_key(request: pytest.FixtureRequest) -> None:
-    # Replaying needs no key; recording with a placeholder would save the provider's 401.
-    if request.config.getoption("--record-mode") in (None, "none"):
+def live_runs_need_models_and_a_key(request: pytest.FixtureRequest) -> None:
+    # Replaying needs no key. Recording with a placeholder key would save the provider's 401, and
+    # evals with no model chosen would have nothing to call.
+    if is_recording(request.config):
+        name = key_setting(CHAT_MODEL).upper()
+        if not os.environ.get(name):
+            pytest.exit(f"recording calls the real model: set {name}", returncode=2)
+    if not is_eval_run():
         return
-    name, value = provider_key()
-    if not value:
-        pytest.exit(f"recording calls the real model: set {name}", returncode=2)
+    missing = [n for n in ("LLM_MODEL", "EMBEDDING_MODEL") if not os.environ.get(n, "").strip()]
+    if missing:
+        pytest.exit(
+            f"recording and evals call your model: set {' and '.join(missing)} in the shell or "
+            "backend/.env (their prices must be in app/llm/prices.py)",
+            returncode=2,
+        )
 
 
 @pytest.fixture
