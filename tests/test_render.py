@@ -205,3 +205,22 @@ def test_a_local_env_file_never_reaches_a_project(render):
             secret.unlink()
     assert not (project / "backend" / ".env").exists()
     assert (project / "backend" / ".env.example").exists()
+
+
+MODEL_ID = re.compile(
+    r"\b(?:openai|anthropic):[a-z0-9]|\bgpt-\d|\bclaude-|\btext-embedding-", re.IGNORECASE
+)
+
+
+def test_docs_name_no_model_ids():
+    # Model ids go stale; the docs say "<provider>:<model-id>" and send readers to prices.py.
+    docs = [TEMPLATE.parent / "README.md", TEMPLATE / ".claude/rules/fastapi.md",
+            TEMPLATE / "backend/.env.example"]
+    found = [(d.name, m.group(0)) for d in docs for m in MODEL_ID.finditer(d.read_text())]
+    assert found == []
+
+
+def test_env_example_picks_no_model_for_you():
+    lines = (TEMPLATE / "backend/.env.example").read_text().splitlines()
+    active = [line for line in lines if re.match(r"(LLM_MODEL|EMBEDDING_MODEL)=", line)]
+    assert active == []

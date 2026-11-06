@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 import pytest
 from langchain_core.messages.ai import UsageMetadata
 
 from app.llm import prices
-from app.llm.prices import PRICES, Price, Rates
+from app.llm.prices import EMBEDDING_PRICES, PRICES, Price, Rates
 
 
 def usage(input_tokens: int, output_tokens: int, **details: Any) -> UsageMetadata:
@@ -18,6 +19,8 @@ def usage(input_tokens: int, output_tokens: int, **details: Any) -> UsageMetadat
     }
 
 
+CHECKED = "2026-11-06"
+SOURCE = "https://example.com/pricing"
 SONNET = PRICES["anthropic:claude-sonnet-5-5"]  # $2 in, $10 out, $0.10 read, $2.50 / $4 write
 HAIKU = PRICES["anthropic:claude-haiku-5-5"]
 
@@ -71,5 +74,67 @@ def test_every_listed_model_is_provider_prefixed(model: str) -> None:
 
 
 def test_a_price_without_long_rates_has_one_tier() -> None:
-    price = Price(Rates(1, 1, 1, 1, 1))
+    price = Price(Rates(1, 1, 1, 1, 1), checked=CHECKED, source=SOURCE)
     assert price.for_prompt(10**9) is price.rates is price.highest
+
+
+# Cost rounds UP to a whole micro-USD. Haiku's rates are worked out by hand from its list prices
+# (USD per million tokens, so micro-USD per token): input $0.10 = 0.1, output $0.50 = 0.5 up to
+# 100,000 prompt tokens; input $0.50 = 0.5, output $2.50 = 2.5 above that. The cost of a call is
+# tokens x rate, rounded up.
+
+
+def test_zero_tokens_cost_nothing() -> None:
+    # 0 x 0.1 + 0 x 0.5 = 0 exactly: rounding up must not turn nothing into 1.
+    assert prices.cost(HAIKU, usage(0, 0)) == 0
+
+
+def test_one_token_costs_a_whole_micro_usd_not_a_fraction() -> None:
+    # 1 input token x 0.1 = 0.1 -> rounds up to 1. 1 output token x 0.5 = 0.5 -> 1.
+    assert prices.cost(HAIKU, usage(1, 0)) == 1
+    assert prices.cost(HAIKU, usage(0, 1)) == 1
+
+
+def test_an_exact_micro_usd_is_not_rounded_up_again() -> None:
+    # 10 input tokens x 0.1 = 1.0 exactly -> 1, not 2. 11 x 0.1 = 1.1 -> 2.
+    assert prices.cost(HAIKU, usage(10, 0)) == 1
+    assert prices.cost(HAIKU, usage(11, 0)) == 2
+
+
+def test_the_long_prompt_threshold_is_exclusive() -> None:
+    # Exactly 100,000 input tokens is still the short tier: 100,000 x 0.1 = 10,000.
+    assert prices.cost(HAIKU, usage(100_000, 0)) == 10_000
+    # One more switches the WHOLE prompt to the long tier: 100,001 x 0.5 = 50,000.5 -> 50,001.
+    assert prices.cost(HAIKU, usage(100_001, 0)) == 50_001
+
+
+def test_the_long_prompt_tier_prices_output_too() -> None:
+    # Short tier, 100,000 in + 3 out: 10,000 + 3 x 0.5 = 10,001.5 -> 10,002.
+    assert prices.cost(HAIKU, usage(100_000, 3)) == 10_002
+    # Long tier, 100,001 in + 3 out: 50,000.5 + 3 x 2.5 = 50,008 exactly -> 50,008.
+    assert prices.cost(HAIKU, usage(100_001, 3)) == 50_008
+
+
+def test_every_price_records_date_and_source() -> None:
+    for table in (PRICES, EMBEDDING_PRICES):
+        for model, price in table.items():
+            assert date.fromisoformat(price.checked) <= date.today(), model
+            assert price.source.startswith("https://"), model
+
+
+def test_a_price_without_a_date_or_source_is_refused() -> None:
+    rates = Rates(1, 1, 1, 1, 1)
+    with pytest.raises(TypeError):
+        Price(rates)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        Price(rates, checked=CHECKED)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        Price(rates, source=SOURCE)  # type: ignore[call-arg]
+    with pytest.raises(ValueError, match="checked"):
+        Price(rates, checked="", source=SOURCE)
+    with pytest.raises(ValueError, match="checked"):
+        Price(rates, checked="26 Oct 2026", source=SOURCE)
+    with pytest.raises(ValueError, match="source"):
+        Price(rates, checked=CHECKED, source="")
+    with pytest.raises(ValueError, match="source"):
+        Price(rates, checked=CHECKED, source="the pricing page")

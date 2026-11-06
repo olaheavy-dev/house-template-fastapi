@@ -28,10 +28,11 @@ from app.llm import prices, report
 from app.llm.budget import BudgetGuard, LlmCall, reserve, settle
 from app.main import create_app
 from app.settings import Settings
+from tests.models import CHAT_MODEL
 
 pytestmark = pytest.mark.anyio
 
-MODEL = "openai:gpt-6-luna"
+MODEL = CHAT_MODEL
 DAY = date(2026, 1, 3)
 
 

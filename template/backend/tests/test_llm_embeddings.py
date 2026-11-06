@@ -20,10 +20,11 @@ from app.llm.budget import BudgetExhausted, LlmCall, LlmSpendDay, UserBudgetExha
 from app.llm.embeddings import GatewayEmbeddings
 from app.llm.gateway import Gateway
 from app.settings import Settings
+from tests.models import EMBEDDING_MODEL
 
 pytestmark = pytest.mark.anyio
 
-MODEL = "openai:text-embedding-3-small"
+MODEL = EMBEDDING_MODEL
 DAY = date(2026, 1, 3)
 
 

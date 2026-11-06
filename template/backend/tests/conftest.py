@@ -25,6 +25,7 @@ from app.main import create_app
 from app.settings import Settings
 from app.storage import create_bucket
 from tests import db, storage
+from tests.models import CHAT_MODEL, EMBEDDING_MODEL
 
 # Before langsmith first reads them (it caches them): tests never send traces or sync results to
 # LangSmith, whatever the developer's shell exports. Evals (`make eval`, LLM_EVAL=1) upload an
@@ -40,8 +41,16 @@ def anyio_backend() -> str:
 
 def provider_key() -> tuple[str, str | None]:
     """The environment variable holding LLM_MODEL's provider key, and its value if set."""
-    name = key_setting(Settings(_env_file=None).llm_model).upper()
+    name = key_setting(CHAT_MODEL).upper()
     return name, os.environ.get(name)
+
+
+@pytest.fixture(autouse=True)
+def test_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The template has no default model: every Settings() in a test names the test models, whatever
+    # the developer's shell exports. A test of the missing-model refusal deletes them again.
+    monkeypatch.setenv("LLM_MODEL", CHAT_MODEL)
+    monkeypatch.setenv("EMBEDDING_MODEL", EMBEDDING_MODEL)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -63,6 +72,8 @@ def settings() -> Settings:
     return Settings(
         _env_file=None,
         app_env="test",
+        llm_model=CHAT_MODEL,
+        embedding_model=EMBEDDING_MODEL,
         openai_api_key=key("OPENAI_API_KEY"),
         anthropic_api_key=key("ANTHROPIC_API_KEY"),
     )

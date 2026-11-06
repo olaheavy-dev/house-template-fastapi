@@ -87,12 +87,15 @@ class Settings(BaseSettings):
         }
     )
 
-    # The model the gateway calls, "provider:model id", with its prices in app/llm/prices.py.
-    llm_model: str = "openai:gpt-6-luna"
+    # The model the gateway calls, "provider:model id", with its prices in app/llm/prices.py. No
+    # default: models and prices change, so you choose one. Unset, the gateway refuses to start with
+    # a message saying so (a bare required field would only say "Field required").
+    llm_model: str | None = None
     # The embedding model gateway.embeddings() calls, "openai:model id", priced in
     # app/llm/prices.py EMBEDDING_PRICES. OpenAI only (Anthropic has no embeddings), so it needs
     # OPENAI_API_KEY whichever provider LLM_MODEL names. 1,536 dimensions, as the models use.
-    embedding_model: str = "openai:text-embedding-3-small"
+    # No default, like llm_model.
+    embedding_model: str | None = None
     # Read by the gateway only; the provider's own variable names, so the usual secret works.
     anthropic_api_key: SecretStr | None = None
     openai_api_key: SecretStr | None = None

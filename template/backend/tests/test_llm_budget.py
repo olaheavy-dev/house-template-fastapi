@@ -337,7 +337,12 @@ async def test_a_prompt_past_the_priced_length_is_refused_before_reserving(
     db_session: AsyncSession, guard: Callable[..., BudgetGuard]
 ) -> None:
     short_limit = guard()
-    short_limit.price = prices.Price(PRICE.rates, max_prompt_tokens=10)
+    short_limit.price = prices.Price(
+        PRICE.rates,
+        checked="2026-11-06",
+        source="https://example.com/pricing",
+        max_prompt_tokens=10,
+    )
     model = GenericFakeChatModel(messages=iter([answer("4")]), callbacks=[short_limit])
     with pytest.raises(PromptTooLong) as refused:
         await model.ainvoke(QUESTION)
