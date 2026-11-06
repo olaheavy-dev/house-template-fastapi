@@ -35,8 +35,11 @@ BASELINE_REF = "d67ca3807ae74a78cc9728bf20da829be035117c"
 # executables today).
 INTENDED: dict[str, str] = {
     ".claude/rules/fastapi.md": "rule text moved after backend/.env (#41)",
+    "mk/fastapi.mk": "record-llm help says provider keys (#41)",
+    "backend/src/app/llm/prices.py": "comment matches the UTC+1 date rule (#41)",
     "backend/tests/conftest.py": "recording checks the key of both pinned models (#41)",
     "backend/tests/test_llm_prices.py": "cache_creation ceiling case, UTC+1 date rule (#41)",
+    "backend/tests/recording.py": "recording key check, importable by its test (#41)",
     "backend/tests/test_recording_keys.py": "tests for the recording key check (#41)",
 }
 

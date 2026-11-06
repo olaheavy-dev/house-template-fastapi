@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tests.conftest import missing_recording_keys
+from tests.recording import missing_recording_keys
 
 
 def test_a_recording_with_both_models_from_one_provider_needs_that_key() -> None:
@@ -23,7 +23,10 @@ def test_a_recording_with_two_providers_needs_both_keys() -> None:
     assert missing_recording_keys("anthropic:a", "openai:b", both) == []
 
 
-def test_an_empty_key_counts_as_missing() -> None:
+def test_an_empty_or_blank_key_counts_as_missing() -> None:
+    assert missing_recording_keys("openai:a", "openai:b", {"OPENAI_API_KEY": "  \n"}) == [
+        "OPENAI_API_KEY"
+    ]
     assert missing_recording_keys("openai:a", "openai:b", {"OPENAI_API_KEY": ""}) == [
         "OPENAI_API_KEY"
     ]

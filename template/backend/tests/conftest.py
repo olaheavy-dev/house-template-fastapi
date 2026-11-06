@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import httpx
@@ -20,12 +20,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from app.db import get_session
-from app.llm.gateway import key_setting
 from app.main import create_app
 from app.settings import Settings
 from app.storage import create_bucket
 from tests import db, storage
 from tests.models import CHAT_MODEL, EMBEDDING_MODEL
+from tests.recording import missing_recording_keys
 
 # Before langsmith first reads them (it caches them): tests never send traces or sync results to
 # LangSmith, whatever the developer's shell exports. Evals (`make eval`, LLM_EVAL=1) upload an
@@ -49,15 +49,6 @@ def is_eval_run() -> bool:
 
 def is_recording(config: pytest.Config) -> bool:
     return config.getoption("--record-mode") not in (None, "none")
-
-
-def missing_recording_keys(
-    chat_model: str, embedding_model: str, environ: Mapping[str, str]
-) -> list[str]:
-    """The key variables a recording run lacks: one per provider among the two pinned models, so an
-    Anthropic chat model with an OpenAI embedding model needs both."""
-    names = dict.fromkeys(key_setting(model).upper() for model in (chat_model, embedding_model))
-    return [name for name in names if not environ.get(name)]
 
 
 @pytest.fixture(autouse=True)

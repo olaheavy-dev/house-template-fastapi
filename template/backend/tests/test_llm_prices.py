@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -77,19 +77,21 @@ def test_long_prompts_use_the_long_prompt_rates() -> None:
 
 
 def test_ceiling_is_never_below_the_cost_of_the_same_tokens() -> None:
+    # Each usage is compared with the ceiling for ITS OWN input and output tokens, so a cost that
+    # counted a cache write twice would show. By hand, for the cache_creation-only usage on
+    # claude-opus-5-5 ($4/M input, $8/M long write, one tier): correct cost = 1,000 x 8 = 8,000
+    # micro-USD, all tokens charged once at the write rate; double counted (also as plain input) =
+    # 1,000 x 4 + 1,000 x 8 = 12,000. ceiling(1,000 in, 0 out) = 1,000 x max(4, 8) = 8,000, so it
+    # holds the correct cost and would fail the double-counted one.
     for price in PRICES.values():
-        # Hand check of the undivided cache write (`cache_creation`, as langchain-openai reports
-        # it): cost() charges all 1,000 tokens at the dearer write rate of the 1,000-token tier
-        # (the short tier: `for_prompt` picks it), and no plain input. ceiling() charges 1,000
-        # tokens at max(input, long write) of the HIGHEST tier, plus 1,000 output tokens at a rate
-        # that is never negative. The highest tier's rates are never below the short tier's, so the
-        # ceiling is the larger.
         for u in (
             usage(1_000, 1_000),
             usage(1_000, 0, ephemeral_1h_input_tokens=1_000),
             usage(1_000, 0, cache_creation=1_000),
         ):
-            assert prices.ceiling(price, 1_000, 1_000) >= prices.cost(price, u)
+            assert prices.ceiling(price, u["input_tokens"], u["output_tokens"]) >= prices.cost(
+                price, u
+            )
 
 
 @pytest.mark.parametrize("model", sorted(PRICES))
@@ -149,9 +151,11 @@ def latest_plausible_checked(now: datetime) -> date:
 
 
 def test_a_checked_date_may_be_the_next_utc_day_but_no_later() -> None:
-    now = datetime(2026, 11, 6, 23, 30, tzinfo=UTC)
-    assert latest_plausible_checked(now) == date(2026, 11, 7)
-    assert date(2026, 11, 7) <= latest_plausible_checked(now) < date(2026, 11, 8)
+    assert latest_plausible_checked(datetime(2026, 11, 6, 23, 30, tzinfo=UTC)) == date(2026, 11, 7)
+    assert latest_plausible_checked(datetime(2026, 11, 6, 0, 0, tzinfo=UTC)) == date(2026, 11, 7)
+    # 09:00 on 7 Nov at UTC+14 is 19:00 on 6 Nov in UTC, so the limit is 7 Nov, not 8 Nov.
+    east = datetime(2026, 11, 7, 9, 0, tzinfo=timezone(timedelta(hours=14)))
+    assert latest_plausible_checked(east) == date(2026, 11, 7)
 
 
 def test_every_price_records_date_and_source() -> None:

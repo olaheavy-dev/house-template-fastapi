@@ -49,7 +49,8 @@ class Price:
 
     def __post_init__(self) -> None:
         # Not compared with today's date: a clock that is a day off must not stop the app starting
-        # (a test checks that no entry is dated after today, UTC).
+        # (a test checks that no entry is dated after tomorrow, UTC: people east of UTC are a day
+        # ahead for part of the day).
         try:
             exact = date.fromisoformat(self.checked).isoformat() == self.checked
         except ValueError:
