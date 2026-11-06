@@ -5,7 +5,7 @@
 mk/fastapi.mk
 .claude/rules/fastapi.md
 .github/template-owned/fastapi.txt
-{% if _external_data.base.container_images %}.github/workflows/publish-api.yml
+{% if container_images %}.github/workflows/publish-api.yml
 {% endif %}backend/.gitignore
 backend/src/app/log.py
 backend/src/app/problems.py

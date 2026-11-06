@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from copier.errors import TaskError
 
 from conftest import BASE_ANSWERS, TEMPLATE
 
@@ -40,8 +41,9 @@ def test_no_local_cache_or_venv_is_ever_copied(render):
 
 @pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
 def test_layer_refuses_a_project_without_base_answers(render, project):
-    with pytest.raises(ValueError, match="Apply house-template-base first"):
-        render(project(base=None))
+    # Refused by a copy-only _tasks entry (#49): Copier raises TaskError, whose text has the message.
+    with pytest.raises(TaskError, match="Apply house-template-base first"):
+        render(project(base=None), container_images=True)
 
 
 def test_layer_refuses_base_answers_without_the_fastapi_stack(render, project):

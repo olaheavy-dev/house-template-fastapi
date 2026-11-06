@@ -35,17 +35,45 @@ _external_data:
 # backend/pyproject.toml, and `make lock` brings the lockfile in line.
 _skip_if_exists:
   - backend/uv.lock
+# Docs: https://copier.readthedocs.io/en/v9.19.1/configuring/ (`_tasks`, `when`, `_copier_operation`).
+# `_copier_operation` works only in tasks, not in validators, question `when` or file names. The task
+# runs on copy and recopy and not on update, whose temporary copies have no base file.
+_tasks:
+  - when: "{{ _copier_operation == 'copy' and not _external_data.base }}"
+    command: >-
+      echo "Apply house-template-base first: .copier-answers.base.yml is missing. This run has
+      already written files here; remove them with git clean -fd and git checkout . (or delete
+      the directory), apply the base template, then run this again." >&2; exit 1
 _message_after_copy: |
   The FastAPI layer is in backend/. Next:
     1. make install && make check
     2. git add -A && git commit -m "chore: add the house-template-fastapi layer"
+
+# Written by `copier update` into two temporary copies (the old and the new template version) that
+# never see .copier-answers.base.yml, so the one base value this layer renders from is recorded as
+# this layer's own answer instead of being read from _external_data while rendering files (#49).
+container_images:
+  type: bool
+  help: >-
+    Publish the API image (copied from the base answers; needs house-template-base applied first,
+    set from .copier-answers.base.yml)
+  default: "{{ _external_data.base.container_images if _external_data.base else UNSET }}"
+  # When the base file exists, the answer must equal it. A failing LAST answer (the base changed
+  # since the last update) is dropped and recomputed from the default; a -d value that disagrees is
+  # refused. Copier does not document the drop (copier/_main.py in 9.19.1), so a test guards it.
+  validator: >-
+    {% if _external_data.base and container_images != _external_data.base.container_images %}container_images
+    must match container_images in .copier-answers.base.yml ({{ _external_data.base.container_images }}):
+    change it there with copier update -a .copier-answers.base.yml, not here{% endif %}
 
 python_version:
   type: str
   help: Python version for the backend (the image and CI use it; 3.12 is the oldest supported)
   default: "3.14"
   choices: ["3.14", "3.13", "3.12"]
+  # Only the stack check lives here: validators cannot see _copier_operation, and `copier update`
+  # renders temporary copies without the base file, so "base is missing" is a task (see _tasks).
   validator: >-
-    {% if not _external_data.base %}Apply house-template-base first: .copier-answers.base.yml is missing
-    {%- elif 'fastapi' not in _external_data.base.stacks %}The base answers don't list the fastapi stack: run
-    copier update -a .copier-answers.base.yml and add it, so CI, CodeQL and Dependabot cover the backend{% endif %}
+    {% if _external_data.base and 'fastapi' not in _external_data.base.stacks %}The base answers don't list
+    the fastapi stack: run copier update -a .copier-answers.base.yml and add it, so CI, CodeQL and
+    Dependabot cover the backend{% endif %}

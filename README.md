@@ -17,7 +17,22 @@ make db-up && make migrate && make dev
 make storage-up                    # for file storage, with STORAGE_BUCKET set in backend/.env
 ```
 
-The layer reads the project name and stacks from `.copier-answers.base.yml` and refuses to apply without them. Update it later with `copier update -a .copier-answers.fastapi.yml`. Updating currently fails for projects made from v0.6.1 or earlier; see #49. The project owns `backend/uv.lock`, so after an update that changes dependencies, run `make lock` and commit the lockfile before `make install`.
+The layer reads the project name and stacks from `.copier-answers.base.yml` and refuses to apply without them. It records the base's `container_images` as its own answer (`container_images` in `.copier-answers.fastapi.yml`), which is what lets `copier update` work. If the files were already written when the refusal came (a `-d container_images=...` run without the base answers), clean up with `git clean -fd` and `git checkout .`, apply the base first, and run it again.
+
+## Upgrading
+
+From this release on, update the layer with `copier update -a .copier-answers.fastapi.yml`. The project owns `backend/uv.lock`, so after an update that changes dependencies, run `make lock` and commit the lockfile before `make install`. The update prints a harmless `MissingFileWarning` for `.copier-answers.base.yml`.
+
+If the base's `container_images` changes, the next update follows it: it deletes `.github/workflows/publish-api.yml` when it turns off and adds it when it turns on. If you edited that file, expect a conflict (untested).
+
+Projects made from v0.6.1 or earlier cannot `copier update` (their old version refuses without the base file; #49). Move them once with `recopy`, then update normally:
+
+1. Commit everything, so `git diff` shows exactly what the next step changes.
+2. `copier recopy --trust --defaults --overwrite -a .copier-answers.fastapi.yml --vcs-ref <tag>`. It applies the layer again as if new and overwrites your edits to any file it renders; it keeps `backend/uv.lock` and your own files.
+3. Review `git diff` and restore your own edits (especially to the template-owned files listed in `.github/template-owned/fastapi.txt`).
+4. `make lock && make install && make check`, then commit.
+
+Tested from v0.6.1 only; v0.3.0 to v0.5.x and the checks after the recopy are untested.
 
 ## What it adds
 
