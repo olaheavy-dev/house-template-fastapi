@@ -54,6 +54,8 @@ LLM_EVAL=1 LLM_DAILY_BUDGET_USD=1 uv run --env-file .env pytest tests/evals -m e
 
 `main` is protected by [`.github/rulesets/main.json`](.github/rulesets/main.json): squash merges through pull requests, with the tests, workflow lint (actionlint and zizmor), the PR title check and CodeQL required, and CodeQL and zizmor findings blocking a merge. A test checks that every required check is a job the workflows run.
 
+`tests/test_golden_render.py` keeps the default output from changing by accident: it renders `BASELINE_REF` (a commit of this repository) and the working tree with the default answers and compares every file. A feature PR that changes the default output on purpose adds the path to `INTENDED` with a reason and an issue number, and the test fails if a listed path no longer differs. After each release, a `chore:` PR moves `BASELINE_REF` to the new tag and empties `INTENDED`. It needs the full git history (`git fetch --unshallow` in a shallow clone).
+
 ## Releases
 
 release-please turns Conventional Commit titles into a release PR and, on merge, a `vX.Y.Z` tag. Projects update from those tags.
