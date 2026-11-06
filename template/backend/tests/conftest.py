@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import Any
 
 import httpx
@@ -51,6 +51,15 @@ def is_recording(config: pytest.Config) -> bool:
     return config.getoption("--record-mode") not in (None, "none")
 
 
+def missing_recording_keys(
+    chat_model: str, embedding_model: str, environ: Mapping[str, str]
+) -> list[str]:
+    """The key variables a recording run lacks: one per provider among the two pinned models, so an
+    Anthropic chat model with an OpenAI embedding model needs both."""
+    names = dict.fromkeys(key_setting(model).upper() for model in (chat_model, embedding_model))
+    return [name for name in names if not environ.get(name)]
+
+
 @pytest.fixture(autouse=True)
 def test_models(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     # The template has no default model, so a test names the models the cassettes were recorded
@@ -67,15 +76,17 @@ def live_runs_need_models_and_a_key(request: pytest.FixtureRequest) -> None:
     # Replaying needs no key. Recording with a placeholder key would save the provider's 401, and
     # evals with no model chosen would have nothing to call.
     if is_recording(request.config):
-        name = key_setting(CHAT_MODEL).upper()
-        if not os.environ.get(name):
-            pytest.exit(f"recording calls the real model: set {name}", returncode=2)
+        absent = missing_recording_keys(CHAT_MODEL, EMBEDDING_MODEL, os.environ)
+        if absent:
+            pytest.exit(
+                f"recording calls the real models: set {' and '.join(absent)}", returncode=2
+            )
     if not is_eval_run():
         return
     missing = [n for n in ("LLM_MODEL", "EMBEDDING_MODEL") if not os.environ.get(n, "").strip()]
     if missing:
         pytest.exit(
-            f"recording and evals call your model: set {' and '.join(missing)} in the shell or "
+            f"evals call your model: set {' and '.join(missing)} in the shell or "
             "backend/.env (their prices must be in app/llm/prices.py)",
             returncode=2,
         )

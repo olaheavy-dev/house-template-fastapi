@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -78,7 +78,17 @@ def test_long_prompts_use_the_long_prompt_rates() -> None:
 
 def test_ceiling_is_never_below_the_cost_of_the_same_tokens() -> None:
     for price in PRICES.values():
-        for u in (usage(1_000, 1_000), usage(1_000, 0, ephemeral_1h_input_tokens=1_000)):
+        # Hand check of the undivided cache write (`cache_creation`, as langchain-openai reports
+        # it): cost() charges all 1,000 tokens at the dearer write rate of the 1,000-token tier
+        # (the short tier: `for_prompt` picks it), and no plain input. ceiling() charges 1,000
+        # tokens at max(input, long write) of the HIGHEST tier, plus 1,000 output tokens at a rate
+        # that is never negative. The highest tier's rates are never below the short tier's, so the
+        # ceiling is the larger.
+        for u in (
+            usage(1_000, 1_000),
+            usage(1_000, 0, ephemeral_1h_input_tokens=1_000),
+            usage(1_000, 0, cache_creation=1_000),
+        ):
             assert prices.ceiling(price, 1_000, 1_000) >= prices.cost(price, u)
 
 
@@ -131,10 +141,27 @@ def test_the_long_prompt_tier_prices_output_too() -> None:
     assert prices.cost(HAIKU, usage(100_001, 3)) == 50_008
 
 
+def latest_plausible_checked(now: datetime) -> date:
+    """`checked` is the day the page was read, as the person wrote it: their local date. Someone
+    east of UTC (up to UTC+14) is already on the next day for part of the UTC day, so the UTC date
+    plus one is the latest a real entry can carry."""
+    return now.astimezone(UTC).date() + timedelta(days=1)
+
+
+def test_a_checked_date_may_be_the_next_utc_day_but_no_later() -> None:
+    now = datetime(2026, 11, 6, 23, 30, tzinfo=UTC)
+    assert latest_plausible_checked(now) == date(2026, 11, 7)
+    assert date(2026, 11, 7) <= latest_plausible_checked(now) < date(2026, 11, 8)
+
+
 def test_every_price_records_date_and_source() -> None:
+    latest = latest_plausible_checked(datetime.now(UTC))
     for table in (PRICES, EMBEDDING_PRICES):
         for model, price in table.items():
-            assert date.fromisoformat(price.checked) <= datetime.now(UTC).date(), model
+            assert date.fromisoformat(price.checked) <= latest, (
+                f"{model}: checked {price.checked} is after {latest} (today in UTC plus one day, "
+                "for people east of UTC); `checked` is the day you read the page"
+            )
             assert price.source.startswith("https://"), model
 
 
