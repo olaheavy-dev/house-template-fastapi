@@ -30,6 +30,7 @@ from app.llm.budget import (
     UnpricedRequest,
     UserBudgetExhausted,
     expire_stale,
+    input_bound,
     reserve,
     reserve_for,
     settle,
@@ -331,6 +332,35 @@ async def test_a_call_that_never_reserved_against_the_user_leaves_their_total_al
     assert await user_total(db_session, "u_4") == 900
     await settle(db_session, call_id=capped, status="settled", cost=100)
     assert await user_total(db_session, "u_4") == 100
+
+
+async def test_a_prompt_exactly_at_the_priced_length_is_allowed_and_one_more_is_refused(
+    db_session: AsyncSession, guard: Callable[..., BudgetGuard]
+) -> None:
+    # The limit applies to the budget's input bound b (an over-estimate of tokens, see
+    # input_bound), and a call is refused only when b > max_prompt_tokens. So a limit equal to b
+    # lets the call through, and a limit of b - 1 (the prompt being one more than allowed) refuses
+    # it. For OpenAI the shipped limit is 272,000 (see test_llm_prices): a prompt of 272,000 is
+    # priced at the short rates, 272,001 is refused. That reads the page's "272K" as 1,000s.
+    prompt: list[BaseMessage] = [*QUESTION]
+    bound = input_bound(prompt, {})
+
+    def limited(max_prompt_tokens: int) -> BudgetGuard:
+        limited = guard()
+        limited.price = prices.Price(
+            PRICE.rates,
+            checked="2026-11-06",
+            source="https://example.com/pricing",
+            max_prompt_tokens=max_prompt_tokens,
+        )
+        return limited
+
+    await limited(bound).on_chat_model_start({}, [prompt], run_id=uuid.uuid4())
+    assert [call.status for call in await calls(db_session)] == ["reserved"]
+
+    with pytest.raises(PromptTooLong):
+        await limited(bound - 1).on_chat_model_start({}, [prompt], run_id=uuid.uuid4())
+    assert len(await calls(db_session)) == 1  # the refused call reserved nothing
 
 
 async def test_a_prompt_past_the_priced_length_is_refused_before_reserving(

@@ -20,7 +20,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.llm import checkpoints
 from app.llm.gateway import Gateway, key_setting
 from app.settings import Settings
-from tests.models import CHAT_MODEL, EMBEDDING_MODEL
 
 
 @pytest.fixture(scope="session")
@@ -39,7 +38,7 @@ async def one_event_loop() -> None:
 def api_key() -> str:
     """The real key for LLM_MODEL's provider. Under `make eval` a missing key stops the run (an
     all-skipped eval run would look like a pass); elsewhere the evals skip."""
-    name = key_setting(CHAT_MODEL).upper()
+    name = key_setting(os.environ["LLM_MODEL"]).upper()
     key = os.environ.get(name)
     if not key:
         if os.environ.get("LLM_EVAL") == "1":
@@ -57,10 +56,10 @@ async def gateway(api_key: str, database_url: str) -> AsyncIterator[Gateway]:
         _env_file=None,
         app_env="test",
         database_url=SecretStr(database_url),
-        llm_model=CHAT_MODEL,
-        embedding_model=EMBEDDING_MODEL,
     )
-    settings = settings.model_copy(update={key_setting(CHAT_MODEL): SecretStr(api_key)})
+    settings = settings.model_copy(
+        update={key_setting(os.environ["LLM_MODEL"]): SecretStr(api_key)}
+    )
     engine = create_async_engine(database_url)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     gateway = Gateway(settings, lambda: sessions)

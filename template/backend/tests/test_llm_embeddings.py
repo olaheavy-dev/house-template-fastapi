@@ -176,5 +176,5 @@ def test_an_embedding_model_without_a_price_is_refused_at_startup() -> None:
     settings = Settings(
         _env_file=None, app_env="test", embedding_model="openai:text-embedding-ada-002"
     )
-    with pytest.raises(ValueError, match="EMBEDDING_MODEL"):
+    with pytest.raises(ValueError, match=r"EMBEDDING_MODEL.*EMBEDDING_PRICES"):
         Gateway(settings, lambda: None)  # type: ignore[arg-type,return-value]

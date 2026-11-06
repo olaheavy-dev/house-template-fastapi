@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
+from urllib.parse import urlparse
 
 from langchain_core.messages.ai import UsageMetadata
 
@@ -27,7 +28,8 @@ class Rates:
     input: int
     output: int
     cache_read: int
-    # Anthropic prices cache writes by lifetime; OpenAI reports one kind, priced as the shorter.
+    # The cache-write rates of the shorter and the longer lifetime: Anthropic's pricing page lists
+    # 5-minute and 1-hour writes, OpenAI's lists 30-minute and 12-hour writes.
     cache_write_short: int
     cache_write_long: int
 
@@ -47,12 +49,20 @@ class Price:
 
     def __post_init__(self) -> None:
         try:
-            date.fromisoformat(self.checked)
+            checked = date.fromisoformat(self.checked)
+            exact = checked.isoformat() == self.checked
         except ValueError:
-            raise ValueError(
-                f"Price.checked must be an ISO date (YYYY-MM-DD), not {self.checked!r}"
-            ) from None
-        if not self.source.startswith("https://"):
+            exact = False
+        if not exact:
+            raise ValueError(f"Price.checked must be a date as YYYY-MM-DD, not {self.checked!r}")
+        if checked > date.today():
+            raise ValueError(f"Price.checked {self.checked!r} is in the future")
+        try:
+            url = urlparse(self.source)
+            valid_url = url.scheme == "https" and bool(url.hostname)
+        except ValueError:
+            valid_url = False
+        if not valid_url:
             raise ValueError(
                 f"Price.source must be the pricing page's https URL, not {self.source!r}"
             )
@@ -76,37 +86,36 @@ def _rates(input: float, output: float, cache_read: float, short: float, long: f
 
 CLAUDE_PRICING = "https://platform.claude.com/docs/en/about-claude/pricing"
 OPENAI_PRICING = "https://developers.openai.com/api/docs/pricing"
-CHECKED = "2026-11-06"  # the day the entries below were read from those pages
 
 # Keyed by the LLM_MODEL value, "provider:model id". USD per million tokens:
 # input, output, cache read, cache write (short-lived), cache write (long-lived).
 PRICES: dict[str, Price] = {
     "anthropic:claude-opus-5-5": Price(
-        _rates(4, 20, 0.20, 5, 8), checked=CHECKED, source=CLAUDE_PRICING
+        _rates(4, 20, 0.20, 5, 8), checked="2026-11-06", source=CLAUDE_PRICING
     ),
     "anthropic:claude-sonnet-5-5": Price(
-        _rates(2, 10, 0.10, 2.50, 4), checked=CHECKED, source=CLAUDE_PRICING
+        _rates(2, 10, 0.10, 2.50, 4), checked="2026-11-06", source=CLAUDE_PRICING
     ),
     "anthropic:claude-haiku-5-5": Price(
         _rates(0.10, 0.50, 0.01, 0.125, 0.20),
-        checked=CHECKED,
+        checked="2026-11-06",
         source=CLAUDE_PRICING,
         long_prompt_tokens=100_000,
         long_rates=_rates(0.50, 2.50, 0.05, 0.625, 1),
     ),
     # OpenAI's prices for prompts up to 272K tokens. Longer prompts cost more and aren't priced
     # here, so the budget refuses them (add long_prompt_tokens and long_rates to allow them). The
-    # page lists no cache-write price: the two cache-write rates are the gateway's own estimate
-    # (1.25x and 2.5x input), which OpenAI's page does not confirm.
+    # page defines short context as "<=272K input tokens" without saying what K is; 272_000 reads it
+    # as 1,000. The last two rates are the page's 30-minute and 12-hour cache-write columns.
     "openai:gpt-6.1-sol": Price(
         _rates(2, 10, 0.10, 2.50, 5),
-        checked=CHECKED,
+        checked="2026-11-06",
         source=OPENAI_PRICING,
         max_prompt_tokens=272_000,
     ),
     "openai:gpt-6-luna": Price(
         _rates(0.10, 0.50, 0.01, 0.125, 0.25),
-        checked=CHECKED,
+        checked="2026-11-06",
         source=OPENAI_PRICING,
         max_prompt_tokens=272_000,
     ),
@@ -116,10 +125,10 @@ PRICES: dict[str, Price] = {
 # Keyed by the EMBEDDING_MODEL value. Embeddings are billed for input tokens only.
 EMBEDDING_PRICES: dict[str, Price] = {
     "openai:text-embedding-3-small": Price(
-        _rates(0.02, 0, 0, 0, 0), checked=CHECKED, source=OPENAI_PRICING
+        _rates(0.02, 0, 0, 0, 0), checked="2026-11-06", source=OPENAI_PRICING
     ),
     "openai:text-embedding-3-large": Price(
-        _rates(0.13, 0, 0, 0, 0), checked=CHECKED, source=OPENAI_PRICING
+        _rates(0.13, 0, 0, 0, 0), checked="2026-11-06", source=OPENAI_PRICING
     ),
 }
 

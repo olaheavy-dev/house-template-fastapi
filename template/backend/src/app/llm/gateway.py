@@ -55,13 +55,13 @@ class Gateway:
     def __init__(
         self, settings: Settings, sessionmaker: Callable[[], async_sessionmaker[AsyncSession]]
     ) -> None:
-        llm_model = settings.llm_model
+        llm_model = (settings.llm_model or "").strip()
         if not llm_model:
             raise ValueError(
                 "LLM_MODEL is not set. Set it to a '<provider>:<model-id>' whose prices are in "
                 "app/llm/prices.py (add them there first, from the provider's pricing page)"
             )
-        embedding_model = settings.embedding_model
+        embedding_model = (settings.embedding_model or "").strip()
         if not embedding_model:
             raise ValueError(
                 "EMBEDDING_MODEL is not set. Set it to an '<provider>:<model-id>' whose prices are "

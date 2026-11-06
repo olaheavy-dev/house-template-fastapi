@@ -8,6 +8,10 @@ The FastAPI layer of my Copier project templates. It adds a Python backend under
 copier copy --trust gh:olaheavy-dev/house-template-base my-app      # choose the fastapi stack
 cd my-app && git init -b main && git add -A && git commit -m "chore: start from house-template-base"
 copier copy --trust -a .copier-answers.fastapi.yml gh:olaheavy-dev/house-template-fastapi .
+cp backend/.env.example backend/.env
+# In backend/.env set LLM_MODEL and EMBEDDING_MODEL (<provider>:<model-id>); the template picks none.
+# Add each model's prices to backend/src/app/llm/prices.py first, with the date you read them and
+# the provider's pricing page (the app refuses to start otherwise).
 make install && make check      # the backend tests need Docker
 make db-up && make migrate && make dev
 make storage-up                    # for file storage, with STORAGE_BUCKET set in backend/.env

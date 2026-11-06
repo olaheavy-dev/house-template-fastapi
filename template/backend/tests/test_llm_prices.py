@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import pytest
@@ -134,7 +134,24 @@ def test_a_price_without_a_date_or_source_is_refused() -> None:
         Price(rates, checked="", source=SOURCE)
     with pytest.raises(ValueError, match="checked"):
         Price(rates, checked="26 Oct 2026", source=SOURCE)
+    # Only the exact YYYY-MM-DD form: other spellings Python's fromisoformat accepts are refused.
+    for spelling in ("20261106", "2026-W45-5", "2026-11-6", " 2026-11-06"):
+        with pytest.raises(ValueError, match="checked"):
+            Price(rates, checked=spelling, source=SOURCE)
+    with pytest.raises(ValueError, match="in the future"):
+        Price(rates, checked=(date.today() + timedelta(days=1)).isoformat(), source=SOURCE)
     with pytest.raises(ValueError, match="source"):
         Price(rates, checked=CHECKED, source="")
     with pytest.raises(ValueError, match="source"):
         Price(rates, checked=CHECKED, source="the pricing page")
+    for url in ("https://", "https:///pricing", "http://example.com/pricing", "ftp://example.com"):
+        with pytest.raises(ValueError, match="source"):
+            Price(rates, checked=CHECKED, source=url)
+
+
+def test_openai_prompt_limit_is_the_pages_272k_read_as_272_000() -> None:
+    # Assumption: OpenAI's page says "Short context: <=272K input tokens" without defining K. This
+    # template reads it as 1,000, so 272,000 is the last prompt priced at the short rates. If K is
+    # 1,024 the limit would be 278,528 and these entries would be over-cautious, never under.
+    for model in ("openai:gpt-6.1-sol", "openai:gpt-6-luna"):
+        assert PRICES[model].max_prompt_tokens == 272_000

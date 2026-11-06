@@ -39,27 +39,41 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
-def provider_key() -> tuple[str, str | None]:
-    """The environment variable holding LLM_MODEL's provider key, and its value if set."""
-    name = key_setting(CHAT_MODEL).upper()
-    return name, os.environ.get(name)
+def is_live(config: pytest.Config) -> bool:
+    """Recording cassettes or running evals: both call the project's own model, so they follow the
+    LLM_MODEL and EMBEDDING_MODEL it set (shell or backend/.env)."""
+    recording = config.getoption("--record-mode") not in (None, "none")
+    return recording or os.environ.get("LLM_EVAL") == "1"
 
 
 @pytest.fixture(autouse=True)
-def test_models(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The template has no default model: every Settings() in a test names the test models, whatever
-    # the developer's shell exports. A test of the missing-model refusal deletes them again.
+def test_models(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The template has no default model, so a replaying test names the models its cassettes were
+    # recorded with, whatever the developer's shell exports. A test of the missing-model refusal
+    # deletes them again. Live runs keep the environment's own models.
+    if is_live(request.config):
+        return
     monkeypatch.setenv("LLM_MODEL", CHAT_MODEL)
     monkeypatch.setenv("EMBEDDING_MODEL", EMBEDDING_MODEL)
 
 
 @pytest.fixture(scope="session", autouse=True)
-def recording_needs_a_real_key(request: pytest.FixtureRequest) -> None:
-    # Replaying needs no key; recording with a placeholder would save the provider's 401.
+def live_runs_need_models_and_a_key(request: pytest.FixtureRequest) -> None:
+    # Replaying needs neither. Recording with a placeholder key would save the provider's 401, and
+    # a live run with no model chosen would have nothing to call.
+    if not is_live(request.config):
+        return
+    missing = [n for n in ("LLM_MODEL", "EMBEDDING_MODEL") if not os.environ.get(n, "").strip()]
+    if missing:
+        pytest.exit(
+            f"recording and evals call your model: set {' and '.join(missing)} in the shell or "
+            "backend/.env (their prices must be in app/llm/prices.py)",
+            returncode=2,
+        )
     if request.config.getoption("--record-mode") in (None, "none"):
         return
-    name, value = provider_key()
-    if not value:
+    name = key_setting(os.environ["LLM_MODEL"]).upper()
+    if not os.environ.get(name):
         pytest.exit(f"recording calls the real model: set {name}", returncode=2)
 
 
@@ -72,8 +86,6 @@ def settings() -> Settings:
     return Settings(
         _env_file=None,
         app_env="test",
-        llm_model=CHAT_MODEL,
-        embedding_model=EMBEDDING_MODEL,
         openai_api_key=key("OPENAI_API_KEY"),
         anthropic_api_key=key("ANTHROPIC_API_KEY"),
     )

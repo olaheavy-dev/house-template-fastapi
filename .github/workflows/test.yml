@@ -88,6 +88,10 @@ jobs:
       - name: Run the backend from its image (migrations once, then the API)
         working-directory: ${{ runner.temp }}/demo
         run: |
+          # The template picks no model, so the project chooses them (backend/.env is read by the
+          # api container). These two are priced in app/llm/prices.py.
+          printf '%s\n' 'LLM_MODEL=openai:gpt-6-luna' \
+            'EMBEDDING_MODEL=openai:text-embedding-3-small' > backend/.env
           make up
           test "$(docker compose exec -T api id -u)" = 10001
           curl -fsS http://127.0.0.1:8000/health/ready
