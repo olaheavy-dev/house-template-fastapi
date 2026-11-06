@@ -48,15 +48,14 @@ class Price:
     max_prompt_tokens: int | None = None
 
     def __post_init__(self) -> None:
+        # Not compared with today's date: a clock that is a day off must not stop the app starting
+        # (a test checks that no entry is dated after today, UTC).
         try:
-            checked = date.fromisoformat(self.checked)
-            exact = checked.isoformat() == self.checked
+            exact = date.fromisoformat(self.checked).isoformat() == self.checked
         except ValueError:
             exact = False
         if not exact:
             raise ValueError(f"Price.checked must be a date as YYYY-MM-DD, not {self.checked!r}")
-        if checked > date.today():
-            raise ValueError(f"Price.checked {self.checked!r} is in the future")
         try:
             url = urlparse(self.source)
             valid_url = url.scheme == "https" and bool(url.hostname)
@@ -150,13 +149,17 @@ def cost(price: Price, usage: UsageMetadata) -> int:
 
     cache_read = tokens("cache_read")
     long_write = tokens("ephemeral_1h_input_tokens")
-    short_write = tokens("ephemeral_5m_input_tokens") + tokens("cache_creation")
-    plain = max(input_tokens - cache_read - long_write - short_write, 0)
+    short_write = tokens("ephemeral_5m_input_tokens")
+    # A write count with no lifetime (`cache_creation` alone, as langchain-openai 1.7.2 reports
+    # it) could be either lifetime, so it is charged at the dearer rate: the cost can be
+    # over-recorded, never under-recorded. With a split present, langchain-anthropic 1.7.6 sets `cache_creation` to 0.
+    undivided_write = tokens("cache_creation")
+    plain = max(input_tokens - cache_read - long_write - short_write - undivided_write, 0)
     total = (
         plain * rates.input
         + cache_read * rates.cache_read
         + short_write * rates.cache_write_short
-        + long_write * rates.cache_write_long
+        + (long_write + undivided_write) * rates.cache_write_long
         + usage["output_tokens"] * rates.output
     )
     return -(-total // _PER_MILLION)

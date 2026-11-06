@@ -340,20 +340,22 @@ async def test_a_prompt_exactly_at_the_priced_length_is_allowed_and_one_more_is_
     # The limit applies to the budget's input bound b (an over-estimate of tokens, see
     # input_bound), and a call is refused only when b > max_prompt_tokens. So a limit equal to b
     # lets the call through, and a limit of b - 1 (the prompt being one more than allowed) refuses
-    # it. For OpenAI the shipped limit is 272,000 (see test_llm_prices): a prompt of 272,000 is
-    # priced at the short rates, 272,001 is refused. That reads the page's "272K" as 1,000s.
+    # it. For OpenAI the shipped limit is 272,000 (see test_llm_prices): a prompt whose input
+    # bound is 272,000 is allowed, one whose bound is 272,001 is refused. The bound is a byte-based
+    # over-estimate (UTF-8 bytes of the JSON payload plus a 1,024 margin), so real refusals start
+    # near ~68K English tokens. That reads the page's "272K" as 1,000s.
     prompt: list[BaseMessage] = [*QUESTION]
     bound = input_bound(prompt, {})
 
     def limited(max_prompt_tokens: int) -> BudgetGuard:
-        limited = guard()
-        limited.price = prices.Price(
+        g = guard()
+        g.price = prices.Price(
             PRICE.rates,
             checked="2026-11-06",
             source="https://example.com/pricing",
             max_prompt_tokens=max_prompt_tokens,
         )
-        return limited
+        return g
 
     await limited(bound).on_chat_model_start({}, [prompt], run_id=uuid.uuid4())
     assert [call.status for call in await calls(db_session)] == ["reserved"]

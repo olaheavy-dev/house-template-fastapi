@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime
 from typing import Any
 
 import pytest
@@ -43,8 +43,24 @@ def test_cached_tokens_are_part_of_input_and_charged_at_cache_rates() -> None:
     assert prices.cost(SONNET, u) == 1_110
 
 
-def test_openai_cache_writes_are_charged_as_short_lived() -> None:
-    assert prices.cost(SONNET, usage(100, 0, cache_creation=100)) == 250
+def test_an_undivided_cache_write_is_charged_at_the_longer_lifetime_rate() -> None:
+    # langchain-openai 1.7.2 reports one `cache_creation` count with no lifetime split, and
+    # OpenAI's pricing page (read 2026-11-06) has a 30m write and a 12h write price. With no way to
+    # tell which was used, the dearer one is charged, so cost can only be over-recorded.
+    # Sonnet's long write is $4/M: 100 tokens x 4 = 400 micro-USD (not 250 at the short $2.50).
+    assert prices.cost(SONNET, usage(100, 0, cache_creation=100)) == 400
+    # gpt-6.1-sol, short context: input $2.00, 12h write $5.00. 1,000 input tokens of which 400
+    # are cache writes: 600 plain x 2 + 400 x 5 = 1,200 + 2,000 = 3,200 micro-USD.
+    sol = PRICES["openai:gpt-6.1-sol"]
+    assert prices.cost(sol, usage(1_000, 0, cache_creation=400)) == 3_200
+
+
+def test_a_split_cache_write_keeps_its_own_lifetime_rates() -> None:
+    # Anthropic's integration (langchain-anthropic 1.7.6, _create_usage_metadata) sets
+    # `cache_creation` to 0 whenever the 5m/1h split is present, so nothing is counted twice:
+    # 100 x 2.50 (5m) + 50 x 4 (1h) = 250 + 200 = 450.
+    u = usage(150, 0, cache_creation=0, ephemeral_5m_input_tokens=100, ephemeral_1h_input_tokens=50)
+    assert prices.cost(SONNET, u) == 450
 
 
 def test_unknown_details_are_charged_as_plain_input() -> None:
@@ -118,7 +134,7 @@ def test_the_long_prompt_tier_prices_output_too() -> None:
 def test_every_price_records_date_and_source() -> None:
     for table in (PRICES, EMBEDDING_PRICES):
         for model, price in table.items():
-            assert date.fromisoformat(price.checked) <= date.today(), model
+            assert date.fromisoformat(price.checked) <= datetime.now(UTC).date(), model
             assert price.source.startswith("https://"), model
 
 
@@ -138,8 +154,6 @@ def test_a_price_without_a_date_or_source_is_refused() -> None:
     for spelling in ("20261106", "2026-W45-5", "2026-11-6", " 2026-11-06"):
         with pytest.raises(ValueError, match="checked"):
             Price(rates, checked=spelling, source=SOURCE)
-    with pytest.raises(ValueError, match="in the future"):
-        Price(rates, checked=(date.today() + timedelta(days=1)).isoformat(), source=SOURCE)
     with pytest.raises(ValueError, match="source"):
         Price(rates, checked=CHECKED, source="")
     with pytest.raises(ValueError, match="source"):
