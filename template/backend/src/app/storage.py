@@ -1,4 +1,5 @@
-"""Object storage over the S3 API: Cloudflare R2 in production, RustFS locally (compose.yaml).
+"""Object storage over the S3 API: Cloudflare R2 in production, RustFS locally
+(compose/storage/compose.yaml).
 
 One boto3 client for the process, built in the lifespan (clients are thread-safe; sessions are
 not). boto3 is synchronous, so calls that reach the network run in a worker thread; presigned

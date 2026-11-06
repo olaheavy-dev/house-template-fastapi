@@ -19,9 +19,12 @@ How a part is switched
 
 from __future__ import annotations
 
+import fnmatch
+import json
 import re
 import shutil
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -67,7 +70,7 @@ def test_render_matrix(render, storage):
     # The suffix is always stripped and no template syntax is left behind.
     assert [p for p in files(project) if p.endswith(".jinja")] == []
     # The dependency is declared in one plain pyproject.toml either way.
-    pyproject = yaml_toml(project / "backend/pyproject.toml")
+    pyproject = read_toml(project / "backend/pyproject.toml")
     assert pyproject["project"]["optional-dependencies"]["storage"][0].startswith("boto3")
     assert not any(d.startswith("boto3") for d in pyproject["project"]["dependencies"])
     mk = (project / "mk/fastapi.mk").read_text()
@@ -76,9 +79,7 @@ def test_render_matrix(render, storage):
     assert answers["storage"] is storage
 
 
-def yaml_toml(path: Path) -> dict:
-    import tomllib
-
+def read_toml(path: Path) -> dict:
     return tomllib.loads(path.read_text())
 
 
@@ -93,7 +94,7 @@ def test_jinja_twins_render_to_their_plain_file(render):
     project = render(storage=True)
     pairs = sorted(
         p.relative_to(TEMPLATE).as_posix()
-        for p in (TEMPLATE / "backend").rglob("*.jinja")
+        for p in TEMPLATE.rglob("*.jinja")
         if p.with_suffix("").exists()
     )
     assert pairs == sorted(t + ".jinja" for t in TWINS)
@@ -123,8 +124,6 @@ def test_env_example_matches_settings(render, storage):
 
 @ON_OFF
 def test_every_template_owned_entry_exists(render, storage):
-    import fnmatch
-
     project = render(storage=storage)
     owned = (project / ".github/template-owned/fastapi.txt").read_text().splitlines()
     patterns = [ln for ln in owned if ln and not ln.startswith("#")]
@@ -196,8 +195,6 @@ def compose_config(project: Path) -> dict:
         ["docker", "compose", "-f", str(project / "backend/compose.yaml"), "config", "--format",
          "json"], capture_output=True, text=True, cwd=project / "backend")
     assert result.returncode == 0, result.stderr
-    import json
-
     return json.loads(result.stdout)
 
 
@@ -245,3 +242,12 @@ def test_env_example_template_is_tracked_by_git_and_not_excluded():
     assert ignored.returncode == 1, "template/backend/.env.example.jinja is git-ignored"
     config = yaml.safe_load((root / "copier.yml").read_text())
     assert ".env.*" in config["_exclude"] and "!.env.example" in config["_exclude"]
+
+
+@ON_OFF
+def test_make_targets_are_separated_by_one_blank_line(render, storage):
+    # `{%- if %}` once ate the blank line before storage-up; the default output must read as before.
+    mk = (render(storage=storage) / "mk/fastapi.mk").read_text()
+    assert "\n\n\n" not in mk
+    assert "\n\nllm-report:" in mk
+    assert ("\n\nstorage-up:" in mk) is storage

@@ -1,5 +1,5 @@
 # Owned by house-template-fastapi. Included by the root compose.yaml (house-template-base), so
-# `make db-up`{% if storage %} and `make storage-up`{% endif %} start the local services for `make dev`; `make up` runs the
+# `make db-up`{% if storage %} and `make storage-up` start{% else %} starts{% endif %} the local services for `make dev`; `make up` runs the
 # whole backend from its image (migrate once, then the API), as production would.
 # Local credentials only; production gets its URLs and keys from its environment.
 # The pinned service images live in plain files under compose/ (Dependabot cannot read a template).

@@ -15,7 +15,7 @@ from typing import Literal
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# The local development values (backend/compose.yaml); production must set its own.
+# The local development values (backend/compose/db/compose.yaml); production must set its own.
 LOCAL_DATABASE_URL = "postgresql+psycopg://app:app@localhost:5432/app"
 LOCAL_STORAGE_SECRET = "app-storage-secret"  # noqa: S105 - the local RustFS's, refused in production
 
@@ -37,7 +37,8 @@ class Settings(BaseSettings):
     # Interactive API docs at /docs. Unset means on everywhere except production.
     docs_enabled: bool | None = None
 
-    # SQLAlchemy URL with the psycopg 3 driver. The default matches backend/compose.yaml's local db.
+    # SQLAlchemy URL with the psycopg 3 driver. The default matches the local db in
+    # backend/compose/db/compose.yaml.
     database_url: SecretStr = SecretStr(LOCAL_DATABASE_URL)
     # Connections per process: keep pool_size + max_overflow times the worker count under
     # Postgres's max_connections.
@@ -56,7 +57,7 @@ class Settings(BaseSettings):
     allowed_hosts: list[str] = ["*"]
 
     # S3-compatible object storage (app/storage.py). Unset STORAGE_BUCKET means no storage.
-    # Locally: RustFS from backend/compose.yaml. Production on R2: the account's
+    # Locally: RustFS from backend/compose/storage/compose.yaml. Production on R2: the account's
     # https://<account id>.r2.cloudflarestorage.com endpoint, region "auto" and an R2 API token.
     storage_bucket: str | None = None
     storage_endpoint_url: str | None = "http://localhost:9000"

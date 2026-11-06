@@ -35,7 +35,7 @@ BASELINE_REF = "d67ca3807ae74a78cc9728bf20da829be035117c"
 # executables today).
 INTENDED: dict[str, str] = {
     ".copier-answers.fastapi.yml": "records container_images (#49) and storage (#29)",
-    ".claude/rules/fastapi.md": "rule text moved after backend/.env (#41); extras rule (#29)",
+    ".claude/rules/fastapi.md": "rule text moved after backend/.env (#41); extras rule, 413 sentence moved out of the Files bullet into its own (#29)",
     "mk/fastapi.mk": "record-llm help says provider keys (#41); EXTRAS, compose path (#29)",
     "backend/src/app/llm/prices.py": "comment matches the UTC+1 date rule (#41)",
     "backend/tests/conftest.py": "recording checks the key of both pinned models (#41)",
@@ -47,8 +47,9 @@ INTENDED: dict[str, str] = {
     "backend/compose/storage/compose.yaml": "the storage service moved out of compose.yaml (#29)",
     "backend/pyproject.toml": "boto3 moved to the storage extra (#29)",
     "backend/uv.lock": "locks the storage extra (#29)",
+    "backend/src/app/storage.py": "docstring names compose/storage/compose.yaml (#29)",
     "backend/src/app/limits.py": "docstring no longer names storage (#29)",
-    "backend/src/app/settings.py": "comment lines re-wrapped for the storage switch (#29)",
+    "backend/src/app/settings.py": "comment lines re-wrapped for the storage switch, compose paths in comments (#29)",
     "backend/tests/__init__.py": "BACKEND moved here so storage.py can be excluded (#29)",
     "backend/tests/db.py": "BACKEND from tests, db image from compose/db (#29)",
     "backend/tests/storage.py": "BACKEND from tests, image from compose/storage (#29)",

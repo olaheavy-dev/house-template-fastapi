@@ -44,12 +44,11 @@ test: ## Run the backend tests (LLM_EVAL is for make eval only, so it is unset h
 db-up: ## Start the local PostgreSQL with pgvector (backend/compose/db/compose.yaml) and wait until it's healthy
 	docker compose up -d --wait db
 
-{%- if storage %}
-storage-up: ## Start the local S3-compatible storage (RustFS, backend/compose/storage/compose.yaml) and create the bucket
+{% if storage %}storage-up: ## Start the local S3-compatible storage (RustFS, backend/compose/storage/compose.yaml) and create the bucket
 	docker compose up -d --wait storage
 	$(BACKEND) python -m app.storage
-{% endif %}
-llm-report: ## Model spend from llm_call: make llm-report [days=7] [by=day,model] (by: day, model, prompt, feature)
+
+{% endif %}llm-report: ## Model spend from llm_call: make llm-report [days=7] [by=day,model] (by: day, model, prompt, feature)
 	$(BACKEND) python -m app.llm.report --days $(or $(days),7) --by $(or $(by),day$(comma)model)
 
 image: ## Build the API image from backend/Dockerfile

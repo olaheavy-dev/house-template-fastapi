@@ -289,3 +289,44 @@ def test_turning_a_part_off_on_update_deletes_its_files_and_keeps_user_files(tmp
     assert answers(dst)["storage"] is True
     assert all((dst / p).is_file() for p in STORAGE_PATHS)
     assert (dst / "backend/user_added.txt").read_text() == "mine\n"
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+def test_turning_storage_off_deletes_the_storage_files_even_if_the_user_edited_them(
+    tmp_path, tagged_repo
+):
+    # The README and the rules file warn: commit first, edits to the template's storage files are
+    # deleted with them (recover them from git). Proven here (Copier 9.19.1, #29).
+    dst = committed_project(tagged_repo, tmp_path / "project", "v100.0.0")
+    storage = dst / "backend/src/app/storage.py"
+    storage.write_text(storage.read_text() + "\n# my own change\n")
+    (dst / "backend/src/app/product.py").write_text("# the product\n")
+    git(dst, "add", "-A")
+    git(dst, "commit", "-q", "-m", "feat: edit storage")
+
+    update(dst, "v100.0.1", storage=False)
+
+    assert not storage.exists()
+    assert (dst / "backend/src/app/product.py").read_text() == "# the product\n"
+    assert "my own change" in git(dst, "show", "HEAD:backend/src/app/storage.py")  # recoverable
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+def test_a_project_that_already_has_storage_off_does_not_get_it_back_on_update(
+    tmp_path, tagged_repo
+):
+    dst = tmp_path / "project"
+    write_base(dst)
+    copy_layer(tagged_repo, dst, "v100.0.0", storage=False)
+    git(dst, "init", "-q", "-b", "main")
+    (dst / "backend/user_added.txt").write_text("mine\n")
+    git(dst, "add", "-A")
+    git(dst, "commit", "-q", "-m", "chore: start")
+    assert not any((dst / p).exists() for p in STORAGE_PATHS)
+
+    update(dst, "v100.0.1")
+
+    assert answers(dst)["storage"] is False
+    assert not any((dst / p).exists() for p in STORAGE_PATHS)
+    assert (dst / "backend/user_added.txt").read_text() == "mine\n"
+    assert "A rule added by the second version." in (dst / ".claude/rules/fastapi.md").read_text()
