@@ -17,7 +17,7 @@ make db-up && make migrate && make dev
 make storage-up                    # for file storage, with STORAGE_BUCKET set in backend/.env
 ```
 
-The layer reads the project name and stacks from `.copier-answers.base.yml` and refuses to apply without them. Update it later with `copier update -a .copier-answers.fastapi.yml`. The project owns `backend/uv.lock`, so after an update that changes dependencies, run `make lock` and commit the lockfile before `make install`.
+The layer reads the project name and stacks from `.copier-answers.base.yml` and refuses to apply without them. Update it later with `copier update -a .copier-answers.fastapi.yml`. Updating currently fails for projects made from v0.6.1 or earlier; see #49. The project owns `backend/uv.lock`, so after an update that changes dependencies, run `make lock` and commit the lockfile before `make install`.
 
 ## What it adds
 
@@ -53,6 +53,8 @@ LLM_EVAL=1 LLM_DAILY_BUDGET_USD=1 uv run --env-file .env pytest tests/evals -m e
 `uv run pytest` renders the layer and checks it. CI also generates a real project from house-template-base plus this layer and runs its `make check`. After changing `template/backend/pyproject.toml`, run `uv lock --directory template/backend`.
 
 `main` is protected by [`.github/rulesets/main.json`](.github/rulesets/main.json): squash merges through pull requests, with the tests, workflow lint (actionlint and zizmor), the PR title check and CodeQL required, and CodeQL and zizmor findings blocking a merge. A test checks that every required check is a job the workflows run.
+
+`tests/test_golden_render.py` keeps the default output from changing by accident: it renders `BASELINE_REF` (a commit of this repository) and the working tree with the default answers and compares every file. A feature PR that changes the default output on purpose adds the path to `INTENDED` with a reason and an issue number, and the test fails if a listed path no longer differs. A path-level entry hides a second, accidental change to the same file until the next baseline move. After each release, a `chore:` PR moves `BASELINE_REF` to the new tag and empties `INTENDED`. It needs the full git history (`git fetch --unshallow` in a shallow clone).
 
 ## Releases
 
