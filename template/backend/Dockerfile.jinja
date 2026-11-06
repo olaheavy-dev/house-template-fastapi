@@ -25,11 +25,11 @@ WORKDIR /app
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync --locked --no-install-project --no-editable
+    uv sync --locked --no-install-project --no-editable{% if storage %} --extra storage{% endif %}
 COPY . /app
 # --no-editable: the app is installed into the virtualenv, so the source isn't needed at runtime.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-editable
+    uv sync --locked --no-editable{% if storage %} --extra storage{% endif %}
 
 FROM {{ python_images[python_version] }}
 RUN groupadd --system --gid 10001 app \

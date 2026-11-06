@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import SessionDep, create_engine, ping
 from app.main import create_app
 from app.settings import Settings
-from tests import db
+from tests import BACKEND, db
 
 pytestmark = pytest.mark.anyio
 
@@ -114,7 +114,7 @@ def test_a_template_update_never_collides_with_project_migrations(
     # The template's migrations and the project's grow on separate branches, so a template
     # update that ships a migration leaves one head per branch, and `upgrade heads` applies both.
     scripts = tmp_path / "migrations"
-    shutil.copytree(db.BACKEND / "migrations", scripts)
+    shutil.copytree(BACKEND / "migrations", scripts)
     config = db.alembic_config("postgresql+psycopg://app:app@localhost/unused")
     config.set_main_option("script_location", str(scripts))
     config.set_section_option("post_write_hooks", "hooks", "")  # no formatting needed here

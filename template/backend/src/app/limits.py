@@ -2,9 +2,8 @@
 
 Neither uvicorn nor FastAPI limits body size, so one large POST could be read whole into memory.
 This middleware answers 413 when the declared Content-Length is over MAX_REQUEST_BYTES, and stops
-reading (also 413) once a body without one streams past it. Files don't come through the API:
-browsers upload them straight to storage with presigned URLs (app/storage.py), so the cap can be
-small.
+reading (also 413) once a body without one streams past it. Large files should not come through
+the API, so the cap can be small.
 """
 
 from __future__ import annotations

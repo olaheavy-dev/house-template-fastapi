@@ -37,7 +37,14 @@ async def test_ready_names_the_failing_check_and_returns_503(
         raise ConnectionError("database unreachable")
 
     add_readiness_check(app, "database", down)
-    add_readiness_check(app, "storage", fine)
+    add_readiness_check(app, "cache", fine)
     response = await client.get("/health/ready")
     assert response.status_code == 503
     assert response.json() == {"status": "unavailable", "failing": ["database"]}
+
+
+async def test_readiness_checks_only_what_the_settings_turn_on(
+    app: FastAPI, client: httpx.AsyncClient
+) -> None:
+    # Without optional parts (no storage bucket, for one) only the database is checked.
+    assert set(app.state.readiness_checks) == {"database"}

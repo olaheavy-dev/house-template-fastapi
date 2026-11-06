@@ -6,12 +6,14 @@ import httpx
 import pytest
 from asgi_lifespan import LifespanManager
 from fastapi import FastAPI
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from app.main import create_app
 from app.problems import Problem
 from app.settings import Settings
 from app.storage import InvalidStorageKey, ObjectNotFound, Storage, StorageDep, check_key
+
+PRODUCTION_DB = "postgresql+psycopg://app:secret@db.internal:5432/app"
 
 pytestmark = pytest.mark.anyio
 
@@ -146,3 +148,18 @@ async def test_without_a_bucket_there_is_no_storage_and_no_readiness_check(
     assert response.status_code == 503
     assert response.json()["detail"] == "File storage isn't configured."
     assert "storage" not in app.state.readiness_checks
+
+
+def test_production_refuses_the_local_storage_secret() -> None:
+    with pytest.raises(ValidationError, match="STORAGE_SECRET_ACCESS_KEY is the local default"):
+        Settings(
+            _env_file=None, app_env="production", database_url=PRODUCTION_DB, storage_bucket="b"
+        )
+    ok = Settings(
+        _env_file=None,
+        app_env="production",
+        database_url=PRODUCTION_DB,
+        storage_bucket="b",
+        storage_secret_access_key=SecretStr("a-real-secret"),
+    )
+    assert ok.app_env == "production"

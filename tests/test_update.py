@@ -31,7 +31,8 @@ _CACHES = shutil.ignore_patterns(".git", ".venv", "__pycache__", ".mypy_cache", 
 def SKIP(directory: str, names: list[str]) -> set[str]:  # noqa: N802
     """Skip caches and a developer's .env files, but keep .env.example (as copier.yml's _exclude)."""
     return set(_CACHES(directory, names)) | {
-        n for n in names if (n == ".env" or n.startswith(".env.")) and n != ".env.example"}
+        n for n in names if (n == ".env" or n.startswith(".env."))
+        and n not in {".env.example", ".env.example.jinja"}}
 
 
 def write_base(dst: Path, **overrides: object) -> None:
@@ -48,7 +49,7 @@ def tagged_repo(tmp_path: Path) -> Path:
     git(repo, "add", "-A")
     git(repo, "commit", "-q", "-m", "chore: v100.0.0")
     git(repo, "tag", "v100.0.0")
-    rules = repo / "template/.claude/rules/fastapi.md"
+    rules = repo / "template/.claude/rules/fastapi.md.jinja"
     rules.write_text(rules.read_text() + "\nA rule added by the second version.\n")
     publish = next((repo / "template/.github/workflows").glob("*publish-api.yml*.jinja"))
     publish.write_text(publish.read_text() + "# A line added by the second version.\n")
@@ -62,9 +63,9 @@ def copy_layer(src: Path | str, dst: Path, ref: str, **data: object) -> None:
     copier.run_copy(str(src), dst, data=data, defaults=True, unsafe=True, quiet=True, vcs_ref=ref)
 
 
-def update(dst: Path, ref: str, unsafe: bool = True) -> None:
-    copier.run_update(dst, answers_file=ANSWERS_FILE, defaults=True, unsafe=unsafe, overwrite=True,
-                      quiet=True, vcs_ref=ref)
+def update(dst: Path, ref: str, unsafe: bool = True, **data: object) -> None:
+    copier.run_update(dst, answers_file=ANSWERS_FILE, data=data, defaults=True, unsafe=unsafe,
+                      overwrite=True, quiet=True, vcs_ref=ref)
 
 
 def committed_project(repo: Path, dst: Path, ref: str, **base: object) -> Path:
@@ -243,3 +244,89 @@ def test_recopy_moves_a_v0_6_1_project_to_head(tmp_path, tagged_repo):
     assert (dst / "backend/src/app/product.py").read_text() == "# the product\n"
     assert not list(dst.rglob("*.rej"))
     assert [p for p, data in files_of(dst).items() if b"<<<<<<<" in data] == []
+
+
+STORAGE_PATHS = ["backend/src/app/storage.py", "backend/tests/storage.py",
+                 "backend/tests/test_storage.py", "backend/compose/storage/compose.yaml"]
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+def test_turning_a_part_off_on_update_deletes_its_files_and_keeps_user_files(tmp_path, tagged_repo):
+    # `copier update --trust --defaults -d storage=false` (#29). Copier 9.19.1 deletes the files
+    # an answer stops generating, as #32 found; the user's own files stay, and so does the
+    # lockfile, which is the project's (the user runs `make lock`).
+    dst = committed_project(tagged_repo, tmp_path / "project", "v100.0.0")
+    assert all((dst / p).is_file() for p in STORAGE_PATHS)
+    (dst / "backend/src/app/product.py").write_text("# the product\n")
+    git(dst, "add", "-A")
+    git(dst, "commit", "-q", "-m", "feat: product")
+    lock = (dst / "backend/uv.lock").read_bytes()
+
+    update(dst, "v100.0.1", storage=False)
+
+    assert answers(dst)["storage"] is False
+    assert [p for p in STORAGE_PATHS if (dst / p).exists()] == []
+    assert (dst / "backend/user_added.txt").read_text() == "mine\n"
+    assert (dst / "backend/src/app/product.py").read_text() == "# the product\n"
+    assert (dst / "backend/uv.lock").read_bytes() == lock
+    assert not list(dst.rglob("*.rej")) and not list(dst.rglob("*.orig"))
+    after = files_of(dst)
+    assert [p for p, data in after.items() if b"<<<<<<<" in data] == []
+    fresh = tmp_path / "fresh"
+    write_base(fresh)
+    copy_layer(tagged_repo, fresh, "v100.0.1", storage=False)
+    expected = files_of(fresh)
+    for own in ("backend/user_added.txt", "backend/src/app/product.py", "backend/uv.lock"):
+        after.pop(own)
+    expected.pop("backend/uv.lock")
+    # The whole tree equals a fresh storage=false render, apart from the user's files.
+    assert after == expected
+
+    # And back on: the files return.
+    git(dst, "add", "-A")
+    git(dst, "commit", "-q", "-m", "chore: storage off")
+    update(dst, "v100.0.1", storage=True)
+    assert answers(dst)["storage"] is True
+    assert all((dst / p).is_file() for p in STORAGE_PATHS)
+    assert (dst / "backend/user_added.txt").read_text() == "mine\n"
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+def test_turning_storage_off_deletes_the_storage_files_even_if_the_user_edited_them(
+    tmp_path, tagged_repo
+):
+    # The README and the rules file warn: commit first, edits to the template's storage files are
+    # deleted with them (recover them from git). Proven here (Copier 9.19.1, #29).
+    dst = committed_project(tagged_repo, tmp_path / "project", "v100.0.0")
+    storage = dst / "backend/src/app/storage.py"
+    storage.write_text(storage.read_text() + "\n# my own change\n")
+    (dst / "backend/src/app/product.py").write_text("# the product\n")
+    git(dst, "add", "-A")
+    git(dst, "commit", "-q", "-m", "feat: edit storage")
+
+    update(dst, "v100.0.1", storage=False)
+
+    assert not storage.exists()
+    assert (dst / "backend/src/app/product.py").read_text() == "# the product\n"
+    assert "my own change" in git(dst, "show", "HEAD:backend/src/app/storage.py")  # recoverable
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+def test_a_project_that_already_has_storage_off_does_not_get_it_back_on_update(
+    tmp_path, tagged_repo
+):
+    dst = tmp_path / "project"
+    write_base(dst)
+    copy_layer(tagged_repo, dst, "v100.0.0", storage=False)
+    git(dst, "init", "-q", "-b", "main")
+    (dst / "backend/user_added.txt").write_text("mine\n")
+    git(dst, "add", "-A")
+    git(dst, "commit", "-q", "-m", "chore: start")
+    assert not any((dst / p).exists() for p in STORAGE_PATHS)
+
+    update(dst, "v100.0.1")
+
+    assert answers(dst)["storage"] is False
+    assert not any((dst / p).exists() for p in STORAGE_PATHS)
+    assert (dst / "backend/user_added.txt").read_text() == "mine\n"
+    assert "A rule added by the second version." in (dst / ".claude/rules/fastapi.md").read_text()

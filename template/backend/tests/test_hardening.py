@@ -9,7 +9,7 @@ import httpx
 import pytest
 from asgi_lifespan import LifespanManager
 from fastapi import FastAPI, Response
-from pydantic import SecretStr, ValidationError
+from pydantic import ValidationError
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
@@ -33,20 +33,10 @@ def test_the_tests_never_read_a_developers_env_file(
     assert settings.openai_api_key is None
 
 
-def test_production_refuses_the_local_database_and_storage_defaults() -> None:
+def test_production_refuses_the_local_database_default() -> None:
     with pytest.raises(ValidationError, match="DATABASE_URL is the local default"):
         Settings(_env_file=None, app_env="production")
-    with pytest.raises(ValidationError, match="STORAGE_SECRET_ACCESS_KEY is the local default"):
-        Settings(
-            _env_file=None, app_env="production", database_url=PRODUCTION_DB, storage_bucket="b"
-        )
-    ok = Settings(
-        _env_file=None,
-        app_env="production",
-        database_url=PRODUCTION_DB,
-        storage_bucket="b",
-        storage_secret_access_key=SecretStr("a-real-secret"),
-    )
+    ok = Settings(_env_file=None, app_env="production", database_url=PRODUCTION_DB)
     assert ok.app_env == "production"
 
 

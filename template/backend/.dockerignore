@@ -15,4 +15,5 @@ htmlcov/
 dist/
 tests/
 compose.yaml
+compose/
 Dockerfile

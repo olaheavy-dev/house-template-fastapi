@@ -47,11 +47,15 @@ updates:
       backend-minor-and-patch:
         update-types: [minor, patch]
 
-  # The images the layer's compose file pins by digest (PostgreSQL with pgvector, RustFS). The
-  # Dockerfile is a template (its Python image follows the project's answer), so generated
-  # projects' own Dependabot updates that one.
+  # The images the layer's compose files pin by digest (PostgreSQL with pgvector, RustFS), one plain
+  # file per optional part under compose/ (backend/compose.yaml is a template). The Dockerfile is a
+  # template too (its Python image follows the project's answer), so generated projects' own
+  # Dependabot updates that one. `directories` supports globs (GitHub's Dependabot options
+  # reference, read 6 Nov 2026); that it finds compose.yaml in each subdirectory is unproven
+  # until Dependabot runs on this repository.
   - package-ecosystem: docker-compose
-    directory: /template/backend
+    directories:
+      - /template/backend/compose/*
     schedule:
       interval: weekly
     cooldown:

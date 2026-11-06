@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fnmatch
 import re
 import shutil
 import subprocess
@@ -12,6 +11,7 @@ import pytest
 import yaml
 
 from conftest import BASE_ANSWERS, TEMPLATE
+from test_options import TWINS
 
 CACHES = (".venv", ".mypy_cache", ".ruff_cache", ".pytest_cache", ".import_linter_cache",
           "__pycache__")
@@ -46,9 +46,13 @@ def test_layer_refuses_base_answers_without_the_fastapi_stack(render, project):
 def test_backend_files_need_no_per_project_values():
     # pyproject.toml and uv.lock stay plain files so Dependabot can update the template directly.
     backend = TEMPLATE / "backend"
-    # The one exception: the Dockerfile's Python image follows the python_version answer. Each
-    # generated project's Dependabot (base watches every Dockerfile) keeps its digests current.
-    assert [p.relative_to(backend) for p in backend.rglob("*.jinja")] == [Path("Dockerfile.jinja")]
+    # The exceptions: the Dockerfile's Python image follows the python_version answer (each
+    # generated project's Dependabot, which watches every Dockerfile, keeps its digests current),
+    # and the files that change with an answer (tests/test_options.py): compose.yaml and the
+    # twinned files. The pinned compose images are plain files under compose/ for Dependabot.
+    expected = {Path("Dockerfile.jinja"), Path("compose.yaml.jinja")} | {
+        Path(t.removeprefix("backend/") + ".jinja") for t in TWINS}
+    assert {p.relative_to(backend) for p in backend.rglob("*.jinja")} == expected
     assert 'name = "backend"' in (backend / "pyproject.toml").read_text()
 
 
@@ -79,27 +83,10 @@ def test_mk_file_adds_its_targets_to_the_base_aggregates(render):
             assert "$(BACKEND)" in line or "--locked" in line, line
 
 
-def test_every_template_owned_entry_exists(render):
-    project = render()
-    lines = (project / ".github/template-owned/fastapi.txt").read_text().splitlines()
-    patterns = [ln for ln in lines if ln and not ln.startswith("#")]
-    files = [str(p.relative_to(project)) for p in project.rglob("*") if p.is_file()]
-    for pattern in patterns:
-        assert any(fnmatch.fnmatch(f, pattern) for f in files), pattern
-
-
 def test_rules_file_loads_only_for_backend_paths(render):
     text = (render() / ".claude/rules/fastapi.md").read_text()
     front = yaml.safe_load(text.split("---")[1])
     assert front == {"paths": ["backend/**"]}
-
-
-def test_env_example_lists_every_setting():
-    settings = (TEMPLATE / "backend/src/app/settings.py").read_text()
-    fields = re.findall(r"^    ([a-z_]+): ", settings, flags=re.MULTILINE)
-    example = (TEMPLATE / "backend/.env.example").read_text().upper()
-    for field in fields:
-        assert field.upper() in example, field
 
 
 def test_base_answers_fixture_matches_the_pinned_base_version():
@@ -115,7 +102,7 @@ def test_rendered_project_has_no_leftover_template_syntax(render):
 
 
 def test_local_database_is_pinned_and_keeps_its_data():
-    compose = yaml.safe_load((TEMPLATE / "backend/compose.yaml").read_text())
+    compose = yaml.safe_load((TEMPLATE / "backend/compose/db/compose.yaml").read_text())
     db = compose["services"]["db"]
     assert re.fullmatch(r"pgvector/pgvector:[\w.-]+-pg18[\w-]*@sha256:[0-9a-f]{64}", db["image"])
     # PostgreSQL 18 images keep data under /var/lib/postgresql/18/docker; mounting .../data loses it.
@@ -128,7 +115,7 @@ def test_local_database_is_pinned_and_keeps_its_data():
 
 
 def test_local_storage_is_pinned_private_and_healthchecked():
-    compose = yaml.safe_load((TEMPLATE / "backend/compose.yaml").read_text())
+    compose = yaml.safe_load((TEMPLATE / "backend/compose/storage/compose.yaml").read_text())
     storage = compose["services"]["storage"]
     assert re.fullmatch(r"rustfs/rustfs:\d+\.\d+\.\d+@sha256:[0-9a-f]{64}", storage["image"])
     assert all(port.startswith("127.0.0.1:") for port in storage["ports"])
@@ -208,7 +195,7 @@ MODEL_ID = re.compile(
 
 def test_docs_name_no_model_ids():
     # Model ids go stale; the docs say "<provider>:<model-id>" and send readers to prices.py.
-    docs = [TEMPLATE.parent / "README.md", TEMPLATE / ".claude/rules/fastapi.md",
+    docs = [TEMPLATE.parent / "README.md", TEMPLATE / ".claude/rules/fastapi.md.jinja",
             TEMPLATE / "backend/.env.example"]
     found = [(d.name, m.group(0)) for d in docs for m in MODEL_ID.finditer(d.read_text())]
     assert found == []

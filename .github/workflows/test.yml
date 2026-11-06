@@ -96,3 +96,48 @@ jobs:
           test "$(docker compose exec -T api id -u)" = 10001
           curl -fsS http://127.0.0.1:8000/health/ready
           docker compose down -v
+
+  generated-project-variants:
+    # The default-answers job above stays as it is. Each option's "off" answer gets its own
+    # project here (#29); the database-less variant joins it later.
+    name: Generated project variants (storage=false)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          enable-cache: false
+
+      - name: Render house-template-base, then this layer with storage off
+        env:
+          DEMO: ${{ runner.temp }}/demo-no-storage
+        run: |
+          uv run --frozen copier copy --trust --defaults --vcs-ref "$BASE_VERSION" \
+            -d project_name="Demo App" -d 'stacks=["fastapi"]' \
+            https://github.com/olaheavy-dev/house-template-base.git "$DEMO"
+          git -C "$DEMO" init -q -b main
+          git -C "$DEMO" add -A
+          git -C "$DEMO" -c user.email=ci@example.com -c user.name=ci commit -q -m "chore: start from house-template-base"
+          uv run --frozen copier copy --trust --defaults --vcs-ref HEAD -d storage=false . "$DEMO"
+          git -C "$DEMO" add -A
+          git -C "$DEMO" -c user.email=ci@example.com -c user.name=ci commit -q -m "chore: add the fastapi layer"
+
+      - name: Run the project's make check (the database tests still use Docker; no storage container)
+        working-directory: ${{ runner.temp }}/demo-no-storage
+        run: make install && make check
+
+      - name: Build the image and check it holds no storage client
+        working-directory: ${{ runner.temp }}/demo-no-storage
+        run: |
+          make image
+          docker compose run --rm --no-deps --entrypoint python api \
+            -c "import importlib.util, sys; sys.exit(importlib.util.find_spec('boto3') is not None)"
