@@ -20,12 +20,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from app.db import get_session
-from app.llm.gateway import key_setting
 from app.main import create_app
 from app.settings import Settings
 from app.storage import create_bucket
 from tests import db, storage
 from tests.models import CHAT_MODEL, EMBEDDING_MODEL
+from tests.recording import missing_recording_keys
 
 # Before langsmith first reads them (it caches them): tests never send traces or sync results to
 # LangSmith, whatever the developer's shell exports. Evals (`make eval`, LLM_EVAL=1) upload an
@@ -67,15 +67,17 @@ def live_runs_need_models_and_a_key(request: pytest.FixtureRequest) -> None:
     # Replaying needs no key. Recording with a placeholder key would save the provider's 401, and
     # evals with no model chosen would have nothing to call.
     if is_recording(request.config):
-        name = key_setting(CHAT_MODEL).upper()
-        if not os.environ.get(name):
-            pytest.exit(f"recording calls the real model: set {name}", returncode=2)
+        absent = missing_recording_keys(CHAT_MODEL, EMBEDDING_MODEL, os.environ)
+        if absent:
+            pytest.exit(
+                f"recording calls the real models: set {' and '.join(absent)}", returncode=2
+            )
     if not is_eval_run():
         return
     missing = [n for n in ("LLM_MODEL", "EMBEDDING_MODEL") if not os.environ.get(n, "").strip()]
     if missing:
         pytest.exit(
-            f"recording and evals call your model: set {' and '.join(missing)} in the shell or "
+            f"evals call your model: set {' and '.join(missing)} in the shell or "
             "backend/.env (their prices must be in app/llm/prices.py)",
             returncode=2,
         )

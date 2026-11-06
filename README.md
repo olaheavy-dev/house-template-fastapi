@@ -46,7 +46,7 @@ The layer now covers everything in its plan.
 To re-record the model cassette or run the evals here, put `OPENAI_API_KEY=...` (and optionally `LANGSMITH_API_KEY=...`) in `template/backend/.env`; the evals also need `LLM_MODEL` and `EMBEDDING_MODEL` there, while recording uses the models pinned in `tests/models.py`. The `.env` file is git-ignored and Copier never copies it. Then from `template/backend`:
 
 ```sh
-LLM_DAILY_BUDGET_USD=0.50 uv run --env-file .env pytest -m vcr --record-mode=rewrite   # make record-llm
+env -u LLM_EVAL LLM_DAILY_BUDGET_USD=0.50 uv run --env-file .env pytest -m vcr --record-mode=rewrite   # make record-llm
 LLM_EVAL=1 LLM_DAILY_BUDGET_USD=1 uv run --env-file .env pytest tests/evals -m eval   # make eval
 ```
 

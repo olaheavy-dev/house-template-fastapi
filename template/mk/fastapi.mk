@@ -60,7 +60,7 @@ migration: ## Write a migration from model changes: make migration name="add cou
 	@test -n "$(name)" || { echo 'usage: make migration name="what changed"'; exit 2; }
 	$(BACKEND) alembic revision --autogenerate --head app@head -m "$(name)"
 
-record-llm: ## Re-record the cassettes with the models pinned in tests/models.py, with their provider key set (shell or backend/.env): make record-llm [budget=0.50]
+record-llm: ## Re-record the cassettes with the models pinned in tests/models.py, with their provider keys set (shell or backend/.env): make record-llm [budget=0.50]
 	env -u LLM_EVAL LLM_DAILY_BUDGET_USD=$(or $(budget),0.50) $(LIVE) pytest -m vcr --record-mode=rewrite
 
 eval: ## Run the evals against the real model, with your LLM_MODEL, EMBEDDING_MODEL and its provider key set (shell or backend/.env): make eval [budget=1] (uploads to LangSmith when LANGSMITH_API_KEY is set)

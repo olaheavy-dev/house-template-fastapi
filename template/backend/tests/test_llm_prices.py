@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -77,9 +77,21 @@ def test_long_prompts_use_the_long_prompt_rates() -> None:
 
 
 def test_ceiling_is_never_below_the_cost_of_the_same_tokens() -> None:
+    # Each usage is compared with the ceiling for ITS OWN input and output tokens, so a cost that
+    # counted a cache write twice would show. By hand, for the cache_creation-only usage on
+    # claude-opus-5-5 ($4/M input, $8/M long write, one tier): correct cost = 1,000 x 8 = 8,000
+    # micro-USD, all tokens charged once at the write rate; double counted (also as plain input) =
+    # 1,000 x 4 + 1,000 x 8 = 12,000. ceiling(1,000 in, 0 out) = 1,000 x max(4, 8) = 8,000, so it
+    # holds the correct cost and would fail the double-counted one.
     for price in PRICES.values():
-        for u in (usage(1_000, 1_000), usage(1_000, 0, ephemeral_1h_input_tokens=1_000)):
-            assert prices.ceiling(price, 1_000, 1_000) >= prices.cost(price, u)
+        for u in (
+            usage(1_000, 1_000),
+            usage(1_000, 0, ephemeral_1h_input_tokens=1_000),
+            usage(1_000, 0, cache_creation=1_000),
+        ):
+            assert prices.ceiling(price, u["input_tokens"], u["output_tokens"]) >= prices.cost(
+                price, u
+            )
 
 
 @pytest.mark.parametrize("model", sorted(PRICES))
@@ -131,10 +143,29 @@ def test_the_long_prompt_tier_prices_output_too() -> None:
     assert prices.cost(HAIKU, usage(100_001, 3)) == 50_008
 
 
+def latest_plausible_checked(now: datetime) -> date:
+    """`checked` is the day the page was read, as the person wrote it: their local date. Someone
+    east of UTC (up to UTC+14) is already on the next day for part of the UTC day, so the UTC date
+    plus one is the latest a real entry can carry."""
+    return now.astimezone(UTC).date() + timedelta(days=1)
+
+
+def test_a_checked_date_may_be_the_next_utc_day_but_no_later() -> None:
+    assert latest_plausible_checked(datetime(2026, 11, 6, 23, 30, tzinfo=UTC)) == date(2026, 11, 7)
+    assert latest_plausible_checked(datetime(2026, 11, 6, 0, 0, tzinfo=UTC)) == date(2026, 11, 7)
+    # 09:00 on 7 Nov at UTC+14 is 19:00 on 6 Nov in UTC, so the limit is 7 Nov, not 8 Nov.
+    east = datetime(2026, 11, 7, 9, 0, tzinfo=timezone(timedelta(hours=14)))
+    assert latest_plausible_checked(east) == date(2026, 11, 7)
+
+
 def test_every_price_records_date_and_source() -> None:
+    latest = latest_plausible_checked(datetime.now(UTC))
     for table in (PRICES, EMBEDDING_PRICES):
         for model, price in table.items():
-            assert date.fromisoformat(price.checked) <= datetime.now(UTC).date(), model
+            assert date.fromisoformat(price.checked) <= latest, (
+                f"{model}: checked {price.checked} is after {latest} (today in UTC plus one day, "
+                "for people east of UTC); `checked` is the day you read the page"
+            )
             assert price.source.startswith("https://"), model
 
 
