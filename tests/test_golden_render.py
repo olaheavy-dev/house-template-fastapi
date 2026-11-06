@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import difflib
 import subprocess
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from pathlib import Path
 
 import copier
@@ -29,7 +29,10 @@ from conftest import BASE_ANSWERS, ROOT
 BASELINE_REF = "d67ca3807ae74a78cc9728bf20da829be035117c"
 
 # {rendered path: "reason (#NN)"}. Starts empty. The test fails for a path that differs without an
-# entry here, and for an entry whose path no longer differs.
+# entry here, and for an entry whose path no longer differs. A path-level entry hides a second,
+# accidental change to the same file until the next baseline move.
+# Not compared: file modes, symlinks and empty directories (the template has no tracked
+# executables today).
 INTENDED: dict[str, str] = {}
 
 # Lines Copier writes that name where and when the template was applied, not what it generated.
@@ -64,7 +67,8 @@ def read(path: Path) -> bytes:
 
 
 def files_of(root: Path) -> dict[str, bytes]:
-    return {p.relative_to(root).as_posix(): read(p) for p in sorted(root.rglob("*")) if p.is_file()}
+    return {p.relative_to(root).as_posix(): read(p) for p in sorted(root.rglob("*"))
+            if p.is_file() and ".git" not in p.relative_to(root).parts}
 
 
 def describe(path: str, old: bytes | None, new: bytes | None) -> str:
@@ -126,23 +130,46 @@ def test_a_missing_baseline_ref_fails_with_a_fetch_hint():
 
 def git(cwd: Path, *args: str) -> str:
     result = subprocess.run(
-        ["git", "-c", "user.email=t@example.com", "-c", "user.name=t", *args], cwd=cwd,
-        capture_output=True, text=True, check=True)
+        ["git", "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false",
+         "-c", "core.hooksPath=/dev/null", *args],
+        cwd=cwd, capture_output=True, text=True, check=True)
     return result.stdout
 
 
-def tracked(dst: Iterable[str] | Path) -> set[str]:
-    return set(git(Path(str(dst)), "ls-files").splitlines())
+def tracked(dst: Path) -> set[str]:
+    return set(git(dst, "ls-files").splitlines())
+
+
+def committed_baseline_project(path: Path) -> Path:
+    """A project rendered at BASELINE_REF, plus one file of the user's, committed in git."""
+    require_ref(BASELINE_REF)
+    dst = render_at(path, BASELINE_REF)
+    git(dst, "init", "-q", "-b", "main")
+    (dst / "backend" / "user_added.txt").write_text("mine\n")
+    git(dst, "add", "-A")
+    git(dst, "commit", "-q", "-m", "chore: start")
+    return dst
+
+
+def update_to_head(dst: Path) -> None:
+    copier.run_update(dst, answers_file=ANSWERS_FILE, defaults=True, unsafe=True, overwrite=True,
+                      quiet=True, vcs_ref="HEAD")
 
 
 def use_project_base_answers(monkeypatch: pytest.MonkeyPatch, project: Path) -> None:
     """Make Copier's temporary "old copy" of the template see the project's base answers.
 
-    FOUND WHILE WRITING THIS TEST: `copier update` renders the old template version into an empty
-    temporary directory (copier/_main.py, `_apply_update`), where `_external_data.base`
-    (.copier-answers.base.yml) does not exist, so the python_version validator fails with
-    "Apply house-template-base first". This patch hides that for the test only. Remove it, and the
-    xfail below, when the template handles it.
+    FOUND WHILE WRITING THIS TEST (#49): `copier update` renders the old template version into an
+    empty temporary directory (copier/_main.py in Copier 9.19.1, `_apply_update`), where
+    `_external_data.base` (.copier-answers.base.yml) does not exist. The old copy uses the OLD
+    version's own copier.yml, whose python_version validator then fails with "Apply
+    house-template-base first". That validator is in every release up to BASELINE_REF, so fixing
+    HEAD (#49) does not change this: the workaround and the test below it can only go once
+    BASELINE_REF is a release that contains the #49 fix.
+
+    This is a stopgap that patches a private Copier function. It proves "with the base answers
+    visible, a defaults update deletes nothing and leaves no conflicts". It does NOT prove that
+    users can update (#49).
     """
     real = copier._main.load_answersfile_data
 
@@ -153,36 +180,35 @@ def use_project_base_answers(monkeypatch: pytest.MonkeyPatch, project: Path) -> 
     monkeypatch.setattr(copier._main, "load_answersfile_data", load)
 
 
-@pytest.mark.parametrize("patched", [
-    True,
-    pytest.param(False, marks=pytest.mark.xfail(
-        raises=ValueError, strict=True, reason="copier update can't read the base answers (#29)")),
-])
-def test_updating_a_baseline_project_with_defaults_deletes_nothing(tmp_path, monkeypatch, patched):
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+def test_updating_from_the_baseline_cannot_read_the_base_answers_yet(tmp_path):
+    # Known bug (#49), see use_project_base_answers. Fails with "DID NOT RAISE" once BASELINE_REF
+    # is a release that contains the fix; then delete this test and the stopgap.
+    dst = committed_baseline_project(tmp_path / "project")
+    with pytest.raises(ValueError, match="Apply house-template-base first"):
+        update_to_head(dst)
+
+
+def test_updating_a_baseline_project_with_defaults_deletes_nothing(tmp_path, monkeypatch):
     # Proves: `copier update --defaults` from BASELINE_REF to the working tree (vcs_ref="HEAD")
-    # keeps every file the project had, keeps a file the user added, and leaves no conflict
-    # markers or .rej files. Copier deletes files that an answer change stops generating (#32);
-    # the defaults must not stop generating any.
+    # keeps every file the project had, keeps a file the user added, leaves no conflict markers or
+    # .rej files, and brings the project to what a fresh render at HEAD produces. Copier deletes
+    # files that an answer change stops generating (#32); the defaults must not stop generating any.
     # UNVERIFIED in the docs: whether a question added after the baseline takes its default under
     # `defaults=True` (https://copier.readthedocs.io/en/v9.19.1/updating/ does not say). Later PRs
     # of #29 add questions, and this test then starts proving it; it needs no change for that.
-    require_ref(BASELINE_REF)
-    dst = render_at(tmp_path / "project", BASELINE_REF)
-    git(dst, "init", "-q", "-b", "main")
-    (dst / "backend" / "user_added.txt").write_text("mine\n")
-    git(dst, "add", "-A")
-    git(dst, "commit", "-q", "-m", "chore: start")
+    dst = committed_baseline_project(tmp_path / "project")
     before = tracked(dst)
-    if patched:
-        use_project_base_answers(monkeypatch, dst)
+    use_project_base_answers(monkeypatch, dst)
 
-    copier.run_update(dst, answers_file=ANSWERS_FILE, defaults=True, unsafe=True, overwrite=True,
-                      quiet=True, vcs_ref="HEAD")
+    update_to_head(dst)
 
-    existing = {p.relative_to(dst).as_posix() for p in dst.rglob("*")
-                if p.is_file() and ".git" not in p.relative_to(dst).parts}
-    assert before - existing == set(), "update deleted files"
+    after = files_of(dst)
+    assert before - after.keys() == set(), "update deleted files"
     assert (dst / "backend" / "user_added.txt").read_text() == "mine\n"
     assert not list(dst.rglob("*.rej"))
-    conflicted = [p for p in existing if b"<<<<<<<" in (dst / p).read_bytes()]
-    assert conflicted == []
+    assert [p for p, data in after.items() if b"<<<<<<<" in data] == []
+    # The update really ran: the project now equals a fresh render at HEAD (plus the user's file).
+    fresh = files_of(render_at(tmp_path / "fresh", "HEAD"))
+    after.pop("backend/user_added.txt")
+    assert after == fresh
