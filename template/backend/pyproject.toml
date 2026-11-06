@@ -25,6 +25,12 @@ dependencies = [
     "langgraph>=1.2.17",
     "langgraph-checkpoint-postgres>=3.2.0",
     "psycopg-pool>=3.3.3",
+]
+
+[project.optional-dependencies]
+# Optional parts, installed by name (`uv sync --extra storage`). The Makefile and the image install
+# the ones the project answered for; all of them stay locked in uv.lock.
+storage = [
     "boto3>=1.43.118",
 ]
 

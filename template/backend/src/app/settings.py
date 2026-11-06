@@ -31,8 +31,8 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     # JSON logs in production; readable console logs everywhere else.
     log_json: bool = False
-    # Largest request body the API reads, in bytes; larger ones get a 413. Files go to storage
-    # through presigned URLs, not through the API.
+    # Largest request body the API reads, in bytes; larger ones get a 413.
+    # Files go to storage through presigned URLs, not through the API.
     max_request_bytes: int = Field(default=1_048_576, gt=0)
     # Interactive API docs at /docs. Unset means on everywhere except production.
     docs_enabled: bool | None = None

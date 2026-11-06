@@ -1,20 +1,24 @@
 # Owned by house-template-fastapi. Included by the base Makefile; adds the backend's install and
 # checks to `make install`, `make check` and `make check-fast`.
 
-BACKEND := uv --directory backend run --locked
+# The optional parts this project asked for (copier answers), as uv extras: the image and these
+# targets install only them. Add one by answering again (copier update) and running `make lock`.
+EXTRAS :={% if storage %} --extra storage{% endif %}
+
+BACKEND := uv --directory backend run --locked $(EXTRAS)
 comma := ,
 # Recording and evals call the real model, so they also read keys from backend/.env when it exists.
 # Variables already set (the budget caps below) win over the file. The tests ignore it.
-LIVE := uv --directory backend run --locked $(if $(wildcard backend/.env),--env-file .env)
+LIVE := uv --directory backend run --locked $(EXTRAS) $(if $(wildcard backend/.env),--env-file .env)
 
 INSTALLS += install-fastapi
 CHECKS += check-fastapi
 FAST_CHECKS += check-fast-fastapi
 
-.PHONY: install-fastapi check-fastapi check-fast-fastapi lock dev test db-up storage-up migrate migration record-llm eval image up llm-report
+.PHONY: install-fastapi check-fastapi check-fast-fastapi lock dev test db-up{% if storage %} storage-up{% endif %} migrate migration record-llm eval image up llm-report
 
 install-fastapi: ## Install the backend's Python and dependencies (from backend/uv.lock)
-	uv --directory backend sync --locked
+	uv --directory backend sync --locked $(EXTRAS)
 
 check-fastapi: ## Backend: lint, format, types, import contracts and tests (tests need Docker)
 	$(BACKEND) ruff check
@@ -37,13 +41,14 @@ dev: ## Run the API with reload on http://127.0.0.1:8000
 test: ## Run the backend tests (LLM_EVAL is for make eval only, so it is unset here)
 	env -u LLM_EVAL $(BACKEND) pytest
 
-db-up: ## Start the local PostgreSQL with pgvector (backend/compose.yaml) and wait until it's healthy
+db-up: ## Start the local PostgreSQL with pgvector (backend/compose/db/compose.yaml) and wait until it's healthy
 	docker compose up -d --wait db
 
-storage-up: ## Start the local S3-compatible storage (RustFS, backend/compose.yaml) and create the bucket
+{%- if storage %}
+storage-up: ## Start the local S3-compatible storage (RustFS, backend/compose/storage/compose.yaml) and create the bucket
 	docker compose up -d --wait storage
 	$(BACKEND) python -m app.storage
-
+{% endif %}
 llm-report: ## Model spend from llm_call: make llm-report [days=7] [by=day,model] (by: day, model, prompt, feature)
 	$(BACKEND) python -m app.llm.report --days $(or $(days),7) --by $(or $(by),day$(comma)model)
 

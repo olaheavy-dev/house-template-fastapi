@@ -133,7 +133,7 @@ def test_every_template_owned_entry_exists(render, storage):
         assert any(fnmatch.fnmatch(f, pattern) for f in existing), pattern
     # And the reverse for the parts that switch: a storage file is listed exactly when it exists.
     for path in STORAGE_FILES:
-        if path.endswith(".py"):
+        if path != "backend/tests/test_storage.py":  # the project's own tests are not listed
             assert (path in patterns) is storage, path
 
 
@@ -173,8 +173,20 @@ def test_the_image_installs_the_answered_extras(render, storage):
     mk = (project / "mk/fastapi.mk").read_text()
     runs = [ln for ln in mk.splitlines() if "uv --directory backend" in ln and " sync " in ln
             or ln.startswith(("BACKEND :=", "LIVE :="))]
-    assert len(runs) == 3, runs
-    assert all(("--extra storage" in ln) is storage for ln in runs), runs
+    # Every uv call that installs or runs the project goes through EXTRAS, set from the answers.
+    assert len(runs) == 3 and all("$(EXTRAS)" in ln for ln in runs), runs
+    extras = re.search(r"^EXTRAS :=(.*)$", mk, flags=re.MULTILINE)
+    assert extras and (extras.group(1).strip() == "--extra storage" if storage
+                       else extras.group(1).strip() == "")
+    if shutil.which("make"):
+        # Make itself expands the line (a missing space once glued `--locked--extra`).
+        dry = subprocess.run(["make", "-n", "-f", "mk/fastapi.mk", "install-fastapi", "dev"],
+                             cwd=project, capture_output=True, text=True)
+        assert dry.returncode == 0, dry.stderr
+        want = "--locked --extra storage" if storage else "--locked"
+        lines = [ln for ln in dry.stdout.splitlines() if ln.startswith("uv ")]
+        assert len(lines) == 2 and all(want in ln for ln in lines), lines
+        assert all(("--extra" in ln) is storage for ln in lines), lines
     # `make lock` locks every extra whatever the answers (the lockfile is not per answer).
     assert "uv --directory backend lock\n" in mk
 
@@ -221,3 +233,15 @@ def test_the_pins_dependabot_reads_live_in_plain_compose_files():
     for path in (TEMPLATE / "backend/compose").glob("*/compose.yaml"):
         for service in yaml.safe_load(path.read_text())["services"].values():
             assert re.search(r"@sha256:[0-9a-f]{64}$", service["image"]), path
+
+
+def test_env_example_template_is_tracked_by_git_and_not_excluded():
+    # `.env.*` is ignored by .gitignore and excluded in copier.yml so a developer's keys never
+    # travel. .env.example must survive both, in its template form too: git ignoring
+    # .env.example.jinja would leave it out of the commit and out of Copier's dirty-tree copy.
+    root = TEMPLATE.parent
+    ignored = subprocess.run(["git", "check-ignore", "-q", "template/backend/.env.example.jinja"],
+                             cwd=root)
+    assert ignored.returncode == 1, "template/backend/.env.example.jinja is git-ignored"
+    config = yaml.safe_load((root / "copier.yml").read_text())
+    assert ".env.*" in config["_exclude"] and "!.env.example" in config["_exclude"]

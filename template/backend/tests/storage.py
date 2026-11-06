@@ -1,11 +1,11 @@
-"""A real RustFS for the storage tests: the image backend/compose.yaml uses, one per test session.
-Each test gets its own bucket, so tests never see each other's objects."""
+"""A real RustFS for the storage tests: the image backend/compose/storage/compose.yaml uses, one
+per test session. Each test gets its own bucket, so tests never see each other's objects."""
 
 from __future__ import annotations
 
 from collections.abc import Iterator
 
-from tests.db import BACKEND
+from tests import BACKEND
 
 ACCESS_KEY = "test-storage"
 SECRET_KEY = "test-storage-secret"  # noqa: S105 - a throwaway test container's key
@@ -14,7 +14,7 @@ SECRET_KEY = "test-storage-secret"  # noqa: S105 - a throwaway test container's 
 def storage_image() -> str:
     import yaml
 
-    compose = yaml.safe_load((BACKEND / "compose.yaml").read_text())
+    compose = yaml.safe_load((BACKEND / "compose" / "storage" / "compose.yaml").read_text())
     image: str = compose["services"]["storage"]["image"]
     return image
 

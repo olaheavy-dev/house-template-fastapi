@@ -18,13 +18,15 @@ backend/src/app/llm/metrics.py
 backend/src/app/llm/report.py
 backend/src/app/llm/prompts.py
 backend/compose.yaml
-backend/Dockerfile
+backend/compose/db/compose.yaml
+{% if storage %}backend/compose/storage/compose.yaml
+{% endif %}backend/Dockerfile
 backend/.dockerignore
 backend/migrations/env.py
 backend/migrations/script.py.mako
 backend/migrations/versions/20261026_app_project_root.py
 backend/tests/db.py
-backend/tests/storage.py
+{% if storage %}backend/tests/storage.py
 backend/src/app/storage.py
-backend/tests/evals/conftest.py
+{% endif %}backend/tests/evals/conftest.py
 backend/tests/evals/test_gateway_evals.py
