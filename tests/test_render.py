@@ -24,13 +24,17 @@ def test_layer_renders_the_backend_and_its_answers(render):
                  ".claude/rules/fastapi.md", ".github/template-owned/fastapi.txt"):
         assert (project / path).is_file(), path
     assert (project / ".python-version").read_text() == "3.14\n"
+    assert (project / "backend" / ".python-version").read_text() == "3.14\n"
     answers = yaml.safe_load((project / ".copier-answers.fastapi.yml").read_text())
     assert answers["python_version"] == "3.14"
     assert answers["_src_path"]
 
 
 def test_python_version_answer_sets_the_toolchain(render):
-    assert (render(python_version="3.12") / ".python-version").read_text() == "3.12\n"
+    project = render(python_version="3.12")
+    assert (project / ".python-version").read_text() == "3.12\n"
+    # uv stops looking for this file at the project root (backend/), so it needs its own copy (#59).
+    assert (project / "backend" / ".python-version").read_text() == "3.12\n"
 
 
 def test_no_local_cache_or_venv_is_ever_copied(render):
@@ -50,7 +54,8 @@ def test_backend_files_need_no_per_project_values():
     # generated project's Dependabot, which watches every Dockerfile, keeps its digests current),
     # and the files that change with an answer (tests/test_options.py): compose.yaml and the
     # twinned files. The pinned compose images are plain files under compose/ for Dependabot.
-    expected = {Path("Dockerfile.jinja"), Path("compose.yaml.jinja")} | {
+    # .python-version holds the python_version answer (#59).
+    expected = {Path("Dockerfile.jinja"), Path("compose.yaml.jinja"), Path(".python-version.jinja")} | {
         Path(t.removeprefix("backend/") + ".jinja") for t in TWINS}
     assert {p.relative_to(backend) for p in backend.rglob("*.jinja")} == expected
     assert 'name = "backend"' in (backend / "pyproject.toml").read_text()
