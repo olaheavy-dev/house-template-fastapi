@@ -111,7 +111,12 @@ testpaths = ["tests"]
 addopts = ["-q", "--strict-markers", "--strict-config", "-m", "not eval"]
 markers = ["eval: calls the real model; run with make eval"]
 xfail_strict = true
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    # langsmith's pytest plugin (0.14.17, the latest) calls asyncio.iscoroutinefunction, which
+    # Python 3.14 deprecates, while pytest loads it. Remove this line once langsmith stops (#59).
+    "ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning",
+]
 
 [tool.importlinter]
 root_package = "app"
