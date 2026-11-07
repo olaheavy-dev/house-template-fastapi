@@ -300,6 +300,16 @@ def test_rendered_project_has_no_leftover_template_syntax(render, database, stor
 
 
 @ANSWERS
+def test_rendered_text_files_end_in_exactly_one_newline(render, database, storage):
+    # The base project's pre-commit end-of-file fixer fails `make check` on a file that ends in a
+    # blank line or has no final newline (a `{% endif %}` after the last line once did).
+    for rel, path in files(render(database=database, storage=storage)).items():
+        if path.suffix in {".py", ".toml", ".md", ".mk", ".yml", ".yaml", ".txt", ".example"}:
+            text = path.read_text()
+            assert not text or (text.endswith("\n") and not text.endswith("\n\n")), rel
+
+
+@ANSWERS
 def test_every_rendered_python_file_parses(render, database, storage):
     project = render(database=database, storage=storage)
     for rel, path in files(project).items():
