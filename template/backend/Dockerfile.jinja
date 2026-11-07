@@ -1,9 +1,11 @@
 # syntax=docker/dockerfile:1
 # Owned by house-template-fastapi. The API image, following uv's Docker guide
 # (https://docs.astral.sh/uv/guides/integration/docker/): dependencies and the app are installed
-# into a virtualenv from the lockfile in a build stage, and only that virtualenv, {% if database %}the migrations
-# and {% endif %}pyproject.toml (which holds the FastAPI{% if database %} and Alembic{% endif %} settings) reach the final image. It runs
-# as a non-root user. Base images are pinned by digest; Dependabot updates them.
+{% if database %}# into a virtualenv from the lockfile in a build stage, and only that virtualenv, the migrations
+# and pyproject.toml (which holds the FastAPI and Alembic settings) reach the final image. It runs
+# as a non-root user. Base images are pinned by digest; Dependabot updates them.{% else %}# into a virtualenv from the lockfile in a build stage, and only that virtualenv and
+# pyproject.toml (which holds the FastAPI settings) reach the final image. It runs as a non-root
+# user. Base images are pinned by digest; Dependabot updates them.{% endif %}
 {%- set python_images = {
     "3.14": "python:3.14-slim-trixie@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8",
     "3.13": "python:3.13-slim-trixie@sha256:d98cc29d3266e535dd9da1099688d9cb3ca4753813571e071763d17725460962",
@@ -41,9 +43,12 @@ COPY pyproject.toml /app/pyproject.toml
 {% if database %}COPY migrations /app/migrations
 {% endif %}# UVICORN_* set uvicorn's options. On SIGTERM it stops accepting connections and gives requests
 # in flight this long to finish: keep it under the platform's grace period (30 s on Kubernetes){% if database %}
-# and above LLM_TIMEOUT_SECONDS for answers worth finishing{% endif %}. FORWARDED_ALLOW_IPS: the proxies
+# and above LLM_TIMEOUT_SECONDS for answers worth finishing. FORWARDED_ALLOW_IPS: the proxies
 # whose X-Forwarded-* headers to trust; set it to the load balancer's addresses.
-ENV PATH="/app/.venv/bin:$PATH" \
+{% else %}.
+# FORWARDED_ALLOW_IPS: the proxies whose X-Forwarded-* headers to trust; set it to the load
+# balancer's addresses.
+{% endif %}ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     APP_ENV=production \
     LOG_JSON=true \
@@ -51,8 +56,11 @@ ENV PATH="/app/.venv/bin:$PATH" \
     FORWARDED_ALLOW_IPS=127.0.0.1
 USER 10001:10001
 EXPOSE 8000
-# One process per container: scale with replicas. {% if database %}Migrations run separately (`alembic upgrade
-# heads`, the compose file's migrate service), never at start-up in every replica. {% endif %}uvicorn
+{% if database %}# One process per container: scale with replicas. Migrations run separately (`alembic upgrade
+# heads`, the compose file's migrate service), never at start-up in every replica. It runs uvicorn
 # directly rather than `fastapi run`: its options (graceful shutdown) come from UVICORN_*, and the
 # app writes the access log itself as JSON.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+{% else %}# One process per container: scale with replicas. It runs uvicorn directly rather than
+# `fastapi run`: its options (graceful shutdown) come from UVICORN_*, and the app writes the access
+# log itself as JSON.
+{% endif %}CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]

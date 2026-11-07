@@ -40,7 +40,7 @@ INTENDED: dict[str, str] = {
     "backend/src/app/llm/prices.py": "comment matches the UTC+1 date rule (#41)",
     "backend/tests/test_llm_prices.py": "cache_creation ceiling case, UTC+1 date rule (#41)",
     ".github/template-owned/fastapi.txt": "lists the compose files under compose/ (#29)",
-    "backend/Dockerfile": "installs the answered extras (#29)",
+    "backend/Dockerfile": "installs the answered extras; the uvicorn comment is a whole sentence (#29)",
     "backend/compose.yaml": "includes the db and storage services from compose/ (#29)",
     "backend/compose/db/compose.yaml": "the db service moved out of compose.yaml (#29)",
     "backend/compose/storage/compose.yaml": "the storage service moved out of compose.yaml (#29)",
