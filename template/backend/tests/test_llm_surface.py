@@ -34,7 +34,8 @@ from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 from app.db import Base
 from app.llm import budget, embeddings, metrics, prices, report
-from app.llm.errors import DEFAULT_RETRY_AFTER, OUTCOMES, Outcome, outcome_for
+from app.llm.core.errors import DEFAULT_RETRY_AFTER, Outcome
+from app.llm.langchain.errors import OUTCOMES, outcome_for
 from app.llm.prompts import PROMPTS, Prompt, load_prompt
 
 pytestmark = pytest.mark.anyio
@@ -54,6 +55,28 @@ PUBLIC_NAMES: dict[str, tuple[str, ...]] = {
     ),
     "app.llm.core.registry": ("KEY_SETTINGS", "key_setting", "chat_price", "embedding_price"),
     "app.llm.langchain.usage": ("from_langchain",),
+    "app.llm.core.errors": (
+        "FailureKind",
+        "Outcome",
+        "OUTCOMES",
+        "REJECTED",
+        "DEFAULT_RETRY_AFTER",
+        "ProviderError",
+        "StepLimitReached",
+        "outcome",
+        "failure_response",
+        "step_limit_response",
+        "install_failure_handlers",
+    ),
+    "app.llm.langchain.errors": (
+        "KINDS",
+        "OUTCOMES",
+        "kind_of",
+        "outcome_for",
+        "retry_after_of",
+        "model_error",
+        "install_model_error_handlers",
+    ),
     "app.llm.prices": (
         "MICRO_USD",
         "Rates",
@@ -124,14 +147,21 @@ PUBLIC_NAMES: dict[str, tuple[str, ...]] = {
 }
 
 
-# Names that moved to the framework-neutral core (#33 T1). Their old path still answers, with a
-# DeprecationWarning, until 0.8.0: test_llm_shims.py checks it gives the same object.
+# Names that moved to the framework-neutral core (#33 T1) or, for the errors, to the core and the
+# LangChain adapter (T2). Their old path still answers, with a DeprecationWarning, until 0.8.0:
+# test_llm_shims.py checks it gives the same object.
 MOVED: dict[tuple[str, str], str] = {
     ("app.llm.prices", "cost"): "app.llm.core.prices",
     ("app.llm.prices", "ceiling"): "app.llm.core.prices",
     ("app.llm.prices", "token_details"): "app.llm.core.prices",
     ("app.llm.gateway", "KEY_SETTINGS"): "app.llm.core.registry",
     ("app.llm.gateway", "key_setting"): "app.llm.core.registry",
+    # #33 T2
+    ("app.llm.errors", "Outcome"): "app.llm.core.errors",
+    ("app.llm.errors", "DEFAULT_RETRY_AFTER"): "app.llm.core.errors",
+    ("app.llm.errors", "OUTCOMES"): "app.llm.langchain.errors",
+    ("app.llm.errors", "outcome_for"): "app.llm.langchain.errors",
+    ("app.llm.errors", "install_model_error_handlers"): "app.llm.langchain.errors",
 }
 
 

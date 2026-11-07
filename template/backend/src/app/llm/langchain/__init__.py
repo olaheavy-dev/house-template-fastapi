@@ -1,1 +1,2 @@
-"""The LangChain adapter: converts what LangChain reports into the core's neutral types."""
+"""The LangChain adapter: converts what LangChain reports (usage, model errors) into the core's
+neutral types."""

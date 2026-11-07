@@ -3,8 +3,9 @@
 LangChain's embedding classes discard the provider's usage and take no callbacks, so the gateway
 calls OpenAI's embeddings endpoint itself: each request is reserved before it is sent (its UTF-8
 bytes bound its tokens, as in budget.input_bound) and settled from the usage OpenAI returns. A
-request the provider rejected releases its reservation; any other failure keeps it. Errors come
-back as LangChain's Model*Error family, so app/llm/errors.py answers them as it does chat calls.
+request the provider rejected releases its reservation; any other failure keeps it (both decided by
+the error's core/errors.py FailureKind). Errors come back as LangChain's Model*Error family, so
+app/llm/langchain/errors.py answers them as it does chat calls.
 
 Ask the gateway for it and always await it:
 
@@ -22,17 +23,6 @@ from typing import Any
 import openai
 import structlog
 from langchain_core.embeddings import Embeddings
-from langchain_core.exceptions import (
-    ModelAPIError,
-    ModelAuthenticationError,
-    ModelConnectionError,
-    ModelError,
-    ModelInvalidRequestError,
-    ModelNotFoundError,
-    ModelPermissionDeniedError,
-    ModelRateLimitError,
-    ModelTimeoutError,
-)
 from langchain_core.messages.ai import UsageMetadata
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -47,28 +37,24 @@ from app.llm.budget import (
     utc_today,
 )
 from app.llm.core import prices
+from app.llm.core.errors import REJECTED, FailureKind
+from app.llm.langchain.errors import model_error
 from app.llm.langchain.usage import from_langchain
 
 log = structlog.get_logger()
 
-# Statuses the provider answers before doing any work: nothing was billed.
-_REJECTED = (
-    openai.AuthenticationError,
-    openai.PermissionDeniedError,
-    openai.NotFoundError,
-    openai.RateLimitError,
-    openai.BadRequestError,
-)
-# Most specific first: APITimeoutError is an APIConnectionError.
-_AS_MODEL_ERROR: tuple[tuple[type[Exception], type[ModelError]], ...] = (
-    (openai.AuthenticationError, ModelAuthenticationError),
-    (openai.PermissionDeniedError, ModelPermissionDeniedError),
-    (openai.NotFoundError, ModelNotFoundError),
-    (openai.RateLimitError, ModelRateLimitError),
-    (openai.BadRequestError, ModelInvalidRequestError),
-    (openai.APITimeoutError, ModelTimeoutError),
-    (openai.APIConnectionError, ModelConnectionError),
-    (openai.APIError, ModelAPIError),
+# OpenAI's errors as the core's kinds. Most specific first: APITimeoutError is an
+# APIConnectionError, and every one of them an APIError. (#33 T4 moves this table to the core's
+# OpenAI embeddings module.)
+_KINDS: tuple[tuple[type[Exception], FailureKind], ...] = (
+    (openai.AuthenticationError, FailureKind.AUTHENTICATION),
+    (openai.PermissionDeniedError, FailureKind.PERMISSION_DENIED),
+    (openai.NotFoundError, FailureKind.MODEL_NOT_FOUND),
+    (openai.RateLimitError, FailureKind.RATE_LIMITED),
+    (openai.BadRequestError, FailureKind.INVALID_REQUEST),
+    (openai.APITimeoutError, FailureKind.TIMED_OUT),
+    (openai.APIConnectionError, FailureKind.UNREACHABLE),
+    (openai.APIError, FailureKind.PROVIDER_FAILED),
 )
 
 
@@ -79,12 +65,15 @@ def openai_client(api_key: SecretStr, *, timeout: float, max_retries: int) -> op
     )
 
 
-def _as_model_error(error: Exception) -> Exception:
-    for source, target in _AS_MODEL_ERROR:
-        if isinstance(error, source):
-            # The type only: a provider's message can echo the input.
-            return target(f"OpenAI embeddings: {type(error).__name__}")
-    return error
+def _kind_of(error: Exception) -> FailureKind | None:
+    return next((kind for cls, kind in _KINDS if isinstance(error, cls)), None)
+
+
+def _as_model_error(error: Exception, kind: FailureKind | None) -> Exception:
+    if kind is None:
+        return error
+    # The type only: a provider's message can echo the input.
+    return model_error(kind, f"OpenAI embeddings: {type(error).__name__}")
 
 
 class GatewayEmbeddings(Embeddings):
@@ -178,9 +167,10 @@ class GatewayEmbeddings(Embeddings):
         try:
             response = await self._client.embeddings.create(model=self._model_id, input=batch)
         except Exception as error:
-            rejected = isinstance(error, _REJECTED)
+            kind = _kind_of(error)
+            rejected = kind in REJECTED
             await self._settle(call_id, "failed", 0 if rejected else None, None, labels, started)
-            raise _as_model_error(error) from error
+            raise _as_model_error(error, kind) from error
         tokens = int(response.usage.prompt_tokens)
         usage: UsageMetadata = {"input_tokens": tokens, "output_tokens": 0, "total_tokens": tokens}
         await self._settle(

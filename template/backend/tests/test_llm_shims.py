@@ -64,7 +64,7 @@ def test_the_price_table_module_imports_without_a_warning() -> None:
 
 
 def test_an_unknown_name_is_still_an_attribute_error() -> None:
-    for old in ("app.llm.prices", "app.llm.gateway"):
+    for old in ("app.llm.prices", "app.llm.gateway", "app.llm.errors"):
         with pytest.raises(AttributeError, match="has no attribute 'nope'"):
             _ = importlib.import_module(old).nope
 
@@ -150,4 +150,20 @@ def test_the_old_path_check_finds_a_use(tmp_path: Path) -> None:
             "getattr(prices, 'token_details')",
             "getattr(app.llm.prices, 'cost')",
         ]
+    )
+
+
+def test_the_old_errors_module_imports_without_a_warning() -> None:
+    # Only asking for a moved name warns, not importing the module. LangChain is imported first:
+    # on Python 3.14 a dependency of it warns on import, which is not this module's to fix. So an
+    # import-time warning in core/errors.py or langchain/errors.py is not caught here; it is
+    # accepted (pytest runs with warnings as errors, so the other tests importing them catch it).
+    code = (
+        "import warnings, app.llm.core.errors, app.llm.langchain.errors\n"
+        "warnings.simplefilter('error')\n"
+        "import app.llm.errors\n"
+        "assert 'install_model_error_handlers' in app.llm.errors.__all__\n"
+    )
+    subprocess.run(  # noqa: S603 - this interpreter, running code written above
+        [sys.executable, "-c", code], check=True
     )

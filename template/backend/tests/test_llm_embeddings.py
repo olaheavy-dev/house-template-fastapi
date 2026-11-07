@@ -131,7 +131,8 @@ async def test_a_request_the_provider_rejected_releases_its_reservation(
         body=None,
     )
     gateway_embeddings, _ = embeddings(error=rejected)
-    # The same family of errors as chat calls, so app/llm/errors.py answers it the same way.
+    # The same family of errors as chat calls, so app/llm/langchain/errors.py answers it the same
+    # way.
     with pytest.raises(ModelInvalidRequestError):
         await gateway_embeddings.aembed_documents(["a"])
     [call] = await day_calls(db_session)

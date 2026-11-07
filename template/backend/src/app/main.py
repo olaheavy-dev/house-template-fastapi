@@ -18,8 +18,9 @@ from fastapi.telemetry import TelemetryConfig
 from app import api, db, health
 from app.limits import BodyLimit, SecurityHeaders
 from app.llm import checkpoints
-from app.llm.errors import install_model_error_handlers
+from app.llm.core.errors import install_failure_handlers
 from app.llm.gateway import Gateway
+from app.llm.langchain.errors import install_model_error_handlers
 from app.log import REQUEST_ID_HEADER, configure_logging, request_context
 from app.problems import UnhandledErrors, install_problem_handlers
 from app.settings import Settings, get_settings
@@ -92,6 +93,8 @@ def create_app(
     install_problem_handlers(app)
     # Registered before request_context, which therefore wraps it: a 413 still gets an access line.
     app.add_middleware(BodyLimit, max_bytes=settings.max_request_bytes)
+    # Model-call failures: the core's neutral errors, then LangChain's own exceptions.
+    install_failure_handlers(app)
     install_model_error_handlers(app)
     app.middleware("http")(request_context)
     # Outside request_context (so it knows the request id), inside CORS and the headers (so an

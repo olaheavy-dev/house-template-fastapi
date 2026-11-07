@@ -35,14 +35,6 @@ from typing import Any
 
 import structlog
 from langchain_core.callbacks import AsyncCallbackHandler
-from langchain_core.exceptions import (
-    ContextOverflowError,
-    ModelAuthenticationError,
-    ModelInvalidRequestError,
-    ModelNotFoundError,
-    ModelPermissionDeniedError,
-    ModelRateLimitError,
-)
 from langchain_core.messages import BaseMessage
 from langchain_core.messages.ai import UsageMetadata
 from langchain_core.outputs import ChatGeneration, LLMResult
@@ -63,6 +55,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db import Base
 from app.llm import metrics
 from app.llm.core import prices
+from app.llm.core.errors import REJECTED
+from app.llm.langchain.errors import kind_of
 from app.llm.langchain.usage import from_langchain
 from app.problems import Problem
 
@@ -78,16 +72,6 @@ WARN_SHARE = 0.8
 IMAGE_TOKENS = 6_000
 _IMAGE_BLOCKS = {"image", "image_url", "input_image"}
 _UNBOUNDED_BLOCKS = {"document", "file", "input_file", "audio", "input_audio", "video"}
-# Errors that mean the provider rejected the request without processing it (LangChain's
-# provider-independent classes, keyed to the HTTP status).
-_REJECTED = (
-    ModelAuthenticationError,
-    ModelPermissionDeniedError,
-    ModelInvalidRequestError,
-    ModelNotFoundError,
-    ModelRateLimitError,
-    ContextOverflowError,
-)
 
 
 class LlmSpendDay(Base):
@@ -525,7 +509,9 @@ class BudgetGuard(AsyncCallbackHandler):
     async def on_llm_error(self, error: BaseException, *, run_id: uuid.UUID, **kwargs: Any) -> None:
         streamed = run_id in self._streamed
         self._streamed.discard(run_id)
-        rejected = isinstance(error, _REJECTED) and not streamed
+        # A kind the provider refuses before doing any work (core/errors.py REJECTED).
+        # (#33 T3 turns this into the neutral Meter.failed(call_id, kind, *, streamed).)
+        rejected = kind_of(error) in REJECTED and not streamed
         await self._settle(run_id, "failed", 0 if rejected else None, None)
 
     async def _settle(

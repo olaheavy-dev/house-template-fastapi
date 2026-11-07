@@ -10,7 +10,13 @@ import pytest
 from asgi_lifespan import LifespanManager
 from fastapi import FastAPI
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
-from langchain_core.exceptions import ModelConnectionError, ModelRateLimitError, ModelTimeoutError
+from langchain_core.exceptions import (
+    ModelAPIError,
+    ModelConnectionError,
+    ModelInvalidRequestError,
+    ModelRateLimitError,
+    ModelTimeoutError,
+)
 from langchain_core.language_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage
 from langchain_core.messages.ai import UsageMetadata
@@ -196,6 +202,36 @@ async def test_a_call_that_may_have_been_processed_keeps_its_reservation(
     [call] = await calls(db_session)
     assert call.status == "failed"
     assert call.cost_micro_usd == call.reserved_micro_usd == await committed(db_session)
+
+
+class ApiAndInvalid(ModelAPIError, ModelInvalidRequestError):
+    pass
+
+
+class RateLimitAndApi(ModelRateLimitError, ModelAPIError):
+    pass
+
+
+@pytest.mark.parametrize(
+    ("error", "released"), [(ApiAndInvalid("x"), False), (RateLimitAndApi("x"), True)]
+)
+async def test_a_class_in_two_families_settles_by_its_first_matching_kind(
+    guard: Callable[..., BudgetGuard],
+    db_session: AsyncSession,
+    error: Exception,
+    released: bool,
+) -> None:
+    # Main released if ANY base was a rejected class; now the first matching row of
+    # langchain/errors.py KINDS decides (safer: it never under-records spend).
+    model = FailingModel(messages=iter([]), error=error, callbacks=[guard()])
+    with pytest.raises(type(error)):
+        await model.ainvoke(QUESTION)
+    [call] = await calls(db_session)
+    assert call.status == "failed"
+    if released:
+        assert (call.cost_micro_usd, await committed(db_session)) == (0, 0)
+    else:
+        assert call.cost_micro_usd == call.reserved_micro_usd == await committed(db_session)
 
 
 async def test_a_stream_that_breaks_midway_keeps_its_reservation(
