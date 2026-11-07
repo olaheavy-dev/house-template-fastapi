@@ -16,7 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.llm import prices
 from app.llm.budget import LlmCall
+from app.llm.core.prices import cost
 from app.llm.gateway import Gateway, GatewayDep
+from app.llm.langchain.usage import from_langchain
 from app.llm.prompts import load_prompt
 from app.settings import Settings
 from tests.models import CHAT_MODEL, EMBEDDING_MODEL
@@ -55,7 +57,7 @@ async def test_a_replayed_call_is_answered_and_its_cost_settled(
         "output_tokens": call.output_tokens,
         "total_tokens": call.input_tokens + call.output_tokens,
     }
-    assert call.cost_micro_usd == prices.cost(prices.PRICES[call.model], usage) > 0
+    assert call.cost_micro_usd == cost(prices.PRICES[call.model], from_langchain(usage)) > 0
     assert call.reserved_micro_usd >= call.cost_micro_usd
 
 

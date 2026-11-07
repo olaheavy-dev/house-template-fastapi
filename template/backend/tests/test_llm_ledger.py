@@ -256,6 +256,24 @@ async def test_settling_without_a_cost_keeps_the_reservation_and_without_usage_r
     assert await total(db_session) == 400
 
 
+async def test_settling_with_an_empty_usage_dict_records_none_like_no_usage(
+    db_session: AsyncSession,
+) -> None:
+    # Pins the `if usage` guards: LangChain can hand over {} for "nothing reported", which is not a
+    # usage (no input_tokens key) and must be stored as unknown, never raise or record zeros.
+    call_id = uuid.uuid4()
+    assert await reserve(db_session, call_id=call_id, day=DAY, model=MODEL, amount=400, cap=1_000)
+    empty: Any = {}
+    await settle(db_session, call_id=call_id, status="settled", cost=None, usage=empty)
+    [row] = await rows(db_session)
+    assert (row.input_tokens, row.output_tokens) == (None, None)
+    assert (row.reasoning_tokens, row.cache_read_tokens, row.cache_write_tokens) == (
+        None,
+        None,
+        None,
+    )
+
+
 async def test_settling_at_zero_gives_the_whole_reservation_back(db_session: AsyncSession) -> None:
     call_id = uuid.uuid4()
     assert await reserve(db_session, call_id=call_id, day=DAY, model=MODEL, amount=400, cap=1_000)

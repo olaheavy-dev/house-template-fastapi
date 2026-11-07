@@ -27,12 +27,23 @@ from typing import Any
 from langchain_core.messages.ai import UsageMetadata
 
 from app.llm import prices
-from app.llm.prices import Price, Rates
+from app.llm.core import prices as core_prices
+from app.llm.core.prices import Price, Rates
+from app.llm.langchain.usage import from_langchain
 
-# Aliases beside usage(): when the helpers move to core (T1) only these lines change.
-cost = prices.cost
-ceiling = prices.ceiling
-token_details = prices.token_details
+
+# Aliases beside usage(): the helpers moved to core (T1) and take the neutral Usage, so LangChain's
+# usage goes through the adapter first, as it does in the gateway. Only these lines changed.
+def cost(price: Price, usage: UsageMetadata) -> int:
+    return core_prices.cost(price, from_langchain(usage))
+
+
+ceiling = core_prices.ceiling
+
+
+def token_details(usage: UsageMetadata | None) -> dict[str, int | None]:
+    return core_prices.token_details(from_langchain(usage) if usage else None)
+
 
 SOURCE = "https://example.com/pricing"
 CHECKED = "2026-11-06"
@@ -166,7 +177,7 @@ def test_an_undivided_cache_write_alongside_a_split_is_charged_on_top() -> None:
 
 
 def test_a_string_count_is_read_as_a_number() -> None:
-    # Moves to the from_langchain adapter at T1 (the neutral Usage will hold ints already).
+    # Read by the from_langchain adapter since T1 (the neutral Usage holds ints).
     # int(details.get(key) or 0): a provider sending "40" is read as 40. Sonnet: 100 input, 40
     # cache read, 60 plain: 60 x 2 + 40 x 0.1 = 124.
     assert cost(SONNET, usage(100, 0, {"cache_read": "40"})) == 124

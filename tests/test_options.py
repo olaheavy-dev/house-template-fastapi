@@ -54,6 +54,7 @@ DATABASE_PATTERNS = [
     "backend/src/app/llm/*",
     "backend/src/app/prompts/*",
     "backend/migrations/*",
+    "backend/llm-contracts.toml",
     "backend/compose/db/*",
     "backend/tests/db.py",
     "backend/tests/models.py",
@@ -72,6 +73,7 @@ DATABASE_FILES = [
     "backend/src/app/llm/gateway.py",
     "backend/src/app/prompts/README.md",
     "backend/migrations/env.py",
+    "backend/llm-contracts.toml",
     "backend/migrations/versions/20261026_app_project_root.py",
     "backend/compose/db/compose.yaml",
     "backend/tests/db.py",
@@ -125,6 +127,28 @@ def test_render_matrix(render, database, storage):
     assert ("storage-up:" in mk) is storage
     answers = yaml.safe_load((project / ".copier-answers.fastapi.yml").read_text())
     assert (answers["database"], answers["storage"]) == (database, storage)
+
+
+@ANSWERS
+def test_the_llm_import_contracts_exist_only_with_the_database(render, database, storage):
+    # The core's contract names app.llm.core, which import-linter refuses when the module is not
+    # there, so it lives in its own file that exists only with the database (#33). The one
+    # contract in pyproject.toml stays for every project (import-linter 2.16 exits 1 with none).
+    project = render(database=database, storage=storage)
+    contracts = project / "backend/llm-contracts.toml"
+    assert contracts.exists() is database
+    mk = (project / "mk/fastapi.mk").read_text()
+    assert ("lint-imports --config llm-contracts.toml" in mk) is database
+    pyproject = read_toml(project / "backend/pyproject.toml")
+    assert len(pyproject["tool"]["importlinter"]["contracts"]) == 1
+    if database:
+        config = read_toml(contracts)["tool"]["importlinter"]
+        assert config["root_package"] == "app"
+        (contract,) = config["contracts"]
+        assert contract["type"] == "forbidden"
+        assert contract["source_modules"] == ["app.llm.core"]
+        assert {"langchain", "langchain_core", "openai", "anthropic", "agent_framework"} <= set(
+            contract["forbidden_modules"])
 
 
 def render_other(render, tmp_path: Path, **answers) -> Path:
@@ -265,6 +289,9 @@ def test_no_rendered_python_file_has_an_unused_import(render, database, storage)
 DATABASE_OWNED = [
     "backend/src/app/llm/__init__.py",
     "backend/src/app/llm/gateway.py",
+    "backend/src/app/llm/core/*.py",
+    "backend/src/app/llm/langchain/*.py",
+    "backend/llm-contracts.toml",
     "backend/migrations/env.py",
     "backend/migrations/script.py.mako",
     "backend/migrations/versions/20261026_app_project_root.py",

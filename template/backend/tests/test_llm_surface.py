@@ -42,6 +42,18 @@ pytestmark = pytest.mark.anyio
 # --- the import surface -------------------------------------------------------------------------
 
 PUBLIC_NAMES: dict[str, tuple[str, ...]] = {
+    "app.llm.core.usage": ("Usage",),
+    "app.llm.core.prices": (
+        "MICRO_USD",
+        "Rates",
+        "Price",
+        "usd_rates",
+        "cost",
+        "ceiling",
+        "token_details",
+    ),
+    "app.llm.core.registry": ("KEY_SETTINGS", "key_setting", "chat_price", "embedding_price"),
+    "app.llm.langchain.usage": ("from_langchain",),
     "app.llm.prices": (
         "MICRO_USD",
         "Rates",
@@ -112,10 +124,23 @@ PUBLIC_NAMES: dict[str, tuple[str, ...]] = {
 }
 
 
+# Names that moved to the framework-neutral core (#33 T1). Their old path still answers, with a
+# DeprecationWarning, until 0.8.0: test_llm_shims.py checks it gives the same object.
+MOVED: dict[tuple[str, str], str] = {
+    ("app.llm.prices", "cost"): "app.llm.core.prices",
+    ("app.llm.prices", "ceiling"): "app.llm.core.prices",
+    ("app.llm.prices", "token_details"): "app.llm.core.prices",
+    ("app.llm.gateway", "KEY_SETTINGS"): "app.llm.core.registry",
+    ("app.llm.gateway", "key_setting"): "app.llm.core.registry",
+}
+
+
 @pytest.mark.parametrize("module", sorted(PUBLIC_NAMES))
 def test_every_public_name_is_importable_from_its_module(module: str) -> None:
     loaded = importlib.import_module(module)
     for name in PUBLIC_NAMES[module]:
+        if (module, name) in MOVED:
+            continue
         assert hasattr(loaded, name), f"{module}.{name}"
         # Resolving the name twice gives the same object (a shim must not rebuild it).
         assert getattr(loaded, name) is getattr(importlib.import_module(module), name)
@@ -446,6 +471,15 @@ def test_a_failed_call_without_cost_or_usage_records_only_the_count_and_latency(
     only = metrics.labels("pin-model-nolatency")
     metrics.record_call(only, "failed", None, None, None)
     assert [name for name, _, _ in collect(local_metrics, "pin-model-nolatency")] == ["llm.calls"]
+
+
+def test_an_empty_usage_dict_records_no_token_points(local_metrics: InMemoryMetricReader) -> None:
+    # Pins metrics.record_call's `if usage` guard: {} means nothing was reported.
+    labels = metrics.labels("pin-model-emptyusage")
+    empty: Any = {}
+    metrics.record_call(labels, "settled", None, empty, None)
+    found = collect(local_metrics, "pin-model-emptyusage")
+    assert [name for name, _, _ in found] == ["llm.calls"]
 
 
 def test_zero_token_kinds_are_not_recorded_and_a_refusal_counts_as_refused(
