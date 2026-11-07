@@ -115,7 +115,7 @@ filterwarnings = [
     "error",
     # langsmith's pytest plugin (0.14.17, the latest) calls asyncio.iscoroutinefunction, which
     # Python 3.14 deprecates, while pytest loads it. Remove this line once langsmith stops (#59).
-    "ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning",
+    "ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning:langsmith",
 ]
 
 [tool.importlinter]

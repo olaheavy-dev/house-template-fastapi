@@ -70,6 +70,13 @@ jobs:
           git -C "$DEMO" add -A
           git -C "$DEMO" -c user.email=ci@example.com -c user.name=ci commit -q -m "chore: add the fastapi layer"
 
+      - name: Check the backend runs on the Python it asks for (#59)
+        working-directory: ${{ runner.temp }}/demo
+        run: |
+          make install
+          # 3.14 is the python_version default in copier.yml: keep the two in step.
+          test "$(uv --directory backend run --locked python -c 'import sys; print("%d.%d" % sys.version_info[:2])')" = "3.14"
+
       - name: Run the project's make check
         working-directory: ${{ runner.temp }}/demo
         run: make install && make check
@@ -150,6 +157,7 @@ jobs:
           DEMO: ${{ runner.temp }}/demo-${{ matrix.id }}
           DATABASE: ${{ matrix.database }}
           STORAGE: ${{ matrix.storage }}
+          # The fallback follows the python_version default in copier.yml.
           PYTHON: ${{ matrix.python || '3.14' }}
         run: |
           uv run --frozen copier copy --trust --defaults --vcs-ref "$BASE_VERSION" \
@@ -205,7 +213,7 @@ jobs:
             "${absent[@]}"
 
       - name: Run the backend from its image and call the readiness probe
-        if: matrix.id != 'storage-off'
+        if: matrix.database == 'false'
         working-directory: ${{ runner.temp }}/demo-${{ matrix.id }}
         run: |
           # No backend/.env and no model settings: a project without the database needs none.
