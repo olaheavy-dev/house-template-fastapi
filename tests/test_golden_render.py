@@ -68,6 +68,9 @@ INTENDED: dict[str, str] = {
     "backend/tests/test_observability.py": "request-trace test moved to test_telemetry.py (#29)",
     "backend/tests/test_telemetry.py": "the request-trace test moved out of test_observability.py (#29)",
     "backend/tests/test_llm_budget.py": "gains the budget-pool test moved out of test_hardening.py (#29)",
+    "backend/tests/test_llm_cost_pins.py": "characterises the cost arithmetic before the framework-neutral split (#33)",
+    "backend/tests/test_llm_surface.py": "characterises the gateway's import surface, failure mapping, metrics and prompts before the framework-neutral split (#33)",
+    "backend/tests/test_llm_ledger.py": "characterises the budget ledger, reservation and spend report before the framework-neutral split (#33)",
     "backend/tests/recording.py": "recording key check, importable by its test (#41)",
     "backend/tests/test_recording_keys.py": "tests for the recording key check (#41)",
 }
