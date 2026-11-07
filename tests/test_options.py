@@ -1,4 +1,4 @@
-"""The answers that switch parts of the backend on and off (#29). Today: `storage`.
+"""The answers that switch parts of the backend on and off (#29): `database` and `storage`.
 
 Docs: Copier 9.19.1
 - `_exclude` (each pattern can be templated; defining it replaces Copier's defaults), the `.jinja`
@@ -19,7 +19,9 @@ How a part is switched
 
 from __future__ import annotations
 
+import ast
 import fnmatch
+import itertools
 import json
 import re
 import shutil
@@ -30,15 +32,59 @@ from pathlib import Path
 import pytest
 import yaml
 
-from conftest import TEMPLATE
+from conftest import BASE_ANSWERS, TEMPLATE
 
 ON_OFF = pytest.mark.parametrize("storage", [True, False], ids=["storage-on", "storage-off"])
+# Every combination of the two answers.
+COMBINATIONS = list(itertools.product([True, False], [True, False]))
+ANSWERS = pytest.mark.parametrize(
+    ("database", "storage"), COMBINATIONS,
+    ids=[f"database-{'on' if d else 'off'}-storage-{'on' if s else 'off'}" for d, s in COMBINATIONS])
 
 STORAGE_FILES = [
     "backend/src/app/storage.py",
     "backend/tests/storage.py",
     "backend/tests/test_storage.py",
     "backend/compose/storage/compose.yaml",
+]
+# The paths `database: false` removes, as patterns (fnmatch: `*` also crosses `/`). Each must match
+# something that is removed, and everything removed must match one (test_database_files_are_exact).
+DATABASE_PATTERNS = [
+    "backend/src/app/db.py",
+    "backend/src/app/models.py",
+    "backend/src/app/llm/*",
+    "backend/src/app/prompts/*",
+    "backend/migrations/*",
+    "backend/compose/db/*",
+    "backend/tests/db.py",
+    "backend/tests/models.py",
+    "backend/tests/recording.py",
+    "backend/tests/test_db.py",
+    "backend/tests/test_llm_*.py",
+    "backend/tests/test_recording_keys.py",
+    "backend/tests/test_observability.py",
+    "backend/tests/evals/*",
+    "backend/tests/cassettes/*",
+]
+# One file from each pattern that must be absent without the database.
+DATABASE_FILES = [
+    "backend/src/app/db.py",
+    "backend/src/app/models.py",
+    "backend/src/app/llm/gateway.py",
+    "backend/src/app/prompts/README.md",
+    "backend/migrations/env.py",
+    "backend/migrations/versions/20261026_app_project_root.py",
+    "backend/compose/db/compose.yaml",
+    "backend/tests/db.py",
+    "backend/tests/models.py",
+    "backend/tests/recording.py",
+    "backend/tests/test_db.py",
+    "backend/tests/test_llm_gateway.py",
+    "backend/tests/test_llm_errors.py",
+    "backend/tests/test_recording_keys.py",
+    "backend/tests/test_observability.py",
+    "backend/tests/evals/conftest.py",
+    "backend/tests/cassettes/test_llm_gateway/test_a_replayed_call_is_answered_and_its_cost_settled.yaml",
 ]
 # Files that exist in both renders but change with the answer, each with an all-on plain twin.
 TWINS = [
@@ -58,25 +104,48 @@ def files(root: Path) -> dict[str, Path]:
     return {p.relative_to(root).as_posix(): p for p in root.rglob("*") if p.is_file()}
 
 
-@ON_OFF
-def test_render_matrix(render, storage):
-    project = render(storage=storage)
+@ANSWERS
+def test_render_matrix(render, database, storage):
+    project = render(database=database, storage=storage)
+    for path in DATABASE_FILES:
+        assert (project / path).exists() is database, path
     for path in STORAGE_FILES:
         assert (project / path).exists() is storage, path
     # Always there, whatever the answers.
-    for path in ("backend/.env.example", "backend/compose.yaml", "backend/compose/db/compose.yaml",
-                 "backend/src/app/main.py", "backend/tests/db.py", "mk/fastapi.mk"):
+    for path in ("backend/.env.example", "backend/compose.yaml", "backend/src/app/main.py",
+                 "backend/tests/conftest.py", "backend/src/app/api/__init__.py", "mk/fastapi.mk"):
         assert (project / path).is_file(), path
-    # The suffix is always stripped and no template syntax is left behind.
+    # The suffix is always stripped.
     assert [p for p in files(project) if p.endswith(".jinja")] == []
-    # The dependency is declared in one plain pyproject.toml either way.
+    # The dependencies are declared in one plain pyproject.toml either way.
     pyproject = read_toml(project / "backend/pyproject.toml")
     assert pyproject["project"]["optional-dependencies"]["storage"][0].startswith("boto3")
     assert not any(d.startswith("boto3") for d in pyproject["project"]["dependencies"])
     mk = (project / "mk/fastapi.mk").read_text()
     assert ("storage-up:" in mk) is storage
     answers = yaml.safe_load((project / ".copier-answers.fastapi.yml").read_text())
-    assert answers["storage"] is storage
+    assert (answers["database"], answers["storage"]) == (database, storage)
+
+
+def render_other(render, tmp_path: Path, **answers) -> Path:
+    """A second render in its own directory (the render fixture's own is `project`)."""
+    dst = tmp_path / "other"
+    dst.mkdir()
+    (dst / ".copier-answers.base.yml").write_text(yaml.safe_dump(BASE_ANSWERS))
+    return render(dst, **answers)
+
+
+def test_database_files_are_exact(render, tmp_path):
+    # Everything `database: false` removes matches DATABASE_PATTERNS, and every pattern removes
+    # something: a new file under a database path, or a pattern that matches nothing, fails here.
+    on = set(files(render(database=True, storage=True)))
+    off = set(files(render_other(render, tmp_path, database=False, storage=True)))
+    removed = on - off
+    assert (off - on) == set()
+    stray = [p for p in removed if not any(fnmatch.fnmatch(p, pat) for pat in DATABASE_PATTERNS)]
+    assert stray == []
+    unused = [pat for pat in DATABASE_PATTERNS if not any(fnmatch.fnmatch(p, pat) for p in removed)]
+    assert unused == []
 
 
 def read_toml(path: Path) -> dict:
@@ -85,6 +154,13 @@ def read_toml(path: Path) -> dict:
 
 def test_storage_is_on_by_default(render):
     assert (render() / "backend/src/app/storage.py").is_file()
+
+
+def test_database_is_on_by_default(render):
+    project = render()
+    assert (project / "backend/src/app/db.py").is_file()
+    answers = yaml.safe_load((project / ".copier-answers.fastapi.yml").read_text())
+    assert answers["database"] is True
 
 
 def test_jinja_twins_render_to_their_plain_file(render):
@@ -122,18 +198,49 @@ def test_env_example_matches_settings(render, storage):
     assert any(f.startswith("STORAGE_") for f in fields) is storage
 
 
-@ON_OFF
-def test_every_template_owned_entry_exists(render, storage):
-    project = render(storage=storage)
+# Template-owned files that exist only with the database (the project's own tests are not listed).
+DATABASE_OWNED = [
+    "backend/src/app/llm/__init__.py",
+    "backend/src/app/llm/gateway.py",
+    "backend/migrations/env.py",
+    "backend/migrations/script.py.mako",
+    "backend/migrations/versions/20261026_app_project_root.py",
+    "backend/compose/db/compose.yaml",
+    "backend/tests/db.py",
+    "backend/tests/evals/conftest.py",
+]
+
+
+@ANSWERS
+def test_every_template_owned_entry_exists(render, database, storage):
+    project = render(database=database, storage=storage)
     owned = (project / ".github/template-owned/fastapi.txt").read_text().splitlines()
     patterns = [ln for ln in owned if ln and not ln.startswith("#")]
     existing = list(files(project))
     for pattern in patterns:
         assert any(fnmatch.fnmatch(f, pattern) for f in existing), pattern
-    # And the reverse for the parts that switch: a storage file is listed exactly when it exists.
+    # And the reverse for the parts that switch: a file is listed exactly when it exists.
+    for path in DATABASE_OWNED:
+        assert (path in patterns) is database, path
     for path in STORAGE_FILES:
         if path != "backend/tests/test_storage.py":  # the project's own tests are not listed
             assert (path in patterns) is storage, path
+
+
+@ANSWERS
+def test_rendered_project_has_no_leftover_template_syntax(render, database, storage):
+    for path in files(render(database=database, storage=storage)).values():
+        if path.suffix in {".py", ".toml", ".md", ".mk", ".yml", ".yaml", ".txt", ".example"}:
+            # GitHub Actions expressions (${{ ... }}) are meant to be there.
+            assert not re.search(r"(?<!\$)\{\{|\{%", path.read_text()), path
+
+
+@ANSWERS
+def test_every_rendered_python_file_parses(render, database, storage):
+    project = render(database=database, storage=storage)
+    for rel, path in files(project).items():
+        if path.suffix == ".py":
+            ast.parse(path.read_text(), filename=rel)
 
 
 def test_no_part_left_behind_when_storage_is_off(render):

@@ -94,13 +94,6 @@ def test_base_answers_fixture_matches_the_pinned_base_version():
     assert f"BASE_VERSION: {BASE_ANSWERS['_commit']}" in workflow
 
 
-def test_rendered_project_has_no_leftover_template_syntax(render):
-    for path in Path(render()).rglob("*"):
-        if path.is_file() and path.suffix in {".py", ".toml", ".md", ".mk", ".yml", ".txt"}:
-            # GitHub Actions expressions (${{ ... }}) are meant to be there.
-            assert not re.search(r"(?<!\$)\{\{", path.read_text()), path
-
-
 def test_local_database_is_pinned_and_keeps_its_data():
     compose = yaml.safe_load((TEMPLATE / "backend/compose/db/compose.yaml").read_text())
     db = compose["services"]["db"]

@@ -35,8 +35,27 @@ _exclude:
   # tests/test_options.py), so `.env.example.jinja` needs no pattern of its own.
   - "!.env.example"
   # Parts that exist only with an answer (#29). A pattern renders to an empty string when its part
-  # is on, and Copier skips it. Files whose content changes with an answer are `x.jinja` instead,
+  # is on, and Copier skips it. A directory pattern (backend/migrations) excluding everything inside
+  # it is proven by tests/test_options.py; the docs do not state it. Files whose content changes with an answer are `x.jinja` instead,
   # not listed here. Docs: https://copier.readthedocs.io/en/v9.19.1/configuring/ (`_exclude`).
+  # database: false removes PostgreSQL, the migrations and the model gateway, which needs the
+  # database for its budget and checkpoints. Same `is defined` guard as below: a project made before
+  # this question existed has no `database` answer and had the database.
+  - "{% if database is defined and not database %}backend/src/app/db.py{% endif %}"
+  - "{% if database is defined and not database %}backend/src/app/models.py{% endif %}"
+  - "{% if database is defined and not database %}backend/src/app/llm{% endif %}"
+  - "{% if database is defined and not database %}backend/src/app/prompts{% endif %}"
+  - "{% if database is defined and not database %}backend/migrations{% endif %}"
+  - "{% if database is defined and not database %}backend/compose/db{% endif %}"
+  - "{% if database is defined and not database %}backend/tests/db.py{% endif %}"
+  - "{% if database is defined and not database %}backend/tests/models.py{% endif %}"
+  - "{% if database is defined and not database %}backend/tests/recording.py{% endif %}"
+  - "{% if database is defined and not database %}backend/tests/test_db.py{% endif %}"
+  - "{% if database is defined and not database %}backend/tests/test_llm_*.py{% endif %}"
+  - "{% if database is defined and not database %}backend/tests/test_recording_keys.py{% endif %}"
+  - "{% if database is defined and not database %}backend/tests/test_observability.py{% endif %}"
+  - "{% if database is defined and not database %}backend/tests/evals{% endif %}"
+  - "{% if database is defined and not database %}backend/tests/cassettes{% endif %}"
   # storage: false removes the S3-compatible object storage. `is defined`: `copier update` also
   # renders these patterns for the OLD copy of a project made before the question existed, whose
   # answers have no `storage` (StrictUndefined would fail there); such a project had storage.
@@ -94,6 +113,11 @@ python_version:
     {% if _external_data.base and 'fastapi' not in _external_data.base.stacks %}The base answers don't list
     the fastapi stack: run copier update -a .copier-answers.base.yml and add it, so CI, CodeQL and
     Dependabot cover the backend{% endif %}
+
+database:
+  type: bool
+  help: PostgreSQL with pgvector, SQLAlchemy and Alembic migrations (the model gateway needs it, so false removes the gateway too)
+  default: true
 
 storage:
   type: bool
