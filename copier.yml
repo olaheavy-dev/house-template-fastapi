@@ -36,8 +36,9 @@ _exclude:
   - "!.env.example"
   # Parts that exist only with an answer (#29). A pattern renders to an empty string when its part
   # is on, and Copier skips it. A directory pattern (backend/migrations) excluding everything inside
-  # it is proven by tests/test_options.py; the docs do not state it. Files whose content changes with an answer are `x.jinja` instead,
-  # not listed here. Docs: https://copier.readthedocs.io/en/v9.19.1/configuring/ (`_exclude`).
+  # it is proven by tests/test_options.py; the docs do not state it. Files whose content changes
+  # with an answer are `x.jinja` instead, not listed here.
+  # Docs: https://copier.readthedocs.io/en/v9.19.1/configuring/ (`_exclude`).
   # database: false removes PostgreSQL, the migrations and the model gateway, which needs the
   # database for its budget and checkpoints. Same `is defined` guard as below: a project made before
   # this question existed has no `database` answer and had the database.
