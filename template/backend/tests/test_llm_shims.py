@@ -155,7 +155,9 @@ def test_the_old_path_check_finds_a_use(tmp_path: Path) -> None:
 
 def test_the_old_errors_module_imports_without_a_warning() -> None:
     # Only asking for a moved name warns, not importing the module. LangChain is imported first:
-    # on Python 3.14 a dependency of it warns on import, which is not this module's to fix.
+    # on Python 3.14 a dependency of it warns on import, which is not this module's to fix. So an
+    # import-time warning in core/errors.py or langchain/errors.py is not caught here; it is
+    # accepted (pytest runs with warnings as errors, so the other tests importing them catch it).
     code = (
         "import warnings, app.llm.core.errors, app.llm.langchain.errors\n"
         "warnings.simplefilter('error')\n"

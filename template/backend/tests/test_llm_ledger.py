@@ -650,8 +650,9 @@ def provider_errors() -> list[tuple[Exception, type[ModelError], bool]]:
 async def test_an_openai_embedding_error_becomes_the_model_error_family_and_settles_by_kind(
     sessions: async_sessionmaker[AsyncSession], db_session: AsyncSession, case: int
 ) -> None:
-    # Private seam note: this pins embeddings._REJECTED and embeddings._as_model_error through the
-    # public call. T4 moves them; keep this test and retarget it, do not delete it.
+    # Private seam note: this pins embeddings._KINDS, _kind_of and _as_model_error(error, kind), and
+    # the core's REJECTED, through the public call. T4 moves the table; keep this test and retarget
+    # it, do not delete it.
     source, target, unbilled = provider_errors()[case]
     api = FailingEmbeddingsApi(source)
     vectors = GatewayEmbeddings(

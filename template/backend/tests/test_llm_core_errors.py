@@ -90,6 +90,15 @@ def test_a_provider_error_carries_its_kind_source_and_retry_after_and_no_provide
     assert ProviderError(K.TIMED_OUT, source="X").retry_after is None
 
 
+# The HTTP reason phrase of each status, written out (422's name differs between Python versions).
+TITLES = {
+    422: {"Unprocessable Entity", "Unprocessable Content"},
+    502: {"Bad Gateway"},
+    503: {"Service Unavailable"},
+    504: {"Gateway Timeout"},
+}
+
+
 @pytest.mark.parametrize("kind", sorted(ANSWERS), ids=str)
 async def test_the_problem_body_for_each_kind(
     app: FastAPI, client: httpx.AsyncClient, kind: FailureKind
@@ -109,6 +118,7 @@ async def test_the_problem_body_for_each_kind(
         "detail": detail,
         "instance": "/model",
     }
+    assert response.json()["title"] in TITLES[status]
     assert response.headers.get("Retry-After") == ("30" if retry else None)
     assert "SECRET" not in response.text
 

@@ -102,6 +102,25 @@ def test_the_first_row_wins_over_the_class_order() -> None:
     assert kind_of(Overflow("x")) is K.CONTEXT_OVERFLOW
 
 
+class ApiAndInvalid(ModelAPIError, ModelInvalidRequestError):
+    """A class in two families, one rejected (invalid request) and one that may have been billed."""
+
+
+class RateLimitAndApi(ModelRateLimitError, ModelAPIError):
+    pass
+
+
+def test_a_class_in_two_families_is_decided_by_the_first_matching_row() -> None:
+    # Main released a reservation if ANY base was a rejected class. Now the first matching row of
+    # KINDS decides: ModelAPIError comes before ModelInvalidRequestError, so this keeps its
+    # reservation. That is the safer side: it can over-record spend, never under-record it.
+    assert kind_of(ApiAndInvalid("x")) is K.PROVIDER_FAILED
+    assert kind_of(ApiAndInvalid("x")) not in REJECTED
+    # Rate limit comes first, so the refund follows it, as it did on main.
+    assert kind_of(RateLimitAndApi("x")) is K.RATE_LIMITED
+    assert kind_of(RateLimitAndApi("x")) in REJECTED
+
+
 @pytest.mark.parametrize(
     "error",
     [
