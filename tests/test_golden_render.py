@@ -35,7 +35,7 @@ BASELINE_REF = "d67ca3807ae74a78cc9728bf20da829be035117c"
 # executables today).
 INTENDED: dict[str, str] = {
     ".copier-answers.fastapi.yml": "records container_images (#49), storage and database (#29)",
-    ".claude/rules/fastapi.md": "rule text moved after backend/.env (#41); extras rule naming db, langchain and storage, the switch command for each answer, turning the database off, make check type-checks migrations/, 413 sentence moved out of the Files bullet into its own (#29); says where the price arithmetic lives and that make check runs both lint-imports commands (#33)",
+    ".claude/rules/fastapi.md": "rule text moved after backend/.env (#41); extras rule naming db, langchain and storage, the switch command for each answer, turning the database off, make check type-checks migrations/, 413 sentence moved out of the Files bullet into its own (#29); says where the price arithmetic lives and that make check runs both lint-imports commands (#33); says where model-call failures are classified (#33)",
     "mk/fastapi.mk": "record-llm help says provider keys (#41); EXTRAS, compose path, mypy paths (#29); check-fastapi also runs lint-imports --config llm-contracts.toml with the database (#33)",
     "backend/src/app/llm/prices.py": "comment matches the UTC+1 date rule (#41); keeps only the price tables, the arithmetic moved to app/llm/core/prices.py and the old names warn until 0.8.0 (#33)",
     "backend/tests/test_llm_prices.py": "cache_creation ceiling case, UTC+1 date rule (#41); imports from app/llm/core (#33)",
