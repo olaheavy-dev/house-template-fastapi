@@ -307,8 +307,17 @@ def test_every_rendered_python_file_parses(render, database, storage):
             ast.parse(path.read_text(), filename=rel)
 
 
-def test_no_part_left_behind_when_storage_is_off(render):
-    project = render(storage=False)
+# Words that must not appear in a database-less project, except in pyproject.toml and uv.lock (the
+# packages stay declared in the extras).
+DATABASE_WORDS = re.compile(
+    r"sqlalchemy|alembic|DATABASE_URL|db_session|db_client|SessionDep|pgvector|psycopg|langchain|"
+    r"langgraph|langsmith|LLM_MODEL|EMBEDDING_MODEL|openai|anthropic|gateway|db-up|make migrat",
+    re.IGNORECASE)
+PARTS = {"storage": (STORAGE_WORDS, "boto3", ["backend/src/app/storage.py", "mk/fastapi.mk"]),
+         "database": (DATABASE_WORDS, "sqlalchemy", ["backend/src/app/main.py", "mk/fastapi.mk"])}
+
+
+def word_hits(project: Path, words: re.Pattern[str]) -> list[tuple[str, str]]:
     found = []
     for rel, path in files(project).items():
         if rel in NOT_COMPARED or ".git/" in rel:
@@ -317,20 +326,28 @@ def test_no_part_left_behind_when_storage_is_off(render):
             text = path.read_text()
         except UnicodeDecodeError:
             continue
-        found += [(rel, m.group(0)) for m in STORAGE_WORDS.finditer(text)]
-    assert found == []
+        found += [(rel, m.group(0)) for m in words.finditer(text)]
+    return found
+
+
+@pytest.mark.parametrize("part", ["storage", "database"], ids=["storage-off", "database-off"])
+def test_no_part_left_behind(render, part):
+    words, dependency, _ = PARTS[part]
+    project = render(**{part: False})
+    assert word_hits(project, words) == []
     # The mentions that remain are only the declared dependency.
-    assert "types-boto3" in (project / "backend/pyproject.toml").read_text()
+    pyproject = (project / "backend/pyproject.toml").read_text()
+    assert dependency in pyproject
 
 
-def test_no_part_left_behind_check_catches_a_leftover(render):
+@pytest.mark.parametrize("part", ["storage", "database"])
+def test_no_part_left_behind_check_catches_a_leftover(render, part):
     # The word list does find what it is meant to find (a check that cannot fail proves nothing).
-    project = render(storage=True)
-    hits = [rel for rel, p in files(project).items() if rel not in NOT_COMPARED
-            and p.suffix in {".py", ".md", ".mk", ".yaml", ".example"}
-            and STORAGE_WORDS.search(p.read_text())]
-    assert "backend/src/app/storage.py" in hits and "mk/fastapi.mk" in hits
-    assert ".claude/rules/fastapi.md" in hits and "backend/compose.yaml" in hits
+    words, _, must_hit = PARTS[part]
+    project = render()
+    hits = {rel for rel, _ in word_hits(project, words)}
+    assert set(must_hit) <= hits
+    assert {".claude/rules/fastapi.md", "backend/compose.yaml"} <= hits
 
 
 def extras_flags(database: bool, storage: bool) -> str:

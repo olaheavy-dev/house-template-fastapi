@@ -59,7 +59,7 @@ INTENDED: dict[str, str] = {
     "backend/tests/test_health.py": "neutral check name, readiness without storage, no-check case, expected_readiness_checks (#29)",
     "backend/tests/conftest.py": "recording checks the key of both pinned models (#41); production_values, expected_readiness_checks, database_settings (#29)",
     "backend/src/app/health.py": "docstring no longer names the database (#29)",
-    "backend/src/app/auth.py": "docstring example needs no database session (#29)",
+    "backend/src/app/auth.py": "docstring example and id note name no database or gateway (#29)",
     "backend/tests/test_app.py": "production settings from production_values (#29)",
     "backend/tests/test_auth.py": "production settings from production_values (#29)",
     "backend/tests/test_errors.py": "model-failure tests moved to test_llm_errors.py; the log test uses the httpx logger (#29)",
