@@ -42,6 +42,18 @@ pytestmark = pytest.mark.anyio
 # --- the import surface -------------------------------------------------------------------------
 
 PUBLIC_NAMES: dict[str, tuple[str, ...]] = {
+    "app.llm.core.usage": ("Usage",),
+    "app.llm.core.prices": (
+        "MICRO_USD",
+        "Rates",
+        "Price",
+        "usd_rates",
+        "cost",
+        "ceiling",
+        "token_details",
+    ),
+    "app.llm.core.registry": ("KEY_SETTINGS", "key_setting", "chat_price", "embedding_price"),
+    "app.llm.langchain.usage": ("from_langchain",),
     "app.llm.prices": (
         "MICRO_USD",
         "Rates",
