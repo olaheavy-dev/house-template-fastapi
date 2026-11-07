@@ -34,7 +34,6 @@ import yaml
 
 from conftest import BASE_ANSWERS, TEMPLATE
 
-ON_OFF = pytest.mark.parametrize("storage", [True, False], ids=["storage-on", "storage-off"])
 # Every combination of the two answers.
 COMBINATIONS = list(itertools.product([True, False], [True, False]))
 ANSWERS = pytest.mark.parametrize(
