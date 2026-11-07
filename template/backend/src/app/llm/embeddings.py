@@ -37,7 +37,7 @@ from langchain_core.messages.ai import UsageMetadata
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.llm import metrics, prices
+from app.llm import metrics
 from app.llm.budget import (
     INPUT_MARGIN_TOKENS,
     BudgetExhausted,
@@ -46,6 +46,8 @@ from app.llm.budget import (
     settle,
     utc_today,
 )
+from app.llm.core import prices
+from app.llm.langchain.usage import from_langchain
 
 log = structlog.get_logger()
 
@@ -182,7 +184,12 @@ class GatewayEmbeddings(Embeddings):
         tokens = int(response.usage.prompt_tokens)
         usage: UsageMetadata = {"input_tokens": tokens, "output_tokens": 0, "total_tokens": tokens}
         await self._settle(
-            call_id, "settled", prices.cost(self.price, usage), usage, labels, started
+            call_id,
+            "settled",
+            prices.cost(self.price, from_langchain(usage)),
+            usage,
+            labels,
+            started,
         )
         return [item.embedding for item in sorted(response.data, key=lambda item: item.index)]
 

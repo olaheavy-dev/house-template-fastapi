@@ -12,76 +12,28 @@ list prices: read the page on the day you add or change an entry and never type 
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import date
-from typing import Any
-from urllib.parse import urlparse
+import warnings
+from typing import TYPE_CHECKING
 
-from langchain_core.messages.ai import UsageMetadata
+from app.llm.core import prices as _core
+from app.llm.core.prices import MICRO_USD, Price, Rates
+from app.llm.core.prices import usd_rates as _rates
 
-MICRO_USD = 1_000_000
-_PER_MILLION = 1_000_000
+if TYPE_CHECKING:
+    from app.llm.core.prices import ceiling as ceiling
+    from app.llm.core.prices import cost as cost
+    from app.llm.core.prices import token_details as token_details
 
-
-@dataclass(frozen=True, slots=True)
-class Rates:
-    input: int
-    output: int
-    cache_read: int
-    # The cache-write rates of the shorter and the longer lifetime: Anthropic's pricing page lists
-    # 5-minute and 1-hour writes, OpenAI's lists 30-minute and 12-hour writes.
-    cache_write_short: int
-    cache_write_long: int
-
-
-@dataclass(frozen=True, slots=True)
-class Price:
-    rates: Rates
-    # When the price was read (ISO date, YYYY-MM-DD) and the provider's pricing page it came from.
-    checked: str = field(kw_only=True)
-    source: str = field(kw_only=True)
-    # Some models charge more for every token of a request whose prompt is longer than this.
-    long_prompt_tokens: int | None = None
-    long_rates: Rates | None = None
-    # Longest prompt these rates cover, when longer ones cost more and aren't priced here: the
-    # budget refuses them instead of under-recording their cost.
-    max_prompt_tokens: int | None = None
-
-    def __post_init__(self) -> None:
-        # Not compared with today's date: a clock that is a day off must not stop the app starting
-        # (a test checks that no entry is dated after tomorrow, UTC: people east of UTC are a day
-        # ahead for part of the day).
-        try:
-            exact = date.fromisoformat(self.checked).isoformat() == self.checked
-        except ValueError:
-            exact = False
-        if not exact:
-            raise ValueError(f"Price.checked must be a date as YYYY-MM-DD, not {self.checked!r}")
-        try:
-            url = urlparse(self.source)
-            valid_url = url.scheme == "https" and bool(url.hostname)
-        except ValueError:
-            valid_url = False
-        if not valid_url:
-            raise ValueError(
-                f"Price.source must be the pricing page's https URL, not {self.source!r}"
-            )
-
-    def for_prompt(self, input_tokens: int) -> Rates:
-        if self.long_rates and self.long_prompt_tokens and input_tokens > self.long_prompt_tokens:
-            return self.long_rates
-        return self.rates
-
-    @property
-    def highest(self) -> Rates:
-        return self.long_rates or self.rates
-
-
-def _rates(input: float, output: float, cache_read: float, short: float, long: float) -> Rates:
-    def micro(usd: float) -> int:
-        return round(usd * MICRO_USD)
-
-    return Rates(micro(input), micro(output), micro(cache_read), micro(short), micro(long))
+__all__ = [
+    "EMBEDDING_PRICES",
+    "MICRO_USD",
+    "PRICES",
+    "Price",
+    "Rates",
+    "ceiling",
+    "cost",
+    "token_details",
+]
 
 
 CLAUDE_PRICING = "https://platform.claude.com/docs/en/about-claude/pricing"
@@ -133,61 +85,19 @@ EMBEDDING_PRICES: dict[str, Price] = {
 }
 
 
-def cost(price: Price, usage: UsageMetadata) -> int:
-    """The cost of one call in micro-USD, rounded up, from the usage LangChain reports.
+# The arithmetic moved to app/llm/core/prices.py (#33). Until 0.8.0 the old names still answer here,
+# with a DeprecationWarning, and are the same objects as the core's.
+_MOVED = frozenset({"cost", "ceiling", "token_details"})
 
-    input_tokens includes cached tokens for both providers; the details split them out. Tokens in
-    a detail this table doesn't know (an OpenAI service tier, audio) are charged as plain input or
-    output, which never undercharges a standard-tier call.
-    """
-    input_tokens = usage["input_tokens"]
-    rates = price.for_prompt(input_tokens)
-    # Untyped on purpose: providers add keys InputTokenDetails doesn't declare (cache lifetimes).
-    details: dict[str, Any] = dict(usage.get("input_token_details") or {})
+if not TYPE_CHECKING:
 
-    def tokens(key: str) -> int:
-        return int(details.get(key) or 0)
-
-    cache_read = tokens("cache_read")
-    long_write = tokens("ephemeral_1h_input_tokens")
-    short_write = tokens("ephemeral_5m_input_tokens")
-    # A write count with no lifetime (`cache_creation` alone, as langchain-openai 1.7.2 reports
-    # it) could be either lifetime, so it is charged at the dearer rate: the cost can be
-    # over-recorded, never under-recorded. With a split present, langchain-anthropic 1.7.6 sets
-    # `cache_creation` to 0.
-    undivided_write = tokens("cache_creation")
-    plain = max(input_tokens - cache_read - long_write - short_write - undivided_write, 0)
-    total = (
-        plain * rates.input
-        + cache_read * rates.cache_read
-        + short_write * rates.cache_write_short
-        + (long_write + undivided_write) * rates.cache_write_long
-        + usage["output_tokens"] * rates.output
-    )
-    return -(-total // _PER_MILLION)
-
-
-def ceiling(price: Price, input_tokens: int, output_tokens: int) -> int:
-    """The most a call can cost: every input token uncached at the highest rate, every output token
-    the call may generate. The budget reserves this before the call."""
-    rates = price.highest
-    total = input_tokens * max(rates.input, rates.cache_write_long) + output_tokens * rates.output
-    return -(-total // _PER_MILLION)
-
-
-def token_details(usage: UsageMetadata | None) -> dict[str, int | None]:
-    """Reasoning, cache-read and cache-write tokens from LangChain's usage details (both providers;
-    Anthropic splits cache writes by lifetime)."""
-    if not usage:
-        return {"reasoning_tokens": None, "cache_read_tokens": None, "cache_write_tokens": None}
-    given: dict[str, Any] = dict(usage.get("input_token_details") or {})
-    out: dict[str, Any] = dict(usage.get("output_token_details") or {})
-    writes = sum(
-        int(given.get(key) or 0)
-        for key in ("cache_creation", "ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens")
-    )
-    return {
-        "reasoning_tokens": int(out.get("reasoning") or 0),
-        "cache_read_tokens": int(given.get("cache_read") or 0),
-        "cache_write_tokens": writes,
-    }
+    def __getattr__(name: str) -> object:
+        if name in _MOVED:
+            warnings.warn(
+                f"app.llm.prices.{name} moved to app.llm.core.prices.{name}: import it from there "
+                "(the old name goes in 0.8.0)",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return getattr(_core, name)
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

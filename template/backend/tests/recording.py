@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from app.llm.gateway import key_setting
+from app.llm.core.registry import key_setting
 
 
 def missing_recording_keys(

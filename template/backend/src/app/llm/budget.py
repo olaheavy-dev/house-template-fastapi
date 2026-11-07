@@ -61,7 +61,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
-from app.llm import metrics, prices
+from app.llm import metrics
+from app.llm.core import prices
+from app.llm.langchain.usage import from_langchain
 from app.problems import Problem
 
 log = structlog.get_logger()
@@ -236,7 +238,7 @@ async def settle(
 ) -> None:
     """Record what a reserved call really cost (None keeps the reservation as its cost) and move
     the day's total by the difference. Settling twice changes nothing."""
-    details = prices.token_details(usage)
+    details = prices.token_details(from_langchain(usage) if usage else None)
     row = (
         await session.execute(
             update(LlmCall)
@@ -517,7 +519,7 @@ class BudgetGuard(AsyncCallbackHandler):
         usage = _usage(response)
         if usage is None:
             log.warning("llm_usage_missing", model=self.model, call_id=str(run_id))
-        cost = prices.cost(self.price, usage) if usage else None
+        cost = prices.cost(self.price, from_langchain(usage)) if usage else None
         await self._settle(run_id, "settled", cost, usage)
 
     async def on_llm_error(self, error: BaseException, *, run_id: uuid.UUID, **kwargs: Any) -> None:

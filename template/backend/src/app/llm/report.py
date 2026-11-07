@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import create_engine, create_sessionmaker
 from app.llm.budget import LlmCall, expire_stale, utc_today
-from app.llm.prices import MICRO_USD
+from app.llm.core.prices import MICRO_USD
 from app.settings import get_settings
 
 GROUPS = {

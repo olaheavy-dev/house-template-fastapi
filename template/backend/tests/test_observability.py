@@ -21,6 +21,8 @@ from structlog.testing import capture_logs
 
 from app.llm import prices, report
 from app.llm.budget import BudgetGuard, LlmCall, reserve, settle
+from app.llm.core.prices import cost
+from app.llm.langchain.usage import from_langchain
 from tests.models import CHAT_MODEL
 
 pytestmark = pytest.mark.anyio
@@ -157,7 +159,7 @@ async def test_the_spend_report_groups_settled_calls(
     assert by_feature[("answer",)].calls == 2
     assert by_feature[("digest",)].reasoning_tokens == 120
     assert by_feature[("answer",)].cost_usd == pytest.approx(
-        2 * prices.cost(prices.PRICES[MODEL], usage()) / prices.MICRO_USD
+        2 * cost(prices.PRICES[MODEL], from_langchain(usage())) / prices.MICRO_USD
     )
     table = report.render(rows, ["feature"])
     assert "answer" in table

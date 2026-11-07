@@ -4,19 +4,22 @@ from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any
 
 import pytest
-from langchain_core.messages.ai import UsageMetadata
 
-from app.llm import prices
-from app.llm.prices import EMBEDDING_PRICES, PRICES, Price, Rates
+from app.llm.core.prices import Price, Rates, ceiling, cost
+from app.llm.core.usage import Usage
+from app.llm.langchain.usage import from_langchain
+from app.llm.prices import EMBEDDING_PRICES, PRICES
 
 
-def usage(input_tokens: int, output_tokens: int, **details: Any) -> UsageMetadata:
-    return {
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "total_tokens": input_tokens + output_tokens,
-        "input_token_details": details,  # type: ignore[typeddict-item]
-    }
+def usage(input_tokens: int, output_tokens: int, **details: Any) -> Usage:
+    return from_langchain(
+        {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+            "input_token_details": details,  # type: ignore[typeddict-item]
+        }
+    )
 
 
 CHECKED = "2026-11-06"
@@ -31,7 +34,7 @@ def test_prices_are_whole_micro_usd_per_million_tokens() -> None:
 
 def test_cost_charges_input_and_output_at_their_rates() -> None:
     # 1,000 in at $2/M = 2,000 micro-USD; 500 out at $10/M = 5,000.
-    assert prices.cost(SONNET, usage(1_000, 500)) == 7_000
+    assert cost(SONNET, usage(1_000, 500)) == 7_000
 
 
 def test_cached_tokens_are_part_of_input_and_charged_at_cache_rates() -> None:
@@ -40,7 +43,7 @@ def test_cached_tokens_are_part_of_input_and_charged_at_cache_rates() -> None:
         1_000, 0, cache_read=600, ephemeral_5m_input_tokens=100, ephemeral_1h_input_tokens=100
     )
     # 200 plain x 2 + 600 read x 0.10 + 100 x 2.50 + 100 x 4 = 400 + 60 + 250 + 400
-    assert prices.cost(SONNET, u) == 1_110
+    assert cost(SONNET, u) == 1_110
 
 
 def test_an_undivided_cache_write_is_charged_at_the_longer_lifetime_rate() -> None:
@@ -48,11 +51,11 @@ def test_an_undivided_cache_write_is_charged_at_the_longer_lifetime_rate() -> No
     # OpenAI's pricing page (read 2026-11-06) has a 30m write and a 12h write price. With no way to
     # tell which was used, the dearer one is charged, so cost can only be over-recorded.
     # Sonnet's long write is $4/M: 100 tokens x 4 = 400 micro-USD (not 250 at the short $2.50).
-    assert prices.cost(SONNET, usage(100, 0, cache_creation=100)) == 400
+    assert cost(SONNET, usage(100, 0, cache_creation=100)) == 400
     # gpt-6.1-sol, short context: input $2.00, 12h write $5.00. 1,000 input tokens of which 400
     # are cache writes: 600 plain x 2 + 400 x 5 = 1,200 + 2,000 = 3,200 micro-USD.
     sol = PRICES["openai:gpt-6.1-sol"]
-    assert prices.cost(sol, usage(1_000, 0, cache_creation=400)) == 3_200
+    assert cost(sol, usage(1_000, 0, cache_creation=400)) == 3_200
 
 
 def test_a_split_cache_write_keeps_its_own_lifetime_rates() -> None:
@@ -60,20 +63,20 @@ def test_a_split_cache_write_keeps_its_own_lifetime_rates() -> None:
     # `cache_creation` to 0 whenever the 5m/1h split is present, so nothing is counted twice:
     # 100 x 2.50 (5m) + 50 x 4 (1h) = 250 + 200 = 450.
     u = usage(150, 0, cache_creation=0, ephemeral_5m_input_tokens=100, ephemeral_1h_input_tokens=50)
-    assert prices.cost(SONNET, u) == 450
+    assert cost(SONNET, u) == 450
 
 
 def test_unknown_details_are_charged_as_plain_input() -> None:
-    assert prices.cost(SONNET, usage(1_000, 0, priority_cache_read=1_000)) == 2_000
+    assert cost(SONNET, usage(1_000, 0, priority_cache_read=1_000)) == 2_000
 
 
 def test_cost_rounds_up_to_a_whole_micro_usd() -> None:
-    assert prices.cost(HAIKU, usage(1, 0)) == 1  # 0.1 micro-USD
+    assert cost(HAIKU, usage(1, 0)) == 1  # 0.1 micro-USD
 
 
 def test_long_prompts_use_the_long_prompt_rates() -> None:
-    assert prices.cost(HAIKU, usage(100_000, 0)) == 10_000
-    assert prices.cost(HAIKU, usage(100_001, 0)) == 50_001
+    assert cost(HAIKU, usage(100_000, 0)) == 10_000
+    assert cost(HAIKU, usage(100_001, 0)) == 50_001
 
 
 def test_ceiling_is_never_below_the_cost_of_the_same_tokens() -> None:
@@ -89,9 +92,7 @@ def test_ceiling_is_never_below_the_cost_of_the_same_tokens() -> None:
             usage(1_000, 0, ephemeral_1h_input_tokens=1_000),
             usage(1_000, 0, cache_creation=1_000),
         ):
-            assert prices.ceiling(price, u["input_tokens"], u["output_tokens"]) >= prices.cost(
-                price, u
-            )
+            assert ceiling(price, u.input_tokens, u.output_tokens) >= cost(price, u)
 
 
 @pytest.mark.parametrize("model", sorted(PRICES))
@@ -114,33 +115,33 @@ def test_a_price_without_long_rates_has_one_tier() -> None:
 
 def test_zero_tokens_cost_nothing() -> None:
     # 0 x 0.1 + 0 x 0.5 = 0 exactly: rounding up must not turn nothing into 1.
-    assert prices.cost(HAIKU, usage(0, 0)) == 0
+    assert cost(HAIKU, usage(0, 0)) == 0
 
 
 def test_one_token_costs_a_whole_micro_usd_not_a_fraction() -> None:
     # 1 input token x 0.1 = 0.1 -> rounds up to 1. 1 output token x 0.5 = 0.5 -> 1.
-    assert prices.cost(HAIKU, usage(1, 0)) == 1
-    assert prices.cost(HAIKU, usage(0, 1)) == 1
+    assert cost(HAIKU, usage(1, 0)) == 1
+    assert cost(HAIKU, usage(0, 1)) == 1
 
 
 def test_an_exact_micro_usd_is_not_rounded_up_again() -> None:
     # 10 input tokens x 0.1 = 1.0 exactly -> 1, not 2. 11 x 0.1 = 1.1 -> 2.
-    assert prices.cost(HAIKU, usage(10, 0)) == 1
-    assert prices.cost(HAIKU, usage(11, 0)) == 2
+    assert cost(HAIKU, usage(10, 0)) == 1
+    assert cost(HAIKU, usage(11, 0)) == 2
 
 
 def test_the_long_prompt_threshold_is_exclusive() -> None:
     # Exactly 100,000 input tokens is still the short tier: 100,000 x 0.1 = 10,000.
-    assert prices.cost(HAIKU, usage(100_000, 0)) == 10_000
+    assert cost(HAIKU, usage(100_000, 0)) == 10_000
     # One more switches the WHOLE prompt to the long tier: 100,001 x 0.5 = 50,000.5 -> 50,001.
-    assert prices.cost(HAIKU, usage(100_001, 0)) == 50_001
+    assert cost(HAIKU, usage(100_001, 0)) == 50_001
 
 
 def test_the_long_prompt_tier_prices_output_too() -> None:
     # Short tier, 100,000 in + 3 out: 10,000 + 3 x 0.5 = 10,001.5 -> 10,002.
-    assert prices.cost(HAIKU, usage(100_000, 3)) == 10_002
+    assert cost(HAIKU, usage(100_000, 3)) == 10_002
     # Long tier, 100,001 in + 3 out: 50,000.5 + 3 x 2.5 = 50,008 exactly -> 50,008.
-    assert prices.cost(HAIKU, usage(100_001, 3)) == 50_008
+    assert cost(HAIKU, usage(100_001, 3)) == 50_008
 
 
 def latest_plausible_checked(now: datetime) -> date:

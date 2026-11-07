@@ -124,10 +124,21 @@ PUBLIC_NAMES: dict[str, tuple[str, ...]] = {
 }
 
 
+# Names that moved to the framework-neutral core (#33 T1). Their old path still answers, with a
+# DeprecationWarning, until 0.8.0: test_llm_shims.py checks it gives the same object.
+MOVED: dict[tuple[str, str], str] = {
+    ("app.llm.prices", "cost"): "app.llm.core.prices",
+    ("app.llm.prices", "ceiling"): "app.llm.core.prices",
+    ("app.llm.prices", "token_details"): "app.llm.core.prices",
+}
+
+
 @pytest.mark.parametrize("module", sorted(PUBLIC_NAMES))
 def test_every_public_name_is_importable_from_its_module(module: str) -> None:
     loaded = importlib.import_module(module)
     for name in PUBLIC_NAMES[module]:
+        if (module, name) in MOVED:
+            continue
         assert hasattr(loaded, name), f"{module}.{name}"
         # Resolving the name twice gives the same object (a shim must not rebuild it).
         assert getattr(loaded, name) is getattr(importlib.import_module(module), name)

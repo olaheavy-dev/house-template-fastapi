@@ -11,7 +11,8 @@ from __future__ import annotations
 from langchain_core.messages.ai import UsageMetadata
 from opentelemetry import metrics
 
-from app.llm.prices import token_details
+from app.llm.core.prices import token_details
+from app.llm.langchain.usage import from_langchain
 
 _meter = metrics.get_meter("app.llm")
 calls = _meter.create_counter("llm.calls", unit="{call}", description="Model calls by outcome")
@@ -46,7 +47,7 @@ def record_call(
         latency.record(latency_ms, {**attributes, "outcome": status})
     if usage:
         counts = {"input": usage["input_tokens"], "output": usage["output_tokens"]}
-        details = token_details(usage)
+        details = token_details(from_langchain(usage))
         counts |= {
             "reasoning": details["reasoning_tokens"] or 0,
             "cache_read": details["cache_read_tokens"] or 0,
