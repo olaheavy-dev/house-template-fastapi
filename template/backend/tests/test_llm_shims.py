@@ -97,6 +97,6 @@ def test_the_template_never_uses_an_old_path() -> None:
 def test_the_old_path_check_finds_a_use(tmp_path: Path) -> None:
     sample = tmp_path / "sample.py"
     sample.write_text(
-        "from app.llm import prices\nfrom app.llm.prices import ceiling\nprices.cost\n"
+        "from app.llm import prices\nfrom app.llm.gateway import key_setting\nprices.cost\n"
     )
-    assert old_path_uses(sample) == ["from app.llm.prices import ceiling", "prices.cost"]
+    assert old_path_uses(sample) == ["from app.llm.gateway import key_setting", "prices.cost"]

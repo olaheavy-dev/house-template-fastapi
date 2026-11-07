@@ -79,6 +79,7 @@ INTENDED: dict[str, str] = {
     "backend/tests/evals/conftest.py": "price arithmetic comes from app/llm/core/prices.py (#33)",
     "backend/tests/test_llm_shims.py": "new: the old import paths still answer, with a warning, and the template never uses them (#33)",
     "backend/tests/test_llm_gateway.py": "the cost check goes through app/llm/core/prices.py and from_langchain (#33)",
+    "backend/src/app/llm/gateway.py": "key_setting and the price lookups come from app/llm/core/registry.py; the old names warn until 0.8.0 (#33)",
     "backend/src/app/llm/core/__init__.py": "new: the framework-neutral core (#33)",
     "backend/src/app/llm/core/usage.py": "new: the neutral Usage type (#33)",
     "backend/src/app/llm/core/prices.py": "new: the price arithmetic moved out of app/llm/prices.py (#33)",

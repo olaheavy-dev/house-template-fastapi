@@ -130,6 +130,8 @@ MOVED: dict[tuple[str, str], str] = {
     ("app.llm.prices", "cost"): "app.llm.core.prices",
     ("app.llm.prices", "ceiling"): "app.llm.core.prices",
     ("app.llm.prices", "token_details"): "app.llm.core.prices",
+    ("app.llm.gateway", "KEY_SETTINGS"): "app.llm.core.registry",
+    ("app.llm.gateway", "key_setting"): "app.llm.core.registry",
 }
 
 
