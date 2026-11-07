@@ -67,6 +67,15 @@ PUBLIC_NAMES: dict[str, tuple[str, ...]] = {
         "step_limit_response",
         "install_failure_handlers",
     ),
+    "app.llm.langchain.errors": (
+        "KINDS",
+        "OUTCOMES",
+        "kind_of",
+        "outcome_for",
+        "retry_after_of",
+        "model_error",
+        "install_model_error_handlers",
+    ),
     "app.llm.prices": (
         "MICRO_USD",
         "Rates",
