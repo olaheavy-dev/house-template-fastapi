@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.7.0](https://github.com/olaheavy-dev/house-template-fastapi/compare/v0.6.1...v0.7.0) (2026-11-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* alembic, sqlalchemy, psycopg, pgvector and the LangChain/LangGraph/LangSmith packages moved from the main dependencies into the `db` and `langchain` extras; a plain `uv sync` or `pip install .` now needs `--extra db --extra langchain` (the make targets and the image already install them). Projects update with `copier update --trust --defaults` and then run `make lock`.
+* boto3 is now an optional extra named `storage`. Projects that install dependencies without the Makefile or the Dockerfile (for example a plain `uv sync`) lose boto3: run `uv sync --locked --extra storage`, or `make install` / `make image`, which pass the extra. After `copier update`, run `make lock` then `make install`. Turning storage off with `copier update --trust --defaults -d storage=false` deletes the template's storage files even if you edited
+* projects made from v0.6.1 or earlier cannot `copier update`. Follow the one-time `copier recopy` steps in the README Upgrading section (commit first, review `git diff`, then update normally with `copier update --trust -a .copier-answers.fastapi.yml`).
+* no default models or prices; every price records its date and source ([#42](https://github.com/olaheavy-dev/house-template-fastapi/issues/42))
+
+### Features
+
+* make object storage optional ([#54](https://github.com/olaheavy-dev/house-template-fastapi/issues/54)) ([a8837db](https://github.com/olaheavy-dev/house-template-fastapi/commit/a8837db1475957c0a64248be2100419f5e4da9eb))
+* optional database and migrations ([#29](https://github.com/olaheavy-dev/house-template-fastapi/issues/29)) ([#60](https://github.com/olaheavy-dev/house-template-fastapi/issues/60)) ([6f346ba](https://github.com/olaheavy-dev/house-template-fastapi/commit/6f346ba7e90accf9a31fb45a459aaf1e626c0c3a))
+
+
+### Bug Fixes
+
+* copier update works for projects made from this layer ([#53](https://github.com/olaheavy-dev/house-template-fastapi/issues/53)) ([91943a4](https://github.com/olaheavy-dev/house-template-fastapi/commit/91943a4f696d414abb721066926bf1b926cbaad8))
+* **deps:** bump the backend-minor-and-patch group across 1 directory with 10 updates ([#57](https://github.com/olaheavy-dev/house-template-fastapi/issues/57)) ([4a684fd](https://github.com/olaheavy-dev/house-template-fastapi/commit/4a684fdc823d8a9d43a2a01da8634fb16ce5d08f))
+* no default models or prices; every price records its date and source ([#42](https://github.com/olaheavy-dev/house-template-fastapi/issues/42)) ([d67ca38](https://github.com/olaheavy-dev/house-template-fastapi/commit/d67ca3807ae74a78cc9728bf20da829be035117c))
+* recording checks the keys of both pinned models; follow-ups from the no-default-models review ([#52](https://github.com/olaheavy-dev/house-template-fastapi/issues/52)) ([b34c5c6](https://github.com/olaheavy-dev/house-template-fastapi/commit/b34c5c6a09b45e91a0c6ff835f1edc1359b912f1))
+
 ## [0.6.1](https://github.com/olaheavy-dev/house-template-fastapi/compare/v0.6.0...v0.6.1) (2026-10-27)
 
 
