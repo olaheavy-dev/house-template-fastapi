@@ -71,8 +71,8 @@ INTENDED: dict[str, str] = {
     "backend/tests/test_llm_cost_pins.py": "characterises the cost arithmetic before the framework-neutral split (#33)",
     "backend/tests/test_llm_surface.py": "characterises the gateway's import surface, failure mapping, metrics and prompts before the framework-neutral split (#33); lists the names of app/llm/core/errors.py and app/llm/langchain/errors.py (#33)",
     "backend/tests/test_llm_ledger.py": "characterises the budget ledger, reservation and spend report before the framework-neutral split (#33)",
-    "backend/src/app/llm/budget.py": "prices the settled call with the neutral Usage (#33)",
-    "backend/src/app/llm/embeddings.py": "prices embeddings with the neutral Usage (#33)",
+    "backend/src/app/llm/budget.py": "prices the settled call with the neutral Usage (#33); a failed call's refund is decided by its core failure kind (#33)",
+    "backend/src/app/llm/embeddings.py": "prices embeddings with the neutral Usage (#33); OpenAI errors classified as core failure kinds (#33)",
     "backend/src/app/llm/metrics.py": "token_details comes from app/llm/core/prices.py (#33)",
     "backend/src/app/llm/report.py": "price arithmetic comes from app/llm/core/prices.py (#33)",
         "backend/tests/evals/conftest.py": "key_setting comes from app/llm/core/registry.py (#33)",
@@ -95,6 +95,7 @@ INTENDED: dict[str, str] = {
     "backend/src/app/main.py": "installs the core's failure handlers beside LangChain's (#33)",
     "backend/src/app/llm/langchain/errors.py": "new: LangChain's model errors as core failure kinds, and their handlers (#33)",
     "backend/tests/test_llm_langchain_errors.py": "new: tests of LangChain's error classification (#33)",
+    "backend/tests/test_llm_embeddings.py": "comment names app/llm/langchain/errors.py (#33)",
     "backend/tests/recording.py": "recording key check, importable by its test (#41); key_setting from app/llm/core/registry.py (#33)",
     "backend/tests/test_recording_keys.py": "tests for the recording key check (#41)",
 }
