@@ -473,6 +473,15 @@ def test_a_failed_call_without_cost_or_usage_records_only_the_count_and_latency(
     assert [name for name, _, _ in collect(local_metrics, "pin-model-nolatency")] == ["llm.calls"]
 
 
+def test_an_empty_usage_dict_records_no_token_points(local_metrics: InMemoryMetricReader) -> None:
+    # Pins metrics.record_call's `if usage` guard: {} means nothing was reported.
+    labels = metrics.labels("pin-model-emptyusage")
+    empty: Any = {}
+    metrics.record_call(labels, "settled", None, empty, None)
+    found = collect(local_metrics, "pin-model-emptyusage")
+    assert [name for name, _, _ in found] == ["llm.calls"]
+
+
 def test_zero_token_kinds_are_not_recorded_and_a_refusal_counts_as_refused(
     local_metrics: InMemoryMetricReader,
 ) -> None:

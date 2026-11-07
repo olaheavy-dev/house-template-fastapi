@@ -14,6 +14,8 @@ import pytest
 
 from tests.test_llm_surface import MOVED
 
+# The moved names whose signature changed too (they take the neutral Usage).
+TAKES_USAGE = {("app.llm.prices", "cost"), ("app.llm.prices", "token_details")}
 BACKEND = Path(__file__).resolve().parents[1]
 
 
@@ -22,6 +24,14 @@ def test_old_import_paths_still_work(old: str, name: str) -> None:
     module = importlib.import_module(old)
     new = importlib.import_module(MOVED[(old, name)])
     message = rf"^{old}\.{name} moved to {MOVED[(old, name)]}\.{name}: import it from there"
+    if (old, name) in TAKES_USAGE:
+        message += (
+            r" \(the old name goes in 0\.8\.0\) and now takes app\.llm\.core\.usage\.Usage: "
+            r"convert LangChain usage with app\.llm\.langchain\.usage\.from_langchain "
+            r"\(pass None, not \{\}, for no usage\)$"
+        )
+    else:
+        message += r" \(the old name goes in 0\.8\.0\)$"
     with pytest.warns(DeprecationWarning, match=message) as caught:
         value = getattr(module, name)
     assert value is getattr(new, name)
@@ -32,9 +42,10 @@ def test_old_import_paths_still_work(old: str, name: str) -> None:
 def test_a_from_import_of_an_old_name_warns_too() -> None:
     from app.llm.core.prices import cost as new
 
-    with pytest.warns(DeprecationWarning, match="app.llm.prices.cost moved"):
+    with pytest.warns(DeprecationWarning, match="app.llm.prices.cost moved") as caught:
         from app.llm.prices import cost
     assert cost is new
+    assert [w.filename for w in caught] == [__file__]
 
 
 def test_the_price_table_module_imports_without_a_warning() -> None:
@@ -59,7 +70,9 @@ def test_an_unknown_name_is_still_an_attribute_error() -> None:
 
 
 def old_path_uses(path: Path) -> list[str]:
-    """`from app.llm.prices import cost`, or `prices.cost` where `prices` is the old module."""
+    """`from app.llm.prices import cost`, `prices.cost` where `prices` is the old module,
+    `app.llm.prices.cost` after `import app.llm.prices`, and `getattr(prices, "cost")`. A name
+    built at run time (`getattr(prices, name)`) is beyond a static check; the warning catches it."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
     bound: dict[str, str] = {}  # local name -> old module
     hits = []
@@ -75,11 +88,34 @@ def old_path_uses(path: Path) -> list[str]:
             for alias in node.names:
                 if alias.asname and any(old == alias.name for old, _ in MOVED):
                     bound[alias.asname] = alias.name
+    olds = {old for old, _ in MOVED}
+
+    def module_of(node: ast.expr) -> str | None:
+        """The old module an expression names: a bound local (`prices`) or a dotted path
+        (`app.llm.prices`, after `import app.llm.prices`)."""
+        parts = []
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        if not isinstance(node, ast.Name):
+            return None
+        dotted = ".".join([node.id, *reversed(parts)])
+        return bound.get(dotted) or (dotted if dotted in olds else None)
+
     for node in ast.walk(tree):
-        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
-            old = bound.get(node.value.id)
-            if old and (old, node.attr) in MOVED:
-                hits.append(f"{node.value.id}.{node.attr}")
+        if isinstance(node, ast.Attribute) and (old := module_of(node.value)):
+            if (old, node.attr) in MOVED:
+                hits.append(f"{ast.unparse(node.value)}.{node.attr}")
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and (old := module_of(node.args[0]))
+            and (old, node.args[1].value) in MOVED
+        ):
+            hits.append(f"getattr({ast.unparse(node.args[0])}, {node.args[1].value!r})")
     return hits
 
 
@@ -97,6 +133,21 @@ def test_the_template_never_uses_an_old_path() -> None:
 def test_the_old_path_check_finds_a_use(tmp_path: Path) -> None:
     sample = tmp_path / "sample.py"
     sample.write_text(
-        "from app.llm import prices\nfrom app.llm.gateway import key_setting\nprices.cost\n"
+        "import app.llm.prices\n"
+        "from app.llm import prices\n"
+        "from app.llm.gateway import key_setting\n"
+        "prices.cost\n"
+        "app.llm.prices.ceiling\n"
+        "getattr(prices, 'token_details')\n"
+        "getattr(app.llm.prices, 'cost')\n"
+        "prices.PRICES\n"
     )
-    assert old_path_uses(sample) == ["from app.llm.gateway import key_setting", "prices.cost"]
+    assert sorted(old_path_uses(sample)) == sorted(
+        [
+            "from app.llm.gateway import key_setting",
+            "prices.cost",
+            "app.llm.prices.ceiling",
+            "getattr(prices, 'token_details')",
+            "getattr(app.llm.prices, 'cost')",
+        ]
+    )

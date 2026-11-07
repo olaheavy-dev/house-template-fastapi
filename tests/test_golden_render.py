@@ -75,12 +75,12 @@ INTENDED: dict[str, str] = {
     "backend/src/app/llm/embeddings.py": "prices embeddings with the neutral Usage (#33)",
     "backend/src/app/llm/metrics.py": "token_details comes from app/llm/core/prices.py (#33)",
     "backend/src/app/llm/report.py": "price arithmetic comes from app/llm/core/prices.py (#33)",
-    "backend/tests/recording.py": "price arithmetic comes from app/llm/core/prices.py (#33)",
-    "backend/tests/evals/conftest.py": "price arithmetic comes from app/llm/core/prices.py (#33)",
+        "backend/tests/evals/conftest.py": "key_setting comes from app/llm/core/registry.py (#33)",
     "backend/tests/test_llm_shims.py": "new: the old import paths still answer, with a warning, and the template never uses them (#33)",
     "backend/tests/test_llm_gateway.py": "the cost check goes through app/llm/core/prices.py and from_langchain (#33)",
     "backend/src/app/llm/gateway.py": "key_setting and the price lookups come from app/llm/core/registry.py; the old names warn until 0.8.0 (#33)",
     "backend/llm-contracts.toml": "new: import contract keeping app/llm/core free of model frameworks, only with the database (#33)",
+    "backend/src/app/llm/__init__.py": "docstring says prices.py holds the price tables, core/ prices calls and langchain/ converts (#33)",
     "backend/src/app/llm/core/__init__.py": "new: the framework-neutral core (#33)",
     "backend/src/app/llm/core/usage.py": "new: the neutral Usage type (#33)",
     "backend/src/app/llm/core/prices.py": "new: the price arithmetic moved out of app/llm/prices.py (#33)",
@@ -89,7 +89,7 @@ INTENDED: dict[str, str] = {
     "backend/src/app/llm/langchain/usage.py": "new: from_langchain converts LangChain usage to the neutral Usage (#33)",
     "backend/tests/test_llm_core.py": "new: tests of the neutral core (#33)",
     "backend/tests/test_llm_usage.py": "new: tests of from_langchain (#33)",
-    "backend/tests/recording.py": "recording key check, importable by its test (#41)",
+    "backend/tests/recording.py": "recording key check, importable by its test (#41); key_setting from app/llm/core/registry.py (#33)",
     "backend/tests/test_recording_keys.py": "tests for the recording key check (#41)",
 }
 

@@ -93,9 +93,15 @@ if not TYPE_CHECKING:
 
     def __getattr__(name: str) -> object:
         if name in _MOVED:
+            takes_usage = (
+                " and now takes app.llm.core.usage.Usage: convert LangChain usage with "
+                "app.llm.langchain.usage.from_langchain (pass None, not {}, for no usage)"
+                if name in {"cost", "token_details"}
+                else ""
+            )
             warnings.warn(
                 f"app.llm.prices.{name} moved to app.llm.core.prices.{name}: import it from there "
-                "(the old name goes in 0.8.0)",
+                f"(the old name goes in 0.8.0){takes_usage}",
                 DeprecationWarning,
                 stacklevel=2,
             )

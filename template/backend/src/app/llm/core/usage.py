@@ -7,8 +7,10 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Usage:
-    """Token counts as the provider reported them. input_tokens includes every cached token (read
-    or written), and output_tokens includes reasoning tokens, as both providers count them.
+    """Token counts for one call. input_tokens is the TOTAL prompt tokens, cached ones included
+    (OpenAI's prompt_tokens; for Anthropic, input_tokens + cache_read_input_tokens +
+    cache_creation_input_tokens, which langchain-anthropic already sums). An adapter must convert
+    to this. output_tokens includes reasoning tokens.
 
     The details are 0 when the provider reported zero AND when it reported nothing: the budget has
     always recorded an unreported detail as 0, never as unknown, and llm_call keeps that meaning.

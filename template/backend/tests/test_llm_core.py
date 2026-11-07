@@ -31,6 +31,8 @@ FRAMEWORKS = frozenset(
         "langchain_openai",
         "langchain_anthropic",
         "langgraph",
+        "langgraph_sdk",
+        "langchain_protocol",
         "langsmith",
         "openai",
         "anthropic",

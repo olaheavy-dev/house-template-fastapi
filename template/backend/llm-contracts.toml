@@ -22,7 +22,9 @@ forbidden_modules = [
     "langchain_anthropic",
     "langchain_core",
     "langchain_openai",
+    "langchain_protocol",
     "langgraph",
+    "langgraph_sdk",
     "langsmith",
     "openai",
 ]
