@@ -10,26 +10,33 @@ requires-python = ">=3.12"
 dependencies = [
     # FastAPI 0.x minors can break, so stay on one minor and move deliberately.
     "fastapi[standard-no-fastapi-cloud-cli]>=0.162.0,<0.163",
+    "pydantic-settings>=2.16.1",
+    "structlog>=26.1.0",
+]
+
+[project.optional-dependencies]
+# Optional parts, installed by name (`uv sync --extra db`). The Makefile and the image install the
+# ones the project answered for; all of them stay locked in uv.lock. The `database` answer installs
+# `db` and `langchain` together: the model gateway keeps its budget and agent checkpoints in
+# PostgreSQL, so `langchain` needs a database at runtime. #30 decides how a separate `llm` answer
+# ties to the database.
+db = [
     "alembic>=1.20.1",
+    "pgvector>=0.5.1",
+    "psycopg[binary,pool]>=3.3.6",
+    "psycopg-pool>=3.3.3",
+    "sqlalchemy[asyncio]>=2.1.6",
+]
+langchain = [
     # LangChain 1.x; the provider packages are both installed so LLM_MODEL alone picks one.
     "langchain>=1.4.7",
     "langchain-anthropic>=1.7.6",
     "langchain-core>=1.7.0",
     "langchain-openai>=1.7.2",
-    "langsmith>=0.14.12",
-    "pgvector>=0.5.1",
-    "psycopg[binary,pool]>=3.3.6",
-    "pydantic-settings>=2.16.1",
-    "sqlalchemy[asyncio]>=2.1.6",
-    "structlog>=26.1.0",
     "langgraph>=1.2.17",
     "langgraph-checkpoint-postgres>=3.2.0",
-    "psycopg-pool>=3.3.3",
+    "langsmith>=0.14.12",
 ]
-
-[project.optional-dependencies]
-# Optional parts, installed by name (`uv sync --extra storage`). The Makefile and the image install
-# the ones the project answered for; all of them stay locked in uv.lock.
 storage = [
     "boto3>=1.43.118",
 ]
@@ -118,3 +125,5 @@ forbidden_modules = ["openai", "anthropic", "langchain", "langchain_openai", "la
 # The embeddings module calls OpenAI's SDK itself: LangChain's embeddings drop the usage the budget
 # settles from.
 ignore_imports = ["app.llm.** -> langchain", "app.llm.embeddings -> openai"]
+# The gateway is optional (#29): without the database it is not there, and the ignores match nothing.
+unmatched_ignore_imports_alerting = "none"

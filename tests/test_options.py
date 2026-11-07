@@ -269,32 +269,88 @@ def test_no_part_left_behind_check_catches_a_leftover(render):
     assert ".claude/rules/fastapi.md" in hits and "backend/compose.yaml" in hits
 
 
-@ON_OFF
-def test_the_image_installs_the_answered_extras(render, storage):
-    project = render(storage=storage)
+def extras_flags(database: bool, storage: bool) -> str:
+    return " ".join(
+        (["--extra db", "--extra langchain"] if database else []) + (["--extra storage"] if storage else []))
+
+
+@ANSWERS
+def test_the_image_installs_the_answered_extras(render, database, storage):
+    project = render(database=database, storage=storage)
+    flags = extras_flags(database, storage)
     dockerfile = (project / "backend/Dockerfile").read_text()
     syncs = [ln for ln in dockerfile.splitlines() if "uv sync" in ln]
     assert len(syncs) == 2
-    assert all(("--extra storage" in ln) is storage for ln in syncs), syncs
+    for ln in syncs:
+        assert ln.endswith(" ".join(["--no-editable", flags]).strip()), ln
     mk = (project / "mk/fastapi.mk").read_text()
     runs = [ln for ln in mk.splitlines() if "uv --directory backend" in ln and " sync " in ln
             or ln.startswith(("BACKEND :=", "LIVE :="))]
     # Every uv call that installs or runs the project goes through EXTRAS, set from the answers.
-    assert len(runs) == 3 and all("$(EXTRAS)" in ln for ln in runs), runs
+    # LIVE (recording and evals) exists only with the database.
+    assert len(runs) == (3 if database else 2) and all("$(EXTRAS)" in ln for ln in runs), runs
+    assert ("LIVE :=" in mk) is database
     extras = re.search(r"^EXTRAS :=(.*)$", mk, flags=re.MULTILINE)
-    assert extras and (extras.group(1).strip() == "--extra storage" if storage
-                       else extras.group(1).strip() == "")
+    assert extras and extras.group(1).strip() == flags
     if shutil.which("make"):
         # Make itself expands the line (a missing space once glued `--locked--extra`).
         dry = subprocess.run(["make", "-n", "-f", "mk/fastapi.mk", "install-fastapi", "dev"],
                              cwd=project, capture_output=True, text=True)
         assert dry.returncode == 0, dry.stderr
-        want = "--locked --extra storage" if storage else "--locked"
+        want = " ".join(["--locked", flags]).strip()
         lines = [ln for ln in dry.stdout.splitlines() if ln.startswith("uv ")]
         assert len(lines) == 2 and all(want in ln for ln in lines), lines
-        assert all(("--extra" in ln) is storage for ln in lines), lines
+        assert all(("--extra" in ln) is bool(flags) for ln in lines), lines
     # `make lock` locks every extra whatever the answers (the lockfile is not per answer).
     assert "uv --directory backend lock\n" in mk
+
+
+ALWAYS_TARGETS = {"install-fastapi", "check-fastapi", "check-fast-fastapi", "lock", "dev", "test",
+                  "image", "up"}
+DATABASE_TARGETS = {"db-up", "migrate", "migration", "llm-report", "record-llm", "eval"}
+
+
+@ANSWERS
+def test_make_targets_follow_the_answers(render, database, storage):
+    mk = (render(database=database, storage=storage) / "mk/fastapi.mk").read_text()
+    want = (ALWAYS_TARGETS | (DATABASE_TARGETS if database else set())
+            | ({"storage-up"} if storage else set()))
+    defined = set(re.findall(r"^([a-z][a-z0-9-]*):", mk, flags=re.MULTILINE))
+    phony = set(re.search(r"^\.PHONY: (.*)$", mk, flags=re.MULTILINE).group(1).split())
+    assert defined == want
+    assert phony == want
+    up_help = re.search(r"^up:.*## (.*)$", mk, flags=re.MULTILINE).group(1)
+    assert ("database" in up_help) is database
+    # mypy also reads migrations/, which exists only with the database (a missing path is an error).
+    mypy = [ln.strip() for ln in mk.splitlines() if ln.strip().endswith(" mypy src tests")
+            or ln.strip().endswith(" mypy src tests migrations")]
+    assert len(mypy) == 2
+    assert all(ln.endswith("migrations") is database for ln in mypy), mypy
+    if database:
+        assert "comma := ," in mk
+    else:
+        assert not any(word in mk for word in ("comma", "record-llm", "LLM_", "alembic"))
+
+
+def test_dependencies_live_in_the_answered_extras():
+    # The parts that can be switched off are extras; the main dependencies are only what every
+    # project needs. The lists below are the ones that moved, not new packages (#29).
+    pyproject = read_toml(TEMPLATE / "backend/pyproject.toml")
+    def names(requirements):
+        return {re.split(r"[\[<>=]", r)[0] for r in requirements}
+    assert names(pyproject["project"]["dependencies"]) == {"fastapi", "pydantic-settings", "structlog"}
+    extras = pyproject["project"]["optional-dependencies"]
+    assert set(extras) == {"db", "langchain", "storage"}
+    assert names(extras["db"]) == {"alembic", "sqlalchemy", "psycopg", "psycopg-pool", "pgvector"}
+    assert names(extras["langchain"]) == {
+        "langgraph-checkpoint-postgres", "langchain", "langchain-core", "langchain-openai",
+        "langchain-anthropic", "langgraph", "langsmith"}
+    assert names(extras["storage"]) == {"boto3"}
+    dev = names(pyproject["dependency-groups"]["dev"])
+    assert {"testcontainers", "types-boto3", "langsmith", "vcrpy", "pytest-recording"} <= dev
+    # The import contract names the gateway, which a project without the database lacks.
+    contract = pyproject["tool"]["importlinter"]["contracts"][0]
+    assert contract["unmatched_ignore_imports_alerting"] == "none"
 
 
 def compose_config(project: Path) -> dict:
@@ -351,10 +407,12 @@ def test_env_example_template_is_tracked_by_git_and_not_excluded():
     assert ".env.*" in config["_exclude"] and "!.env.example" in config["_exclude"]
 
 
-@ON_OFF
-def test_make_targets_are_separated_by_one_blank_line(render, storage):
+@ANSWERS
+def test_make_targets_are_separated_by_one_blank_line(render, database, storage):
     # `{%- if %}` once ate the blank line before storage-up; the default output must read as before.
-    mk = (render(storage=storage) / "mk/fastapi.mk").read_text()
+    mk = (render(database=database, storage=storage) / "mk/fastapi.mk").read_text()
     assert "\n\n\n" not in mk
-    assert "\n\nllm-report:" in mk
+    assert mk.endswith("\n") and not mk.endswith("\n\n")
+    assert ("\n\nllm-report:" in mk) is database
     assert ("\n\nstorage-up:" in mk) is storage
+    assert ("\n\nimage:" in mk)

@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -151,8 +151,20 @@ name = "backend"
 version = "0.0.0"
 source = { editable = "." }
 dependencies = [
-    { name = "alembic" },
     { name = "fastapi", extra = ["standard-no-fastapi-cloud-cli"] },
+    { name = "pydantic-settings" },
+    { name = "structlog" },
+]
+
+[package.optional-dependencies]
+db = [
+    { name = "alembic" },
+    { name = "pgvector" },
+    { name = "psycopg", extra = ["binary", "pool"] },
+    { name = "psycopg-pool" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+]
+langchain = [
     { name = "langchain" },
     { name = "langchain-anthropic" },
     { name = "langchain-core" },
@@ -160,15 +172,7 @@ dependencies = [
     { name = "langgraph" },
     { name = "langgraph-checkpoint-postgres" },
     { name = "langsmith" },
-    { name = "pgvector" },
-    { name = "psycopg", extra = ["binary", "pool"] },
-    { name = "psycopg-pool" },
-    { name = "pydantic-settings" },
-    { name = "sqlalchemy", extra = ["asyncio"] },
-    { name = "structlog" },
 ]
-
-[package.optional-dependencies]
 storage = [
     { name = "boto3" },
 ]
@@ -191,24 +195,24 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "alembic", specifier = ">=1.20.1" },
+    { name = "alembic", marker = "extra == 'db'", specifier = ">=1.20.1" },
     { name = "boto3", marker = "extra == 'storage'", specifier = ">=1.43.118" },
     { name = "fastapi", extras = ["standard-no-fastapi-cloud-cli"], specifier = ">=0.162.0,<0.163" },
-    { name = "langchain", specifier = ">=1.4.7" },
-    { name = "langchain-anthropic", specifier = ">=1.7.6" },
-    { name = "langchain-core", specifier = ">=1.7.0" },
-    { name = "langchain-openai", specifier = ">=1.7.2" },
-    { name = "langgraph", specifier = ">=1.2.17" },
-    { name = "langgraph-checkpoint-postgres", specifier = ">=3.2.0" },
-    { name = "langsmith", specifier = ">=0.14.12" },
-    { name = "pgvector", specifier = ">=0.5.1" },
-    { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.3.6" },
-    { name = "psycopg-pool", specifier = ">=3.3.3" },
+    { name = "langchain", marker = "extra == 'langchain'", specifier = ">=1.4.7" },
+    { name = "langchain-anthropic", marker = "extra == 'langchain'", specifier = ">=1.7.6" },
+    { name = "langchain-core", marker = "extra == 'langchain'", specifier = ">=1.7.0" },
+    { name = "langchain-openai", marker = "extra == 'langchain'", specifier = ">=1.7.2" },
+    { name = "langgraph", marker = "extra == 'langchain'", specifier = ">=1.2.17" },
+    { name = "langgraph-checkpoint-postgres", marker = "extra == 'langchain'", specifier = ">=3.2.0" },
+    { name = "langsmith", marker = "extra == 'langchain'", specifier = ">=0.14.12" },
+    { name = "pgvector", marker = "extra == 'db'", specifier = ">=0.5.1" },
+    { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'db'", specifier = ">=3.3.6" },
+    { name = "psycopg-pool", marker = "extra == 'db'", specifier = ">=3.3.3" },
     { name = "pydantic-settings", specifier = ">=2.16.1" },
-    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.1.6" },
+    { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'db'", specifier = ">=2.1.6" },
     { name = "structlog", specifier = ">=26.1.0" },
 ]
-provides-extras = ["storage"]
+provides-extras = ["db", "langchain", "storage"]
 
 [package.metadata.requires-dev]
 dev = [
