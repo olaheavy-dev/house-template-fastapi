@@ -12,13 +12,18 @@ import uuid
 from collections.abc import Callable
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
 
+import httpx2
+import openai
 import pytest
 from langchain_core.exceptions import (
     ContextOverflowError,
     ModelAPIError,
     ModelAuthenticationError,
+    ModelConnectionError,
+    ModelError,
     ModelInvalidRequestError,
     ModelNotFoundError,
     ModelPermissionDeniedError,
@@ -36,6 +41,7 @@ from app.llm import prices, report
 from app.llm.budget import (
     IMAGE_TOKENS,
     INPUT_MARGIN_TOKENS,
+    BudgetExhausted,
     BudgetGuard,
     LlmCall,
     LlmSpendDay,
@@ -45,6 +51,7 @@ from app.llm.budget import (
     reserve_for,
     settle,
 )
+from app.llm.embeddings import GatewayEmbeddings
 from app.llm.gateway import Gateway
 from app.settings import Settings
 from tests.models import CHAT_MODEL, EMBEDDING_MODEL
@@ -52,7 +59,13 @@ from tests.models import CHAT_MODEL, EMBEDDING_MODEL
 pytestmark = pytest.mark.anyio
 
 MODEL = "anthropic:claude-sonnet-5-5"
-PRICE = prices.PRICES[MODEL]
+# Built here, so a project editing app/llm/prices.py breaks nothing: Sonnet-shaped rates in
+# micro-USD per million tokens (input 2, output 10, cache read 0.1, write 5m 2.5, write 1h 4).
+PRICE = prices.Price(
+    prices.Rates(2_000_000, 10_000_000, 100_000, 2_500_000, 4_000_000),
+    checked="2026-11-06",
+    source="https://example.com/pricing",
+)
 DAY = date(2026, 1, 4)
 HELLO: list[BaseMessage] = [HumanMessage("hello")]
 
@@ -341,6 +354,9 @@ async def test_several_message_batches_are_reserved_as_one_sum(
 
 
 def test_the_input_bound_is_the_utf8_bytes_plus_images_plus_the_margin() -> None:
+    # No messages and no params serialise to the 8 characters "[[], {}]" (8 bytes), plus the
+    # 1,024 margin = 1,032.
+    assert input_bound([], {}) == len("[[], {}]") + 1_024 == 1_032
     plain = input_bound([HumanMessage("e" * 100)], {})
     # "é" is two UTF-8 bytes, so 100 of them are exactly 100 bytes more than 100 "e": the bound
     # counts bytes, not characters.
@@ -397,14 +413,19 @@ async def test_every_other_failure_settles_failed_at_the_reservation(
 async def test_a_rejection_after_streaming_started_keeps_the_reservation(
     guard: Callable[..., BudgetGuard], db_session: AsyncSession
 ) -> None:
-    g, run = guard(), uuid.uuid4()
-    await g.on_chat_model_start({}, [HELLO], run_id=run)
-    await g.on_llm_new_token("Fo", run_id=run)
-    await g.on_llm_error(ModelRateLimitError("x"), run_id=run)
-    [row] = await rows(db_session)
-    assert row.cost_micro_usd == row.reserved_micro_usd
-    # The streamed mark is cleared once the call ends: a later call under a new id is unaffected.
-    assert run not in g._streamed
+    g, streamed, plain = guard(), uuid.uuid4(), uuid.uuid4()
+    await g.on_chat_model_start({}, [HELLO], run_id=streamed)
+    await g.on_llm_new_token("Fo", run_id=streamed)
+    await g.on_llm_error(ModelRateLimitError("x"), run_id=streamed)
+    # The streaming mark belongs to its own call: the same guard, a different call, the same
+    # rejection and no tokens streamed settles at zero. (The same run id cannot be used twice:
+    # the call row's primary key is the run id.)
+    await g.on_chat_model_start({}, [HELLO], run_id=plain)
+    await g.on_llm_error(ModelRateLimitError("x"), run_id=plain)
+    by_id = {r.id: r for r in await rows(db_session)}
+    assert by_id[streamed].cost_micro_usd == by_id[streamed].reserved_micro_usd > 0
+    assert by_id[plain].cost_micro_usd == 0
+    assert await total(db_session) == by_id[streamed].reserved_micro_usd
 
 
 async def test_cost_from_cache_and_reasoning_details_is_summed_then_rounded_up_once(
@@ -486,8 +507,6 @@ async def test_a_settlement_that_fails_does_not_fail_the_call_and_leaves_the_res
 async def test_a_refused_reservation_logs_which_scope_refused(
     guard: Callable[..., BudgetGuard],
 ) -> None:
-    from app.llm.budget import BudgetExhausted
-
     with capture_logs() as logs, pytest.raises(BudgetExhausted):
         await guard(cap=1).on_chat_model_start({}, [HELLO], run_id=uuid.uuid4())
     [refusal] = [log for log in logs if log["event"] == "llm_budget_exhausted"]
@@ -564,3 +583,92 @@ async def test_the_report_labels_a_missing_prompt_none_and_honours_since(
     later = await report.spend(db_session, since=date(2026, 4, 2), by=["prompt"])
     assert [(r.group, r.calls) for r in later] == [(("ask",), 1)]
     assert await report.spend(db_session, since=date(2026, 4, 3), by=["prompt"]) == []
+
+
+# --- embeddings: provider errors through the public call --------------------------------
+
+
+class FailingEmbeddingsApi:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    async def create(self, **kwargs: Any) -> Any:
+        raise self.error
+
+
+def provider_errors() -> list[tuple[Exception, type[ModelError], bool]]:
+    """(what OpenAI's SDK raises, what the gateway raises, whether OpenAI rejected it unbilled)."""
+    request = httpx2.Request("POST", "http://x")
+
+    def status(code: int) -> Any:
+        return httpx2.Response(code, request=request)
+
+    return [
+        (
+            openai.AuthenticationError("S", response=status(401), body=None),
+            ModelAuthenticationError,
+            True,
+        ),
+        (
+            openai.PermissionDeniedError("S", response=status(403), body=None),
+            ModelPermissionDeniedError,
+            True,
+        ),
+        (openai.NotFoundError("S", response=status(404), body=None), ModelNotFoundError, True),
+        (openai.RateLimitError("S", response=status(429), body=None), ModelRateLimitError, True),
+        (
+            openai.BadRequestError("S", response=status(400), body=None),
+            ModelInvalidRequestError,
+            True,
+        ),
+        (openai.APITimeoutError(request=request), ModelTimeoutError, False),
+        (openai.APIConnectionError(request=request), ModelConnectionError, False),
+        (openai.InternalServerError("S", response=status(500), body=None), ModelAPIError, False),
+        (openai.APIError("S", request=request, body=None), ModelAPIError, False),
+    ]
+
+
+@pytest.mark.parametrize("case", range(9))
+async def test_an_openai_embedding_error_becomes_the_model_error_family_and_settles_by_kind(
+    sessions: async_sessionmaker[AsyncSession], db_session: AsyncSession, case: int
+) -> None:
+    # Private seam note: this pins embeddings._REJECTED and embeddings._as_model_error through the
+    # public call. T4 moves them; keep this test and retarget it, do not delete it.
+    source, target, unbilled = provider_errors()[case]
+    api = FailingEmbeddingsApi(source)
+    vectors = GatewayEmbeddings(
+        model=EMBEDDING_MODEL,
+        price=prices.EMBEDDING_PRICES[EMBEDDING_MODEL],
+        client=SimpleNamespace(embeddings=api),
+        cap_micro_usd=10**9,
+        sessionmaker=lambda: sessions,
+        today=lambda: DAY,
+    )
+    with pytest.raises(ModelError) as raised:
+        await vectors.aembed_query("hello")
+    # The type only, never the provider's message; the original error is the cause.
+    assert type(raised.value) is target
+    assert str(raised.value) == f"OpenAI embeddings: {type(source).__name__}"
+    assert raised.value.__cause__ is source
+    [row] = await rows(db_session)
+    assert row.status == "failed"
+    assert row.cost_micro_usd == (0 if unbilled else row.reserved_micro_usd)
+
+
+async def test_an_error_that_is_not_openais_passes_through_unchanged(
+    sessions: async_sessionmaker[AsyncSession], db_session: AsyncSession
+) -> None:
+    other = RuntimeError("not openai")
+    vectors = GatewayEmbeddings(
+        model=EMBEDDING_MODEL,
+        price=prices.EMBEDDING_PRICES[EMBEDDING_MODEL],
+        client=SimpleNamespace(embeddings=FailingEmbeddingsApi(other)),
+        cap_micro_usd=10**9,
+        sessionmaker=lambda: sessions,
+        today=lambda: DAY,
+    )
+    with pytest.raises(RuntimeError) as raised:
+        await vectors.aembed_query("hello")
+    assert raised.value is other
+    [row] = await rows(db_session)
+    assert row.cost_micro_usd == row.reserved_micro_usd

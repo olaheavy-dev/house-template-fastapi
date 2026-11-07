@@ -7,13 +7,12 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import httpx
-import httpx2
-import openai
 import pytest
 from fastapi import FastAPI
 from langchain_core.exceptions import (
@@ -49,8 +48,6 @@ PUBLIC_NAMES: dict[str, tuple[str, ...]] = {
         "Price",
         "PRICES",
         "EMBEDDING_PRICES",
-        "CLAUDE_PRICING",
-        "OPENAI_PRICING",
         "cost",
         "ceiling",
         "token_details",
@@ -143,7 +140,7 @@ def test_names_imported_from_one_module_into_another_are_the_same_object() -> No
         assert attr(embeddings, name) is getattr(budget, name)
 
 
-def test_the_mapped_tables_and_their_columns_are_unchanged() -> None:
+def test_the_mapped_table_and_column_names_are_unchanged() -> None:
     tables = Base.metadata.tables
     assert {"llm_call", "llm_spend_day", "llm_spend_user_day"} <= set(tables)
     assert budget.LlmCall.__tablename__ == "llm_call"
@@ -182,26 +179,6 @@ def test_the_budget_constants() -> None:
     assert budget.INPUT_MARGIN_TOKENS == 1024
     assert budget.IMAGE_TOKENS == 6_000
     assert budget.WARN_SHARE == 0.8
-
-
-def test_the_rejected_errors_are_these_six_and_no_others() -> None:
-    # A call failing with one of these was never processed (settled at zero); any other failure
-    # may have been billed and keeps its reservation.
-    assert set(budget._REJECTED) == {
-        ModelAuthenticationError,
-        ModelPermissionDeniedError,
-        ModelInvalidRequestError,
-        ModelNotFoundError,
-        ModelRateLimitError,
-        ContextOverflowError,
-    }
-    assert set(embeddings._REJECTED) == {
-        openai.AuthenticationError,
-        openai.PermissionDeniedError,
-        openai.NotFoundError,
-        openai.RateLimitError,
-        openai.BadRequestError,
-    }
 
 
 # --- failure kinds, outcomes and problem bodies --------------------------------------------------
@@ -282,8 +259,9 @@ async def test_the_problem_body_for_each_provider_failure(
 async def test_a_retry_after_is_sent_only_when_the_outcome_says_retry(
     app: FastAPI, client: httpx.AsyncClient
 ) -> None:
-    # A provider header is ignored on an outcome that is not retryable (504, 503 auth) and, when
-    # retryable, a missing or empty header falls back to 30.
+    # Passing the provider's value on is test_llm_errors.py's. Here: a provider header is ignored
+    # on an outcome that is not retryable (504, 503 auth) and, when retryable, a missing or empty
+    # header falls back to 30.
     def with_header(error: ModelError, headers: dict[str, str]) -> ModelError:
         error.response = SimpleNamespace(headers=headers)  # type: ignore[attr-defined]
         return error
@@ -291,7 +269,6 @@ async def test_a_retry_after_is_sent_only_when_the_outcome_says_retry(
     errors_by_path = {
         "/timeout": with_header(ModelTimeoutError("x"), {"retry-after": "9"}),
         "/auth": with_header(ModelAuthenticationError("x"), {"retry-after": "9"}),
-        "/rate": with_header(ModelRateLimitError("x"), {"retry-after": "9"}),
         "/rate-empty": with_header(ModelRateLimitError("x"), {"retry-after": ""}),
         "/rate-none": with_header(ModelRateLimitError("x"), {}),
         "/rate-bare": ModelRateLimitError("x"),
@@ -309,7 +286,6 @@ async def test_a_retry_after_is_sent_only_when_the_outcome_says_retry(
     assert sent == {
         "/timeout": None,
         "/auth": None,
-        "/rate": "9",
         "/rate-empty": "30",
         "/rate-none": "30",
         "/rate-bare": "30",
@@ -352,8 +328,6 @@ async def test_the_agent_step_limit_is_a_422_problem(
 
 
 def test_budget_refusals_carry_their_status_detail_and_retry_after() -> None:
-    from datetime import UTC, datetime
-
     midday = datetime(2026, 1, 2, 12, 0, 0, tzinfo=UTC)
     day = budget.BudgetExhausted(now=midday)
     assert (day.status, day.detail) == (
@@ -381,40 +355,6 @@ def test_budget_refusals_carry_their_status_detail_and_retry_after() -> None:
     assert media.detail == "This kind of attachment can't be sent to the language model."
 
 
-def test_openai_embedding_errors_become_the_model_error_family_without_the_message() -> None:
-    request = httpx2.Request("POST", "http://x")
-
-    def status(code: int) -> Any:
-        return httpx2.Response(code, request=request)
-
-    cases: list[tuple[Exception, type[ModelError]]] = [
-        (
-            openai.AuthenticationError("SECRET", response=status(401), body=None),
-            ModelAuthenticationError,
-        ),
-        (
-            openai.PermissionDeniedError("SECRET", response=status(403), body=None),
-            ModelPermissionDeniedError,
-        ),
-        (openai.NotFoundError("SECRET", response=status(404), body=None), ModelNotFoundError),
-        (openai.RateLimitError("SECRET", response=status(429), body=None), ModelRateLimitError),
-        (
-            openai.BadRequestError("SECRET", response=status(400), body=None),
-            ModelInvalidRequestError,
-        ),
-        (openai.APITimeoutError(request=request), ModelTimeoutError),
-        (openai.APIConnectionError(request=request), ModelConnectionError),
-        (openai.InternalServerError("SECRET", response=status(500), body=None), ModelAPIError),
-        (openai.APIError("SECRET", request=request, body=None), ModelAPIError),
-    ]
-    for source, target in cases:
-        converted = embeddings._as_model_error(source)
-        assert type(converted) is target, type(source).__name__
-        assert str(converted) == f"OpenAI embeddings: {type(source).__name__}"
-    other = RuntimeError("not openai")
-    assert embeddings._as_model_error(other) is other
-
-
 def test_embedding_batches_are_bounded_by_count_and_bytes() -> None:
     assert embeddings.GatewayEmbeddings.MAX_INPUTS == 2048
     assert embeddings.GatewayEmbeddings.MAX_BYTES == 300_000 - 1024
@@ -429,18 +369,24 @@ def test_metric_labels_default_to_none() -> None:
     assert metrics.labels("m", "p", "f") == {"model": "m", "prompt": "p", "feature": "f"}
 
 
+# The module that CREATES the instruments (calls, tokens, cost, latency). The fixture reloads this
+# one. At T3 the creation moves to the core metrics module: change this one line.
+METRICS_MODULE = metrics
+
+
 @pytest.fixture
 def local_metrics(monkeypatch: pytest.MonkeyPatch) -> Iterator[InMemoryMetricReader]:
     """The llm instruments created again on a private meter provider, so these tests read their
     own data and never touch the process-wide provider (it can be set once, and test_observability
-    sets it). The instruments are restored afterwards."""
+    sets it). The instruments are restored afterwards. It must reload the module that creates the
+    instruments (METRICS_MODULE), not a shim that re-exports them."""
     reader = InMemoryMetricReader()
     provider = MeterProvider(metric_readers=[reader])
     monkeypatch.setattr(otel_metrics, "get_meter", provider.get_meter)
-    importlib.reload(metrics)
+    importlib.reload(METRICS_MODULE)
     yield reader
     monkeypatch.undo()
-    importlib.reload(metrics)
+    importlib.reload(METRICS_MODULE)
 
 
 def collect(reader: InMemoryMetricReader, model: str) -> dict[tuple[str, str, str], list[Any]]:
@@ -509,7 +455,7 @@ def test_zero_token_kinds_are_not_recorded_and_a_refusal_counts_as_refused(
     usage: Any = {"input_tokens": 10, "output_tokens": 0, "total_tokens": 10}
     metrics.record_call(labels, "settled", None, usage, None)
     found = collect(local_metrics, "pin-model-zero")
-    [(_, _, _)] = [k for k in found if k[0] == "llm.tokens"]
+    assert len([k for k in found if k[0] == "llm.tokens"]) == 1
     assert [(a["kind"], v) for a, v in found[("llm.tokens", "{token}", "Tokens by kind")]] == [
         ("input", 10)
     ]
