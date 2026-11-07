@@ -47,6 +47,7 @@ _exclude:
   - "{% if database is defined and not database %}backend/src/app/llm{% endif %}"
   - "{% if database is defined and not database %}backend/src/app/prompts{% endif %}"
   - "{% if database is defined and not database %}backend/migrations{% endif %}"
+  - "{% if database is defined and not database %}backend/llm-contracts.toml{% endif %}"
   - "{% if database is defined and not database %}backend/compose/db{% endif %}"
   - "{% if database is defined and not database %}backend/tests/db.py{% endif %}"
   - "{% if database is defined and not database %}backend/tests/models.py{% endif %}"

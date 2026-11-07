@@ -1,0 +1,28 @@
+# The model gateway's import contracts (#33), checked by `make check` with
+# `lint-imports --config llm-contracts.toml`. They live apart from pyproject.toml because they name
+# app.llm modules, and import-linter refuses a contract whose source module does not exist, so this
+# file exists only with the database (and the gateway). pyproject.toml holds the contracts every
+# project has.
+
+[tool.importlinter]
+root_package = "app"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "The framework-neutral core imports no model framework or provider SDK"
+type = "forbidden"
+source_modules = ["app.llm.core"]
+# Indirect imports count too, so the core can't reach a framework through the adapter or the
+# gateway modules either. agent_framework is not installed yet (0.8.0): import-linter 2.15 and 2.16
+# accept a forbidden external package that is not installed.
+forbidden_modules = [
+    "agent_framework",
+    "anthropic",
+    "langchain",
+    "langchain_anthropic",
+    "langchain_core",
+    "langchain_openai",
+    "langgraph",
+    "langsmith",
+    "openai",
+]

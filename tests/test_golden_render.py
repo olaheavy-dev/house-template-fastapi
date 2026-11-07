@@ -35,11 +35,11 @@ BASELINE_REF = "d67ca3807ae74a78cc9728bf20da829be035117c"
 # executables today).
 INTENDED: dict[str, str] = {
     ".copier-answers.fastapi.yml": "records container_images (#49), storage and database (#29)",
-    ".claude/rules/fastapi.md": "rule text moved after backend/.env (#41); extras rule naming db, langchain and storage, the switch command for each answer, turning the database off, make check type-checks migrations/, 413 sentence moved out of the Files bullet into its own (#29)",
-    "mk/fastapi.mk": "record-llm help says provider keys (#41); EXTRAS, compose path, mypy paths (#29)",
+    ".claude/rules/fastapi.md": "rule text moved after backend/.env (#41); extras rule naming db, langchain and storage, the switch command for each answer, turning the database off, make check type-checks migrations/, 413 sentence moved out of the Files bullet into its own (#29); says where the price arithmetic lives and that make check runs both lint-imports commands (#33)",
+    "mk/fastapi.mk": "record-llm help says provider keys (#41); EXTRAS, compose path, mypy paths (#29); check-fastapi also runs lint-imports --config llm-contracts.toml with the database (#33)",
     "backend/src/app/llm/prices.py": "comment matches the UTC+1 date rule (#41); keeps only the price tables, the arithmetic moved to app/llm/core/prices.py and the old names warn until 0.8.0 (#33)",
     "backend/tests/test_llm_prices.py": "cache_creation ceiling case, UTC+1 date rule (#41); imports from app/llm/core (#33)",
-    ".github/template-owned/fastapi.txt": "lists the compose files under compose/ (#29); lists backend/.python-version (#59)",
+    ".github/template-owned/fastapi.txt": "lists the compose files under compose/ (#29); lists backend/.python-version (#59); lists the llm core and langchain adapter files and llm-contracts.toml (#33)",
     "backend/.python-version": "uv stops looking for .python-version at the project root, so backend/ needs its own copy (#59)",
     "backend/Dockerfile": "installs the answered extras; the uvicorn comment is a whole sentence (#29)",
     "backend/compose.yaml": "includes the db and storage services from compose/ (#29)",
@@ -80,6 +80,7 @@ INTENDED: dict[str, str] = {
     "backend/tests/test_llm_shims.py": "new: the old import paths still answer, with a warning, and the template never uses them (#33)",
     "backend/tests/test_llm_gateway.py": "the cost check goes through app/llm/core/prices.py and from_langchain (#33)",
     "backend/src/app/llm/gateway.py": "key_setting and the price lookups come from app/llm/core/registry.py; the old names warn until 0.8.0 (#33)",
+    "backend/llm-contracts.toml": "new: import contract keeping app/llm/core free of model frameworks, only with the database (#33)",
     "backend/src/app/llm/core/__init__.py": "new: the framework-neutral core (#33)",
     "backend/src/app/llm/core/usage.py": "new: the neutral Usage type (#33)",
     "backend/src/app/llm/core/prices.py": "new: the price arithmetic moved out of app/llm/prices.py (#33)",

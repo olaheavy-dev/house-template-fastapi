@@ -25,7 +25,8 @@ check-fastapi: ## Backend: lint, format, types, import contracts and tests{% if 
 	$(BACKEND) ruff format --check
 	$(BACKEND) mypy src tests{% if database %} migrations{% endif %}
 	$(BACKEND) lint-imports
-	{% if database %}env -u LLM_EVAL {% endif %}$(BACKEND) pytest
+	{% if database %}$(BACKEND) lint-imports --config llm-contracts.toml
+	{% endif %}{% if database %}env -u LLM_EVAL {% endif %}$(BACKEND) pytest
 
 check-fast-fastapi: ## Backend: lint, format and types (the pre-push and stop-hook checks)
 	$(BACKEND) ruff check
