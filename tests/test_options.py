@@ -91,6 +91,7 @@ TWINS = [
     "backend/src/app/main.py",
     "backend/src/app/settings.py",
     "backend/src/app/log.py",
+    "backend/src/app/api/__init__.py",
     "backend/tests/conftest.py",
     "backend/.env.example",
 ]
@@ -187,15 +188,78 @@ NOT_SETTINGS = {"DB_PORT", "TEST_DATABASE_URL", "FASTAPI_OTEL_AUTO_CONFIGURE", "
 STORAGE_NOT_SETTINGS = {"STORAGE_PORT", "STORAGE_CONSOLE_PORT"}
 
 
-@ON_OFF
-def test_env_example_matches_settings(render, storage):
-    project = render(storage=storage)
+DATABASE_NOT_SETTINGS = {"DB_PORT", "TEST_DATABASE_URL"}
+
+
+@ANSWERS
+def test_env_example_matches_settings(render, database, storage):
+    project = render(database=database, storage=storage)
     fields = {f.upper() for f in SETTING.findall((project / "backend/src/app/settings.py").read_text())}
     listed = set(EXAMPLE.findall((project / "backend/.env.example").read_text()))
-    allowed = NOT_SETTINGS | (STORAGE_NOT_SETTINGS if storage else set())
+    allowed = (NOT_SETTINGS - DATABASE_NOT_SETTINGS) | (DATABASE_NOT_SETTINGS if database else set()) | (
+        STORAGE_NOT_SETTINGS if storage else set())
     assert fields - listed == set(), "settings missing from .env.example"
     assert listed - fields - allowed == set(), "variables in .env.example that are not settings"
     assert any(f.startswith("STORAGE_") for f in fields) is storage
+    assert ("DATABASE_URL" in fields) is database
+    assert any(f.startswith(("LLM_", "LANGSMITH_")) for f in fields) is database
+
+
+@ANSWERS
+def test_production_guard_names_only_rendered_parts(render, database, storage):
+    settings = (render(database=database, storage=storage) / "backend/src/app/settings.py").read_text()
+    assert ("DATABASE_URL is the local default" in settings) is database
+    assert ("STORAGE_SECRET_ACCESS_KEY is the local default" in settings) is storage
+    assert ("def no_local_defaults_in_production" in settings) is (database or storage)
+    assert ("LOCAL_DATABASE_URL" in settings) is database
+    assert ("model_validator" in settings) is (database or storage)
+
+
+@ANSWERS
+def test_conftest_fixtures_follow_the_answers(render, database, storage):
+    conftest = (render(database=database, storage=storage) / "backend/tests/conftest.py").read_text()
+    tree = ast.parse(conftest)
+    defined = {n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    always = {"anyio_backend", "settings", "app", "client", "production_values",
+              "expected_readiness_checks", "database_settings"}
+    with_database = {"database_url", "db_session", "db_client", "test_models",
+                     "live_runs_need_models_and_a_key", "vcr_config", "allowed_hosts", "is_eval_run",
+                     "is_recording"}
+    with_storage = {"storage_endpoint", "storage_settings"}
+    assert always <= defined
+    assert (with_database <= defined) is database
+    assert not (with_database & defined) or database
+    assert (with_storage <= defined) is storage
+    assert not (with_storage & defined) or storage
+    if not database:
+        assert "LANGSMITH" not in conftest and "alembic" not in conftest.lower()
+        assert 'return {}' in conftest  # production_values: nothing to set
+        assert "Settings(_env_file=None, app_env=\"test\")" in conftest
+
+
+@ANSWERS
+def test_no_rendered_python_file_has_an_unused_import(render, database, storage):
+    project = render(database=database, storage=storage)
+    for rel, path in files(project).items():
+        if path.suffix != ".py" or not rel.startswith(("backend/src/", "backend/tests/")):
+            continue
+        tree = ast.parse(path.read_text())
+        imported = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.update({(a.asname or a.name).split(".")[0]: node for a in node.names})
+            elif isinstance(node, ast.ImportFrom) and node.module != "__future__":
+                imported.update({a.asname or a.name: node for a in node.names})
+        used = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)} | {
+            n.value.id for n in ast.walk(tree)
+            if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)}
+        exported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and any(getattr(x, "id", "") == "__all__" for x in node.targets):
+                exported = {e.value for e in node.value.elts}
+        unused = sorted(set(imported) - used - exported)
+        # `from app import api, db` style imports of modules count as used when the name is used.
+        assert unused == [], (rel, unused)
 
 
 # Template-owned files that exist only with the database (the project's own tests are not listed).
