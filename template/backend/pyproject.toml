@@ -101,7 +101,9 @@ select = ["E", "W", "F", "I", "B", "UP", "S", "ASYNC", "C4", "SIM", "RUF", "PT",
 [tool.mypy]
 strict = true
 plugins = ["pydantic.mypy"]
-files = ["src", "tests", "migrations"]
+# migrations/ exists only with the database, and a missing path is an error, so the make targets
+# add it (`mypy src tests migrations`); a plain `uv run mypy` reads only these.
+files = ["src", "tests"]
 
 [tool.pytest]
 testpaths = ["tests"]

@@ -423,6 +423,16 @@ def test_make_targets_follow_the_answers(render, database, storage):
         assert not any(word in mk for word in ("comma", "record-llm", "LLM_", "alembic"))
 
 
+@ANSWERS
+def test_plain_mypy_reads_only_paths_every_project_has(render, database, storage):
+    # A plain `uv run mypy` reads `files` from pyproject.toml, which is not per answer: a path that
+    # is missing is an error ("Cannot read file"), so only the make target adds migrations/.
+    project = render(database=database, storage=storage)
+    paths = read_toml(project / "backend/pyproject.toml")["tool"]["mypy"]["files"]
+    missing = [p for p in paths if not (project / "backend" / p).exists()]
+    assert missing == []
+
+
 def test_dependencies_live_in_the_answered_extras():
     # The parts that can be switched off are extras; the main dependencies are only what every
     # project needs. The lists below are the ones that moved, not new packages (#29).

@@ -44,7 +44,7 @@ INTENDED: dict[str, str] = {
     "backend/compose.yaml": "includes the db and storage services from compose/ (#29)",
     "backend/compose/db/compose.yaml": "the db service moved out of compose.yaml (#29)",
     "backend/compose/storage/compose.yaml": "the storage service moved out of compose.yaml (#29)",
-    "backend/pyproject.toml": "boto3, database and gateway packages moved to the storage, db and langchain extras (#29)",
+    "backend/pyproject.toml": "boto3, database and gateway packages moved to the storage, db and langchain extras; plain mypy reads src and tests only (#29)",
     "backend/uv.lock": "locks the db, langchain and storage extras (#29)",
     "backend/src/app/storage.py": "docstring names compose/storage/compose.yaml (#29)",
     "backend/src/app/limits.py": "docstring no longer names storage (#29)",
