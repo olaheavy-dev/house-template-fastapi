@@ -323,6 +323,11 @@ DATABASE_WORDS = re.compile(
     r"sqlalchemy|alembic|DATABASE_URL|db_session|db_client|SessionDep|pgvector|psycopg|langchain|"
     r"langgraph|langsmith|LLM_MODEL|EMBEDDING_MODEL|openai|anthropic|gateway|db-up|make migrat",
     re.IGNORECASE)
+# The one neutral sentence the rules file keeps whatever the answers: it names every extra, so a
+# project can see what it could switch on. It is the only allowance, and it must be there exactly
+# once (a stale allowance would hide nothing, a duplicated one could hide a leftover).
+EXTRAS_SENTENCE = "`db` and `langchain` come with the `database` answer, `storage` with the `storage` answer"
+ALLOWED = {".claude/rules/fastapi.md": EXTRAS_SENTENCE}
 PARTS = {"storage": (STORAGE_WORDS, "boto3", ["backend/src/app/storage.py", "mk/fastapi.mk"]),
          "database": (DATABASE_WORDS, "sqlalchemy", ["backend/src/app/main.py", "mk/fastapi.mk"])}
 
@@ -336,8 +341,22 @@ def word_hits(project: Path, words: re.Pattern[str]) -> list[tuple[str, str]]:
             text = path.read_text()
         except UnicodeDecodeError:
             continue
+        if rel in ALLOWED:
+            assert text.count(ALLOWED[rel]) == 1, rel
+            text = text.replace(ALLOWED[rel], "")
         found += [(rel, m.group(0)) for m in words.finditer(text)]
     return found
+
+
+@ANSWERS
+def test_rules_switch_names_every_extra_and_the_flag_that_changes_each_part(render, database, storage):
+    rules = (render(database=database, storage=storage) / ".claude/rules/fastapi.md").read_text()
+    bullet = next(ln for ln in rules.splitlines() if ln.startswith("- Dependencies:"))
+    assert EXTRAS_SENTENCE in bullet
+    for part, on in (("database", database), ("storage", storage)):
+        # The command turns the part to the other state: off when it is on, on when it is off.
+        assert f"-d {part}={'false' if on else 'true'}`" in bullet, part
+        assert f"-d {part}={'true' if on else 'false'}`" not in bullet, part
 
 
 @pytest.mark.parametrize("part", ["storage", "database"], ids=["storage-off", "database-off"])
