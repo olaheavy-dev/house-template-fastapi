@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import httpx
 import pytest
 from fastapi import FastAPI
@@ -37,14 +39,10 @@ async def test_the_dev_header_stands_in_for_a_user_outside_production(
     assert (await client.get("/maybe")).json() is None
 
 
-async def test_production_fails_closed_until_real_authentication_exists() -> None:
-    app = create_app(
-        Settings(
-            _env_file=None,
-            app_env="production",
-            database_url="postgresql+psycopg://app:secret@db.internal:5432/app",
-        )
-    )
+async def test_production_fails_closed_until_real_authentication_exists(
+    production_values: dict[str, Any],
+) -> None:
+    app = create_app(Settings(_env_file=None, app_env="production", **production_values))
     add_routes(app)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

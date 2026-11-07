@@ -7,6 +7,8 @@ from datetime import date, timedelta
 from typing import Any
 
 import pytest
+from asgi_lifespan import LifespanManager
+from fastapi import FastAPI
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.exceptions import ModelConnectionError, ModelRateLimitError, ModelTimeoutError
 from langchain_core.language_models import GenericFakeChatModel
@@ -508,3 +510,11 @@ async def test_service_tiers_at_or_below_the_standard_rates_are_allowed(
 ) -> None:
     model = GenericFakeChatModel(messages=iter([answer("4")]), callbacks=[guard()])
     await model.bind(service_tier=tier).ainvoke(QUESTION)
+
+
+async def test_the_budget_has_its_own_pool(app: FastAPI) -> None:
+    # A request holding a session from the main pool must never wait on that pool to reserve.
+    async with LifespanManager(app):
+        budget = app.state.budget_sessionmaker.kw["bind"]
+        assert budget is not app.state.engine
+        assert budget.pool.size() == 2

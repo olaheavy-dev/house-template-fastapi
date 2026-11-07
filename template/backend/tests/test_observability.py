@@ -1,5 +1,5 @@
-"""What the app records about itself: model call details and spend, OpenTelemetry metrics and
-request spans, and the spend report."""
+"""What the app records about model calls: details and spend, OpenTelemetry metrics, and the spend
+report."""
 
 from __future__ import annotations
 
@@ -8,26 +8,19 @@ from collections.abc import Callable
 from datetime import date
 from typing import Any
 
-import httpx
 import pytest
-from asgi_lifespan import LifespanManager
 from langchain_core.language_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.messages.ai import UsageMetadata
 from opentelemetry import metrics as otel_metrics
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
 from app.llm import prices, report
 from app.llm.budget import BudgetGuard, LlmCall, reserve, settle
-from app.main import create_app
-from app.settings import Settings
 from tests.models import CHAT_MODEL
 
 pytestmark = pytest.mark.anyio
@@ -151,28 +144,6 @@ async def test_calls_are_counted_in_opentelemetry_by_model_prompt_and_feature(
     assert any(p.attributes == labels for p in points(metric_reader, "llm.cost"))
     # No user ids in metric labels: they would make every user a separate series.
     assert all("user_ref" not in p.attributes for p in points(metric_reader, "llm.calls"))
-
-
-async def test_requests_are_traced_but_health_probes_are_not() -> None:
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    app = create_app(
-        Settings(_env_file=None, app_env="test"), telemetry={"tracer_provider": provider}
-    )
-
-    @app.get("/ping")
-    async def ping() -> str:
-        return "pong"
-
-    async with LifespanManager(app) as manager:
-        transport = httpx.ASGITransport(app=manager.app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            await client.get("/health/live")
-            await client.get("/ping")
-    names = {span.name for span in exporter.get_finished_spans()}
-    assert "GET /ping" in names
-    assert not any("/health" in name for name in names)
 
 
 async def test_the_spend_report_groups_settled_calls(

@@ -15,7 +15,7 @@ from typing import Literal
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# The local development values (backend/compose/db/compose.yaml); production must set its own.
+# The local development values (backend/compose/); production must set its own.
 LOCAL_DATABASE_URL = "postgresql+psycopg://app:app@localhost:5432/app"
 LOCAL_STORAGE_SECRET = "app-storage-secret"  # noqa: S105 - the local RustFS's, refused in production
 

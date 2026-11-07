@@ -34,30 +34,39 @@ BASELINE_REF = "d67ca3807ae74a78cc9728bf20da829be035117c"
 # Not compared: file modes, symlinks and empty directories (the template has no tracked
 # executables today).
 INTENDED: dict[str, str] = {
-    ".copier-answers.fastapi.yml": "records container_images (#49) and storage (#29)",
-    ".claude/rules/fastapi.md": "rule text moved after backend/.env (#41); extras rule, 413 sentence moved out of the Files bullet into its own (#29)",
-    "mk/fastapi.mk": "record-llm help says provider keys (#41); EXTRAS, compose path (#29)",
+    ".copier-answers.fastapi.yml": "records container_images (#49), storage and database (#29)",
+    ".claude/rules/fastapi.md": "rule text moved after backend/.env (#41); extras rule naming db, langchain and storage, the switch command for each answer, turning the database off, make check type-checks migrations/, 413 sentence moved out of the Files bullet into its own (#29)",
+    "mk/fastapi.mk": "record-llm help says provider keys (#41); EXTRAS, compose path, mypy paths (#29)",
     "backend/src/app/llm/prices.py": "comment matches the UTC+1 date rule (#41)",
-    "backend/tests/conftest.py": "recording checks the key of both pinned models (#41)",
     "backend/tests/test_llm_prices.py": "cache_creation ceiling case, UTC+1 date rule (#41)",
     ".github/template-owned/fastapi.txt": "lists the compose files under compose/ (#29)",
-    "backend/Dockerfile": "installs the answered extras (#29)",
+    "backend/Dockerfile": "installs the answered extras; the uvicorn comment is a whole sentence (#29)",
     "backend/compose.yaml": "includes the db and storage services from compose/ (#29)",
     "backend/compose/db/compose.yaml": "the db service moved out of compose.yaml (#29)",
     "backend/compose/storage/compose.yaml": "the storage service moved out of compose.yaml (#29)",
-    "backend/pyproject.toml": "boto3 moved to the storage extra (#29)",
-    "backend/uv.lock": "locks the storage extra (#29)",
+    "backend/pyproject.toml": "boto3, database and gateway packages moved to the storage, db and langchain extras; plain mypy reads src and tests only (#29)",
+    "backend/uv.lock": "locks the db, langchain and storage extras (#29)",
     "backend/src/app/storage.py": "docstring names compose/storage/compose.yaml (#29)",
     "backend/src/app/limits.py": "docstring no longer names storage (#29)",
     "backend/src/app/settings.py": "comment lines re-wrapped for the storage switch, compose paths in comments (#29)",
     "backend/tests/__init__.py": "BACKEND moved here so storage.py can be excluded (#29)",
     "backend/tests/db.py": "BACKEND from tests, db image from compose/db (#29)",
     "backend/tests/storage.py": "BACKEND from tests, image from compose/storage (#29)",
-    "backend/tests/test_hardening.py": "storage secret check moved to test_storage.py (#29)",
-    "backend/tests/test_storage.py": "gains the production storage secret check (#29)",
+    "backend/tests/test_hardening.py": "storage secret check moved to test_storage.py; database and pool tests moved out, production_values (#29)",
+    "backend/tests/test_storage.py": "gains the production storage secret check; production_values, database_settings (#29)",
     "backend/.dockerignore": "compose/ stays out of the image (#29)",
-    "backend/tests/test_db.py": "BACKEND from tests (#29)",
-    "backend/tests/test_health.py": "neutral check name, readiness without storage (#29)",
+    "backend/tests/test_db.py": "BACKEND from tests; gains the database tests moved out of test_hardening, readiness check test (#29)",
+    "backend/tests/test_health.py": "neutral check name, readiness without storage, no-check case, expected_readiness_checks (#29)",
+    "backend/tests/conftest.py": "recording checks the key of both pinned models (#41); production_values, expected_readiness_checks, database_settings (#29)",
+    "backend/src/app/health.py": "docstring no longer names the database (#29)",
+    "backend/src/app/auth.py": "docstring example and id note name no database or gateway (#29)",
+    "backend/tests/test_app.py": "production settings from production_values (#29)",
+    "backend/tests/test_auth.py": "production settings from production_values (#29)",
+    "backend/tests/test_errors.py": "model-failure tests moved to test_llm_errors.py; the log test uses the httpx logger (#29)",
+    "backend/tests/test_llm_errors.py": "model-failure and budget-refusal tests moved out of test_errors.py (#29)",
+    "backend/tests/test_observability.py": "request-trace test moved to test_telemetry.py (#29)",
+    "backend/tests/test_telemetry.py": "the request-trace test moved out of test_observability.py (#29)",
+    "backend/tests/test_llm_budget.py": "gains the budget-pool test moved out of test_hardening.py (#29)",
     "backend/tests/recording.py": "recording key check, importable by its test (#41)",
     "backend/tests/test_recording_keys.py": "tests for the recording key check (#41)",
 }
@@ -221,7 +230,7 @@ def test_updating_a_baseline_project_with_defaults_deletes_nothing(tmp_path, mon
     # keeps every file the project had, keeps a file the user added, leaves no conflict markers or
     # .rej files, and brings the project to what a fresh render at HEAD produces. Copier deletes
     # files that an answer change stops generating (#32); the defaults must not stop generating any.
-    # PROVEN here (Copier 9.19.1, #29): a question added after the baseline (`storage`) takes its
+    # PROVEN here (Copier 9.19.1, #29): questions added after the baseline (`storage`, `database`) take their
     # default under `defaults=True`, and the answers file gets it. The docs do not say so
     # (https://copier.readthedocs.io/en/v9.19.1/updating/). The project's lockfile is its own
     # (`_skip_if_exists`), so it keeps the old content: the user runs `make lock`.
@@ -240,7 +249,8 @@ def test_updating_a_baseline_project_with_defaults_deletes_nothing(tmp_path, mon
     # The update really ran: the project now equals a fresh render at HEAD (plus the user's file).
     fresh = files_of(render_at(tmp_path / "fresh", "HEAD"))
     after.pop("backend/user_added.txt")
-    assert yaml.safe_load((dst / ANSWERS_FILE).read_text())["storage"] is True
+    recorded = yaml.safe_load((dst / ANSWERS_FILE).read_text())
+    assert (recorded["storage"], recorded["database"]) == (True, True)
     assert after.pop("backend/uv.lock") == baseline_lock
     fresh.pop("backend/uv.lock")
     assert after == fresh
@@ -266,3 +276,32 @@ def test_updating_a_baseline_project_with_storage_off_deletes_only_the_storage_f
                        "backend/tests/test_storage.py"}
     assert (dst / "backend" / "user_added.txt").read_text() == "mine\n"
     assert not (dst / "backend/compose/storage").exists()
+
+
+def test_updating_a_baseline_project_with_database_off_deletes_only_the_database_files(
+    tmp_path, monkeypatch
+):
+    # Like the storage test above, for `database`: the baseline project has no such answer, so the
+    # `database is defined` guard in copier.yml keeps the rendering of the OLD copy from failing
+    # with StrictUndefined (#29). Directory patterns (backend/migrations) must remove everything
+    # inside them, and only the template's files: the user's file stays.
+    dst = committed_baseline_project(tmp_path / "project")
+    assert "database" not in yaml.safe_load((dst / ANSWERS_FILE).read_text())
+    before = tracked(dst)
+    use_project_base_answers(monkeypatch, dst)
+
+    copier.run_update(dst, answers_file=ANSWERS_FILE, data={"database": False}, defaults=True,
+                      unsafe=True, overwrite=True, quiet=True, vcs_ref="HEAD")
+
+    removed = before - set(files_of(dst))
+    assert removed, "nothing was removed"
+    assert {"backend/src/app/db.py", "backend/src/app/llm/gateway.py",
+            "backend/migrations/env.py"} <= removed
+    assert not any(p.startswith(("backend/migrations/", "backend/src/app/llm/")) for p in
+                   set(files_of(dst)))
+    assert not (dst / "backend/compose/db").exists()
+    # Storage and the always-present files stay; so does the user's file.
+    assert "backend/src/app/storage.py" not in removed
+    assert "backend/src/app/main.py" not in removed
+    assert (dst / "backend" / "user_added.txt").read_text() == "mine\n"
+    assert yaml.safe_load((dst / ANSWERS_FILE).read_text())["database"] is False

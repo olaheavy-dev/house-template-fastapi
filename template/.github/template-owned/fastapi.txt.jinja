@@ -10,23 +10,24 @@ mk/fastapi.mk
 backend/src/app/log.py
 backend/src/app/problems.py
 backend/src/app/health.py
-backend/src/app/llm/__init__.py
+{% if database %}backend/src/app/llm/__init__.py
 backend/src/app/llm/budget.py
 backend/src/app/llm/checkpoints.py
 backend/src/app/llm/gateway.py
 backend/src/app/llm/metrics.py
 backend/src/app/llm/report.py
 backend/src/app/llm/prompts.py
-backend/compose.yaml
-backend/compose/db/compose.yaml
-{% if storage %}backend/compose/storage/compose.yaml
+{% endif %}backend/compose.yaml
+{% if database %}backend/compose/db/compose.yaml
+{% endif %}{% if storage %}backend/compose/storage/compose.yaml
 {% endif %}backend/Dockerfile
 backend/.dockerignore
-backend/migrations/env.py
+{% if database %}backend/migrations/env.py
 backend/migrations/script.py.mako
 backend/migrations/versions/20261026_app_project_root.py
 backend/tests/db.py
-{% if storage %}backend/tests/storage.py
+{% endif %}{% if storage %}backend/tests/storage.py
 backend/src/app/storage.py
-{% endif %}backend/tests/evals/conftest.py
+{% endif %}{% if database %}backend/tests/evals/conftest.py
 backend/tests/evals/test_gateway_evals.py
+{% endif %}

@@ -99,12 +99,33 @@ jobs:
 
   generated-project-variants:
     # The default-answers job above stays as it is. Each option's "off" answer gets its own
-    # project here (#29); the database-less variant joins it later.
-    name: Generated project variants (storage=false)
+    # project here (#29), and so does the smallest one, with neither part. Making these checks
+    # required is a repository-ruleset change for the owner (.github/rulesets/main.json).
+    name: Generated project variants (${{ matrix.name }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # absent: the packages of each switched-off part, which the image must not hold.
+          - id: storage-off
+            name: storage=false
+            database: "true"
+            storage: "false"
+            absent: boto3
+          - id: no-database
+            name: database=false
+            database: "false"
+            storage: "true"
+            absent: sqlalchemy alembic langchain
+          - id: minimal
+            name: database=false storage=false
+            database: "false"
+            storage: "false"
+            absent: boto3 sqlalchemy alembic langchain
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -117,9 +138,11 @@ jobs:
         with:
           enable-cache: false
 
-      - name: Render house-template-base, then this layer with storage off
+      - name: Render house-template-base, then this layer with the variant's answers
         env:
-          DEMO: ${{ runner.temp }}/demo-no-storage
+          DEMO: ${{ runner.temp }}/demo-${{ matrix.id }}
+          DATABASE: ${{ matrix.database }}
+          STORAGE: ${{ matrix.storage }}
         run: |
           uv run --frozen copier copy --trust --defaults --vcs-ref "$BASE_VERSION" \
             -d project_name="Demo App" -d 'stacks=["fastapi"]' \
@@ -127,17 +150,49 @@ jobs:
           git -C "$DEMO" init -q -b main
           git -C "$DEMO" add -A
           git -C "$DEMO" -c user.email=ci@example.com -c user.name=ci commit -q -m "chore: start from house-template-base"
-          uv run --frozen copier copy --trust --defaults --vcs-ref HEAD -d storage=false . "$DEMO"
+          uv run --frozen copier copy --trust --defaults --vcs-ref HEAD \
+            -d database="$DATABASE" -d storage="$STORAGE" . "$DEMO"
           git -C "$DEMO" add -A
           git -C "$DEMO" -c user.email=ci@example.com -c user.name=ci commit -q -m "chore: add the fastapi layer"
 
-      - name: Run the project's make check (the database tests still use Docker; no storage container)
-        working-directory: ${{ runner.temp }}/demo-no-storage
+      - name: Run the project's make check (database tests and storage tests still use Docker)
+        if: matrix.id != 'minimal'
+        working-directory: ${{ runner.temp }}/demo-${{ matrix.id }}
         run: make install && make check
 
-      - name: Build the image and check it holds no storage client
-        working-directory: ${{ runner.temp }}/demo-no-storage
+      - name: Run the project's make check with no Docker reachable (nothing in it needs Docker)
+        if: matrix.id == 'minimal'
+        working-directory: ${{ runner.temp }}/demo-${{ matrix.id }}
+        run: |
+          make install
+          DOCKER_HOST=tcp://127.0.0.1:9 make check
+
+      - name: Start the local storage from the root compose file
+        if: matrix.id == 'no-database'
+        working-directory: ${{ runner.temp }}/demo-${{ matrix.id }}
+        env:
+          STORAGE_BUCKET: app
+        run: |
+          docker compose config --quiet
+          make storage-up
+          docker compose down -v
+
+      - name: Build the image and check it holds none of the switched-off packages
+        working-directory: ${{ runner.temp }}/demo-${{ matrix.id }}
+        env:
+          ABSENT: ${{ matrix.absent }}
         run: |
           make image
-          docker compose run --rm --no-deps --entrypoint python api \
-            -c "import importlib.util, sys; sys.exit(importlib.util.find_spec('boto3') is not None)"
+          read -r -a absent <<< "$ABSENT"
+          docker compose run --rm --no-deps --entrypoint python api -c \
+            "import importlib.util, sys; sys.exit(any(importlib.util.find_spec(m) is not None for m in sys.argv[1:]))" \
+            "${absent[@]}"
+
+      - name: Run the backend from its image and call the readiness probe
+        if: matrix.id != 'storage-off'
+        working-directory: ${{ runner.temp }}/demo-${{ matrix.id }}
+        run: |
+          # No backend/.env and no model settings: a project without the database needs none.
+          make up
+          test "$(curl -fsS http://127.0.0.1:8000/health/ready)" = '{"status":"ok"}'
+          docker compose down -v

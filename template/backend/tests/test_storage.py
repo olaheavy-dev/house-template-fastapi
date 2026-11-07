@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from typing import Any
 
 import httpx
 import pytest
@@ -12,8 +13,6 @@ from app.main import create_app
 from app.problems import Problem
 from app.settings import Settings
 from app.storage import InvalidStorageKey, ObjectNotFound, Storage, StorageDep, check_key
-
-PRODUCTION_DB = "postgresql+psycopg://app:secret@db.internal:5432/app"
 
 pytestmark = pytest.mark.anyio
 
@@ -117,9 +116,9 @@ def test_ordinary_keys_are_accepted(key: str) -> None:
 
 
 async def test_ready_checks_the_storage_when_it_is_configured(
-    storage_settings: Settings, database_url: str
+    storage_settings: Settings, database_settings: dict[str, Any]
 ) -> None:
-    app = create_app(storage_settings.model_copy(update={"database_url": SecretStr(database_url)}))
+    app = create_app(storage_settings.model_copy(update=database_settings))
     async with LifespanManager(app) as manager:
         transport = httpx.ASGITransport(app=manager.app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -150,16 +149,14 @@ async def test_without_a_bucket_there_is_no_storage_and_no_readiness_check(
     assert "storage" not in app.state.readiness_checks
 
 
-def test_production_refuses_the_local_storage_secret() -> None:
+def test_production_refuses_the_local_storage_secret(production_values: dict[str, Any]) -> None:
     with pytest.raises(ValidationError, match="STORAGE_SECRET_ACCESS_KEY is the local default"):
-        Settings(
-            _env_file=None, app_env="production", database_url=PRODUCTION_DB, storage_bucket="b"
-        )
+        Settings(_env_file=None, app_env="production", storage_bucket="b", **production_values)
     ok = Settings(
         _env_file=None,
         app_env="production",
-        database_url=PRODUCTION_DB,
         storage_bucket="b",
+        **production_values,
         storage_secret_access_key=SecretStr("a-real-secret"),
     )
     assert ok.app_env == "production"

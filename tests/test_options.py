@@ -1,4 +1,4 @@
-"""The answers that switch parts of the backend on and off (#29). Today: `storage`.
+"""The answers that switch parts of the backend on and off (#29): `database` and `storage`.
 
 Docs: Copier 9.19.1
 - `_exclude` (each pattern can be templated; defining it replaces Copier's defaults), the `.jinja`
@@ -19,7 +19,9 @@ How a part is switched
 
 from __future__ import annotations
 
+import ast
 import fnmatch
+import itertools
 import json
 import re
 import shutil
@@ -30,9 +32,13 @@ from pathlib import Path
 import pytest
 import yaml
 
-from conftest import TEMPLATE
+from conftest import BASE_ANSWERS, TEMPLATE
 
-ON_OFF = pytest.mark.parametrize("storage", [True, False], ids=["storage-on", "storage-off"])
+# Every combination of the two answers.
+COMBINATIONS = list(itertools.product([True, False], [True, False]))
+ANSWERS = pytest.mark.parametrize(
+    ("database", "storage"), COMBINATIONS,
+    ids=[f"database-{'on' if d else 'off'}-storage-{'on' if s else 'off'}" for d, s in COMBINATIONS])
 
 STORAGE_FILES = [
     "backend/src/app/storage.py",
@@ -40,11 +46,51 @@ STORAGE_FILES = [
     "backend/tests/test_storage.py",
     "backend/compose/storage/compose.yaml",
 ]
+# The paths `database: false` removes, as patterns (fnmatch: `*` also crosses `/`). Each must match
+# something that is removed, and everything removed must match one (test_database_files_are_exact).
+DATABASE_PATTERNS = [
+    "backend/src/app/db.py",
+    "backend/src/app/models.py",
+    "backend/src/app/llm/*",
+    "backend/src/app/prompts/*",
+    "backend/migrations/*",
+    "backend/compose/db/*",
+    "backend/tests/db.py",
+    "backend/tests/models.py",
+    "backend/tests/recording.py",
+    "backend/tests/test_db.py",
+    "backend/tests/test_llm_*.py",
+    "backend/tests/test_recording_keys.py",
+    "backend/tests/test_observability.py",
+    "backend/tests/evals/*",
+    "backend/tests/cassettes/*",
+]
+# One file from each pattern that must be absent without the database.
+DATABASE_FILES = [
+    "backend/src/app/db.py",
+    "backend/src/app/models.py",
+    "backend/src/app/llm/gateway.py",
+    "backend/src/app/prompts/README.md",
+    "backend/migrations/env.py",
+    "backend/migrations/versions/20261026_app_project_root.py",
+    "backend/compose/db/compose.yaml",
+    "backend/tests/db.py",
+    "backend/tests/models.py",
+    "backend/tests/recording.py",
+    "backend/tests/test_db.py",
+    "backend/tests/test_llm_gateway.py",
+    "backend/tests/test_llm_errors.py",
+    "backend/tests/test_recording_keys.py",
+    "backend/tests/test_observability.py",
+    "backend/tests/evals/conftest.py",
+    "backend/tests/cassettes/test_llm_gateway/test_a_replayed_call_is_answered_and_its_cost_settled.yaml",
+]
 # Files that exist in both renders but change with the answer, each with an all-on plain twin.
 TWINS = [
     "backend/src/app/main.py",
     "backend/src/app/settings.py",
     "backend/src/app/log.py",
+    "backend/src/app/api/__init__.py",
     "backend/tests/conftest.py",
     "backend/.env.example",
 ]
@@ -58,25 +104,48 @@ def files(root: Path) -> dict[str, Path]:
     return {p.relative_to(root).as_posix(): p for p in root.rglob("*") if p.is_file()}
 
 
-@ON_OFF
-def test_render_matrix(render, storage):
-    project = render(storage=storage)
+@ANSWERS
+def test_render_matrix(render, database, storage):
+    project = render(database=database, storage=storage)
+    for path in DATABASE_FILES:
+        assert (project / path).exists() is database, path
     for path in STORAGE_FILES:
         assert (project / path).exists() is storage, path
     # Always there, whatever the answers.
-    for path in ("backend/.env.example", "backend/compose.yaml", "backend/compose/db/compose.yaml",
-                 "backend/src/app/main.py", "backend/tests/db.py", "mk/fastapi.mk"):
+    for path in ("backend/.env.example", "backend/compose.yaml", "backend/src/app/main.py",
+                 "backend/tests/conftest.py", "backend/src/app/api/__init__.py", "mk/fastapi.mk"):
         assert (project / path).is_file(), path
-    # The suffix is always stripped and no template syntax is left behind.
+    # The suffix is always stripped.
     assert [p for p in files(project) if p.endswith(".jinja")] == []
-    # The dependency is declared in one plain pyproject.toml either way.
+    # The dependencies are declared in one plain pyproject.toml either way.
     pyproject = read_toml(project / "backend/pyproject.toml")
     assert pyproject["project"]["optional-dependencies"]["storage"][0].startswith("boto3")
     assert not any(d.startswith("boto3") for d in pyproject["project"]["dependencies"])
     mk = (project / "mk/fastapi.mk").read_text()
     assert ("storage-up:" in mk) is storage
     answers = yaml.safe_load((project / ".copier-answers.fastapi.yml").read_text())
-    assert answers["storage"] is storage
+    assert (answers["database"], answers["storage"]) == (database, storage)
+
+
+def render_other(render, tmp_path: Path, **answers) -> Path:
+    """A second render in its own directory (the render fixture's own is `project`)."""
+    dst = tmp_path / "other"
+    dst.mkdir()
+    (dst / ".copier-answers.base.yml").write_text(yaml.safe_dump(BASE_ANSWERS))
+    return render(dst, **answers)
+
+
+def test_database_files_are_exact(render, tmp_path):
+    # Everything `database: false` removes matches DATABASE_PATTERNS, and every pattern removes
+    # something: a new file under a database path, or a pattern that matches nothing, fails here.
+    on = set(files(render(database=True, storage=True)))
+    off = set(files(render_other(render, tmp_path, database=False, storage=True)))
+    removed = on - off
+    assert (off - on) == set()
+    stray = [p for p in removed if not any(fnmatch.fnmatch(p, pat) for pat in DATABASE_PATTERNS)]
+    assert stray == []
+    unused = [pat for pat in DATABASE_PATTERNS if not any(fnmatch.fnmatch(p, pat) for p in removed)]
+    assert unused == []
 
 
 def read_toml(path: Path) -> dict:
@@ -85,6 +154,13 @@ def read_toml(path: Path) -> dict:
 
 def test_storage_is_on_by_default(render):
     assert (render() / "backend/src/app/storage.py").is_file()
+
+
+def test_database_is_on_by_default(render):
+    project = render()
+    assert (project / "backend/src/app/db.py").is_file()
+    answers = yaml.safe_load((project / ".copier-answers.fastapi.yml").read_text())
+    assert answers["database"] is True
 
 
 def test_jinja_twins_render_to_their_plain_file(render):
@@ -111,33 +187,154 @@ NOT_SETTINGS = {"DB_PORT", "TEST_DATABASE_URL", "FASTAPI_OTEL_AUTO_CONFIGURE", "
 STORAGE_NOT_SETTINGS = {"STORAGE_PORT", "STORAGE_CONSOLE_PORT"}
 
 
-@ON_OFF
-def test_env_example_matches_settings(render, storage):
-    project = render(storage=storage)
+DATABASE_NOT_SETTINGS = {"DB_PORT", "TEST_DATABASE_URL"}
+
+
+@ANSWERS
+def test_env_example_matches_settings(render, database, storage):
+    project = render(database=database, storage=storage)
     fields = {f.upper() for f in SETTING.findall((project / "backend/src/app/settings.py").read_text())}
     listed = set(EXAMPLE.findall((project / "backend/.env.example").read_text()))
-    allowed = NOT_SETTINGS | (STORAGE_NOT_SETTINGS if storage else set())
+    allowed = (NOT_SETTINGS - DATABASE_NOT_SETTINGS) | (DATABASE_NOT_SETTINGS if database else set()) | (
+        STORAGE_NOT_SETTINGS if storage else set())
     assert fields - listed == set(), "settings missing from .env.example"
     assert listed - fields - allowed == set(), "variables in .env.example that are not settings"
     assert any(f.startswith("STORAGE_") for f in fields) is storage
+    assert ("DATABASE_URL" in fields) is database
+    assert any(f.startswith(("LLM_", "LANGSMITH_")) for f in fields) is database
 
 
-@ON_OFF
-def test_every_template_owned_entry_exists(render, storage):
-    project = render(storage=storage)
+@ANSWERS
+def test_production_guard_names_only_rendered_parts(render, database, storage):
+    settings = (render(database=database, storage=storage) / "backend/src/app/settings.py").read_text()
+    assert ("DATABASE_URL is the local default" in settings) is database
+    assert ("STORAGE_SECRET_ACCESS_KEY is the local default" in settings) is storage
+    assert ("def no_local_defaults_in_production" in settings) is (database or storage)
+    assert ("LOCAL_DATABASE_URL" in settings) is database
+    assert ("model_validator" in settings) is (database or storage)
+
+
+@ANSWERS
+def test_conftest_fixtures_follow_the_answers(render, database, storage):
+    conftest = (render(database=database, storage=storage) / "backend/tests/conftest.py").read_text()
+    tree = ast.parse(conftest)
+    defined = {n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    always = {"anyio_backend", "settings", "app", "client", "production_values",
+              "expected_readiness_checks", "database_settings"}
+    with_database = {"database_url", "db_session", "db_client", "test_models",
+                     "live_runs_need_models_and_a_key", "vcr_config", "allowed_hosts", "is_eval_run",
+                     "is_recording"}
+    with_storage = {"storage_endpoint", "storage_settings"}
+    assert always <= defined
+    assert (with_database <= defined) is database
+    assert not (with_database & defined) or database
+    assert (with_storage <= defined) is storage
+    assert not (with_storage & defined) or storage
+    if not database:
+        assert "LANGSMITH" not in conftest and "alembic" not in conftest.lower()
+        assert 'return {}' in conftest  # production_values: nothing to set
+        assert "Settings(_env_file=None, app_env=\"test\")" in conftest
+
+
+@ANSWERS
+def test_no_rendered_python_file_has_an_unused_import(render, database, storage):
+    project = render(database=database, storage=storage)
+    for rel, path in files(project).items():
+        if path.suffix != ".py" or not rel.startswith(("backend/src/", "backend/tests/")):
+            continue
+        tree = ast.parse(path.read_text())
+        imported = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.update({(a.asname or a.name).split(".")[0]: node for a in node.names})
+            elif isinstance(node, ast.ImportFrom) and node.module != "__future__":
+                imported.update({a.asname or a.name: node for a in node.names})
+        used = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)} | {
+            n.value.id for n in ast.walk(tree)
+            if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)}
+        exported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and any(getattr(x, "id", "") == "__all__" for x in node.targets):
+                exported = {e.value for e in node.value.elts}
+        unused = sorted(set(imported) - used - exported)
+        # `from app import api, db` style imports of modules count as used when the name is used.
+        assert unused == [], (rel, unused)
+
+
+# Template-owned files that exist only with the database (the project's own tests are not listed).
+DATABASE_OWNED = [
+    "backend/src/app/llm/__init__.py",
+    "backend/src/app/llm/gateway.py",
+    "backend/migrations/env.py",
+    "backend/migrations/script.py.mako",
+    "backend/migrations/versions/20261026_app_project_root.py",
+    "backend/compose/db/compose.yaml",
+    "backend/tests/db.py",
+    "backend/tests/evals/conftest.py",
+]
+
+
+@ANSWERS
+def test_every_template_owned_entry_exists(render, database, storage):
+    project = render(database=database, storage=storage)
     owned = (project / ".github/template-owned/fastapi.txt").read_text().splitlines()
     patterns = [ln for ln in owned if ln and not ln.startswith("#")]
     existing = list(files(project))
     for pattern in patterns:
         assert any(fnmatch.fnmatch(f, pattern) for f in existing), pattern
-    # And the reverse for the parts that switch: a storage file is listed exactly when it exists.
+    # And the reverse for the parts that switch: a file is listed exactly when it exists.
+    for path in DATABASE_OWNED:
+        assert (path in patterns) is database, path
     for path in STORAGE_FILES:
         if path != "backend/tests/test_storage.py":  # the project's own tests are not listed
             assert (path in patterns) is storage, path
 
 
-def test_no_part_left_behind_when_storage_is_off(render):
-    project = render(storage=False)
+@ANSWERS
+def test_rendered_project_has_no_leftover_template_syntax(render, database, storage):
+    for path in files(render(database=database, storage=storage)).values():
+        if path.suffix in {".py", ".toml", ".md", ".mk", ".yml", ".yaml", ".txt", ".example"}:
+            # GitHub Actions expressions (${{ ... }}) are meant to be there.
+            assert not re.search(r"(?<!\$)\{\{|\{%", path.read_text()), path
+
+
+@ANSWERS
+def test_rendered_text_files_end_in_exactly_one_newline(render, database, storage):
+    # The base project's pre-commit end-of-file fixer fails `make check` on a file that ends in a
+    # blank line or has no final newline (a `{% endif %}` after the last line once did).
+    # Every text file, whatever its name (Dockerfile, .dockerignore, .python-version included).
+    for rel, path in files(render(database=database, storage=storage)).items():
+        try:
+            text = path.read_text()
+        except UnicodeDecodeError:
+            continue
+        assert not text or (text.endswith("\n") and not text.endswith("\n\n")), rel
+
+
+@ANSWERS
+def test_every_rendered_python_file_parses(render, database, storage):
+    project = render(database=database, storage=storage)
+    for rel, path in files(project).items():
+        if path.suffix == ".py":
+            ast.parse(path.read_text(), filename=rel)
+
+
+# Words that must not appear in a database-less project, except in pyproject.toml and uv.lock (the
+# packages stay declared in the extras).
+DATABASE_WORDS = re.compile(
+    r"sqlalchemy|alembic|DATABASE_URL|db_session|db_client|SessionDep|pgvector|psycopg|langchain|"
+    r"langgraph|langsmith|LLM_MODEL|EMBEDDING_MODEL|openai|anthropic|gateway|db-up|make migrat",
+    re.IGNORECASE)
+# The one neutral sentence the rules file keeps whatever the answers: it names every extra, so a
+# project can see what it could switch on. It is the only allowance, and it must be there exactly
+# once (a stale allowance would hide nothing, a duplicated one could hide a leftover).
+EXTRAS_SENTENCE = "`db` and `langchain` come with the `database` answer, `storage` with the `storage` answer"
+ALLOWED = {".claude/rules/fastapi.md": EXTRAS_SENTENCE}
+PARTS = {"storage": (STORAGE_WORDS, "boto3", ["backend/src/app/storage.py", "mk/fastapi.mk"]),
+         "database": (DATABASE_WORDS, "sqlalchemy", ["backend/src/app/main.py", "mk/fastapi.mk"])}
+
+
+def word_hits(project: Path, words: re.Pattern[str]) -> list[tuple[str, str]]:
     found = []
     for rel, path in files(project).items():
         if rel in NOT_COMPARED or ".git/" in rel:
@@ -146,48 +343,136 @@ def test_no_part_left_behind_when_storage_is_off(render):
             text = path.read_text()
         except UnicodeDecodeError:
             continue
-        found += [(rel, m.group(0)) for m in STORAGE_WORDS.finditer(text)]
-    assert found == []
+        if rel in ALLOWED:
+            assert text.count(ALLOWED[rel]) == 1, rel
+            text = text.replace(ALLOWED[rel], "")
+        found += [(rel, m.group(0)) for m in words.finditer(text)]
+    return found
+
+
+@ANSWERS
+def test_rules_switch_names_every_extra_and_the_flag_that_changes_each_part(render, database, storage):
+    rules = (render(database=database, storage=storage) / ".claude/rules/fastapi.md").read_text()
+    bullet = next(ln for ln in rules.splitlines() if ln.startswith("- Dependencies:"))
+    assert EXTRAS_SENTENCE in bullet
+    for part, on in (("database", database), ("storage", storage)):
+        # The command turns the part to the other state: off when it is on, on when it is off.
+        assert f"-d {part}={'false' if on else 'true'}`" in bullet, part
+        assert f"-d {part}={'true' if on else 'false'}`" not in bullet, part
+
+
+@pytest.mark.parametrize("part", ["storage", "database"], ids=["storage-off", "database-off"])
+def test_no_part_left_behind(render, part):
+    words, dependency, _ = PARTS[part]
+    project = render(**{part: False})
+    assert word_hits(project, words) == []
     # The mentions that remain are only the declared dependency.
-    assert "types-boto3" in (project / "backend/pyproject.toml").read_text()
+    pyproject = (project / "backend/pyproject.toml").read_text()
+    assert dependency in pyproject
 
 
-def test_no_part_left_behind_check_catches_a_leftover(render):
+@pytest.mark.parametrize("part", ["storage", "database"])
+def test_no_part_left_behind_check_catches_a_leftover(render, part):
     # The word list does find what it is meant to find (a check that cannot fail proves nothing).
-    project = render(storage=True)
-    hits = [rel for rel, p in files(project).items() if rel not in NOT_COMPARED
-            and p.suffix in {".py", ".md", ".mk", ".yaml", ".example"}
-            and STORAGE_WORDS.search(p.read_text())]
-    assert "backend/src/app/storage.py" in hits and "mk/fastapi.mk" in hits
-    assert ".claude/rules/fastapi.md" in hits and "backend/compose.yaml" in hits
+    words, _, must_hit = PARTS[part]
+    project = render()
+    hits = {rel for rel, _ in word_hits(project, words)}
+    assert set(must_hit) <= hits
+    assert {".claude/rules/fastapi.md", "backend/compose.yaml"} <= hits
 
 
-@ON_OFF
-def test_the_image_installs_the_answered_extras(render, storage):
-    project = render(storage=storage)
+def extras_flags(database: bool, storage: bool) -> str:
+    return " ".join(
+        (["--extra db", "--extra langchain"] if database else []) + (["--extra storage"] if storage else []))
+
+
+@ANSWERS
+def test_the_image_installs_the_answered_extras(render, database, storage):
+    project = render(database=database, storage=storage)
+    flags = extras_flags(database, storage)
     dockerfile = (project / "backend/Dockerfile").read_text()
     syncs = [ln for ln in dockerfile.splitlines() if "uv sync" in ln]
     assert len(syncs) == 2
-    assert all(("--extra storage" in ln) is storage for ln in syncs), syncs
+    for ln in syncs:
+        assert ln.endswith(" ".join(["--no-editable", flags]).strip()), ln
     mk = (project / "mk/fastapi.mk").read_text()
     runs = [ln for ln in mk.splitlines() if "uv --directory backend" in ln and " sync " in ln
             or ln.startswith(("BACKEND :=", "LIVE :="))]
     # Every uv call that installs or runs the project goes through EXTRAS, set from the answers.
-    assert len(runs) == 3 and all("$(EXTRAS)" in ln for ln in runs), runs
+    # LIVE (recording and evals) exists only with the database.
+    assert len(runs) == (3 if database else 2) and all("$(EXTRAS)" in ln for ln in runs), runs
+    assert ("LIVE :=" in mk) is database
     extras = re.search(r"^EXTRAS :=(.*)$", mk, flags=re.MULTILINE)
-    assert extras and (extras.group(1).strip() == "--extra storage" if storage
-                       else extras.group(1).strip() == "")
+    assert extras and extras.group(1).strip() == flags
     if shutil.which("make"):
         # Make itself expands the line (a missing space once glued `--locked--extra`).
         dry = subprocess.run(["make", "-n", "-f", "mk/fastapi.mk", "install-fastapi", "dev"],
                              cwd=project, capture_output=True, text=True)
         assert dry.returncode == 0, dry.stderr
-        want = "--locked --extra storage" if storage else "--locked"
+        want = " ".join(["--locked", flags]).strip()
         lines = [ln for ln in dry.stdout.splitlines() if ln.startswith("uv ")]
         assert len(lines) == 2 and all(want in ln for ln in lines), lines
-        assert all(("--extra" in ln) is storage for ln in lines), lines
+        assert all(("--extra" in ln) is bool(flags) for ln in lines), lines
     # `make lock` locks every extra whatever the answers (the lockfile is not per answer).
     assert "uv --directory backend lock\n" in mk
+
+
+ALWAYS_TARGETS = {"install-fastapi", "check-fastapi", "check-fast-fastapi", "lock", "dev", "test",
+                  "image", "up"}
+DATABASE_TARGETS = {"db-up", "migrate", "migration", "llm-report", "record-llm", "eval"}
+
+
+@ANSWERS
+def test_make_targets_follow_the_answers(render, database, storage):
+    mk = (render(database=database, storage=storage) / "mk/fastapi.mk").read_text()
+    want = (ALWAYS_TARGETS | (DATABASE_TARGETS if database else set())
+            | ({"storage-up"} if storage else set()))
+    defined = set(re.findall(r"^([a-z][a-z0-9-]*):", mk, flags=re.MULTILINE))
+    phony = set(re.search(r"^\.PHONY: (.*)$", mk, flags=re.MULTILINE).group(1).split())
+    assert defined == want
+    assert phony == want
+    up_help = re.search(r"^up:.*## (.*)$", mk, flags=re.MULTILINE).group(1)
+    assert ("database" in up_help) is database
+    # mypy also reads migrations/, which exists only with the database (a missing path is an error).
+    mypy = [ln.strip() for ln in mk.splitlines() if ln.strip().endswith(" mypy src tests")
+            or ln.strip().endswith(" mypy src tests migrations")]
+    assert len(mypy) == 2
+    assert all(ln.endswith("migrations") is database for ln in mypy), mypy
+    if database:
+        assert "comma := ," in mk
+    else:
+        assert not any(word in mk for word in ("comma", "record-llm", "LLM_", "alembic"))
+
+
+@ANSWERS
+def test_plain_mypy_reads_only_paths_every_project_has(render, database, storage):
+    # A plain `uv run mypy` reads `files` from pyproject.toml, which is not per answer: a path that
+    # is missing is an error ("Cannot read file"), so only the make target adds migrations/.
+    project = render(database=database, storage=storage)
+    paths = read_toml(project / "backend/pyproject.toml")["tool"]["mypy"]["files"]
+    missing = [p for p in paths if not (project / "backend" / p).exists()]
+    assert missing == []
+
+
+def test_dependencies_live_in_the_answered_extras():
+    # The parts that can be switched off are extras; the main dependencies are only what every
+    # project needs. The lists below are the ones that moved, not new packages (#29).
+    pyproject = read_toml(TEMPLATE / "backend/pyproject.toml")
+    def names(requirements):
+        return {re.split(r"[\[<>=]", r)[0] for r in requirements}
+    assert names(pyproject["project"]["dependencies"]) == {"fastapi", "pydantic-settings", "structlog"}
+    extras = pyproject["project"]["optional-dependencies"]
+    assert set(extras) == {"db", "langchain", "storage"}
+    assert names(extras["db"]) == {"alembic", "sqlalchemy", "psycopg", "psycopg-pool", "pgvector"}
+    assert names(extras["langchain"]) == {
+        "langgraph-checkpoint-postgres", "langchain", "langchain-core", "langchain-openai",
+        "langchain-anthropic", "langgraph", "langsmith"}
+    assert names(extras["storage"]) == {"boto3"}
+    dev = names(pyproject["dependency-groups"]["dev"])
+    assert {"testcontainers", "types-boto3", "langsmith", "vcrpy", "pytest-recording"} <= dev
+    # The import contract names the gateway, which a project without the database lacks.
+    contract = pyproject["tool"]["importlinter"]["contracts"][0]
+    assert contract["unmatched_ignore_imports_alerting"] == "none"
 
 
 def compose_config(project: Path) -> dict:
@@ -198,23 +483,34 @@ def compose_config(project: Path) -> dict:
     return json.loads(result.stdout)
 
 
-@ON_OFF
-def test_compose_services_follow_the_answers(render, storage):
-    project = render(storage=storage)
+@ANSWERS
+def test_compose_services_follow_the_answers(render, database, storage):
+    project = render(database=database, storage=storage)
     compose = yaml.safe_load((project / "backend/compose.yaml").read_text())
-    includes = [i if isinstance(i, str) else i["path"] for i in compose["include"]]
-    assert includes == ["compose/db/compose.yaml"] + (
+    includes = [i if isinstance(i, str) else i["path"] for i in compose.get("include", [])]
+    assert includes == (["compose/db/compose.yaml"] if database else []) + (
         ["compose/storage/compose.yaml"] if storage else [])
-    api_env = compose["services"]["api"]["environment"]
-    assert any(k.startswith("STORAGE_") for k in api_env) is storage
+    assert ("include" in compose) is (database or storage)
+    api = compose["services"]["api"]
+    assert any(k.startswith("STORAGE_") for k in api["environment"]) is storage
+    assert api["environment"]["APP_ENV"] == "local"
+    assert api["environment"]["LOG_JSON"] == "false"
+    assert ("DATABASE_URL" in api["environment"]) is database
+    assert ("depends_on" in api) is database
+    assert set(compose["services"]) == {"api"} | ({"migrate"} if database else set())
     if shutil.which("docker") is None:
         pytest.skip("docker not installed")
     config = compose_config(project)
-    assert set(config["services"]) == {"db", "migrate", "api"} | ({"storage"} if storage else set())
-    # depends_on still reaches the included database service.
-    assert config["services"]["migrate"]["depends_on"]["db"]["condition"] == "service_healthy"
-    assert config["services"]["api"]["depends_on"]["db"]["condition"] == "service_healthy"
-    assert set(config["volumes"]) == {"db-data"} | ({"storage-data"} if storage else set())
+    assert set(config["services"]) == (
+        {"api"} | ({"db", "migrate"} if database else set()) | ({"storage"} if storage else set()))
+    if database:
+        # depends_on still reaches the included database service.
+        assert config["services"]["migrate"]["depends_on"]["db"]["condition"] == "service_healthy"
+        assert config["services"]["api"]["depends_on"]["db"]["condition"] == "service_healthy"
+    else:
+        assert "depends_on" not in config["services"]["api"]
+    assert set(config.get("volumes", {})) == (
+        ({"db-data"} if database else set()) | ({"storage-data"} if storage else set()))
 
 
 def test_the_pins_dependabot_reads_live_in_plain_compose_files():
@@ -244,10 +540,12 @@ def test_env_example_template_is_tracked_by_git_and_not_excluded():
     assert ".env.*" in config["_exclude"] and "!.env.example" in config["_exclude"]
 
 
-@ON_OFF
-def test_make_targets_are_separated_by_one_blank_line(render, storage):
+@ANSWERS
+def test_make_targets_are_separated_by_one_blank_line(render, database, storage):
     # `{%- if %}` once ate the blank line before storage-up; the default output must read as before.
-    mk = (render(storage=storage) / "mk/fastapi.mk").read_text()
+    mk = (render(database=database, storage=storage) / "mk/fastapi.mk").read_text()
     assert "\n\n\n" not in mk
-    assert "\n\nllm-report:" in mk
+    assert mk.endswith("\n") and not mk.endswith("\n\n")
+    assert ("\n\nllm-report:" in mk) is database
     assert ("\n\nstorage-up:" in mk) is storage
+    assert ("\n\nimage:" in mk)

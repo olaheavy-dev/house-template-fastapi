@@ -1,6 +1,6 @@
 """Settings from the environment (and backend/.env locally), read once per process.
 
-Names are the upper-case field names with no prefix (APP_ENV, LOG_LEVEL, DATABASE_URL, ...).
+Names are the upper-case field names with no prefix (APP_ENV, LOG_LEVEL, {% if database %}DATABASE_URL{% else %}ALLOWED_HOSTS{% endif %}, ...).
 Secrets are SecretStr so they never print in logs or tracebacks; .env.example lists every setting
 with a safe value.
 """
@@ -8,17 +8,21 @@ with a safe value.
 from __future__ import annotations
 
 import os
-from decimal import Decimal
-from functools import lru_cache
+{% if database %}from decimal import Decimal
+{% endif %}from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field{% if database or storage %}, SecretStr, model_validator{% endif %}
 from pydantic_settings import BaseSettings, SettingsConfigDict
+{%- if database or storage %}
 
-# The local development values (backend/compose/db/compose.yaml); production must set its own.
+# The local development values (backend/compose/); production must set its own.
+{%- if database %}
 LOCAL_DATABASE_URL = "postgresql+psycopg://app:app@localhost:5432/app"
+{%- endif %}
 {%- if storage %}
 LOCAL_STORAGE_SECRET = "app-storage-secret"  # noqa: S105 - the local RustFS's, refused in production
+{%- endif %}
 {%- endif %}
 
 
@@ -42,6 +46,7 @@ class Settings(BaseSettings):
     max_request_bytes: int = Field(default=1_048_576, gt=0)
     # Interactive API docs at /docs. Unset means on everywhere except production.
     docs_enabled: bool | None = None
+{%- if database %}
 
     # SQLAlchemy URL with the psycopg 3 driver. The default matches the local db in
     # backend/compose/db/compose.yaml.
@@ -55,6 +60,7 @@ class Settings(BaseSettings):
     # locks) indefinitely. Milliseconds.
     db_statement_timeout_ms: int = Field(default=30_000, gt=0)
     db_idle_in_transaction_timeout_ms: int = Field(default=60_000, gt=0)
+{%- endif %}
 
     # Browser origins allowed to call the API (CORS), e.g. ["https://app.example.com"]. Empty
     # means none: same-origin and server-to-server calls only.
@@ -95,6 +101,7 @@ class Settings(BaseSettings):
         }
     )
 {%- endif %}
+{%- if database %}
 
     # The model the gateway calls, "provider:model id", with its prices in app/llm/prices.py. No
     # default: models and prices change, so you choose one. Unset, the gateway refuses to start with
@@ -135,6 +142,8 @@ class Settings(BaseSettings):
     # Leave prompts and answers out of traces when they may hold personal data.
     langsmith_hide_inputs: bool = False
     langsmith_hide_outputs: bool = False
+{%- endif %}
+{%- if database or storage %}
 
     @model_validator(mode="after")
     def no_local_defaults_in_production(self) -> Settings:
@@ -143,8 +152,10 @@ class Settings(BaseSettings):
         if self.app_env != "production":
             return self
         problems = []
+{%- if database %}
         if self.database_url.get_secret_value() == LOCAL_DATABASE_URL:
             problems.append("DATABASE_URL is the local default")
+{%- endif %}
 {%- if storage %}
         if self.storage_bucket and (
             (self.storage_secret_access_key or SecretStr("")).get_secret_value()
@@ -155,6 +166,7 @@ class Settings(BaseSettings):
         if problems:
             raise ValueError("production settings: " + "; ".join(problems))
         return self
+{%- endif %}
 
     @property
     def docs_on(self) -> bool:

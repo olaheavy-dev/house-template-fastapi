@@ -6,5 +6,5 @@ from pathlib import Path
 
 os.environ["ENV_FILE"] = ""
 
-# backend/, where pyproject.toml, migrations/ and the compose files are.
+# backend/, where pyproject.toml and the compose files are.
 BACKEND = Path(__file__).resolve().parents[1]

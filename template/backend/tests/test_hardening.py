@@ -1,55 +1,38 @@
-"""Production defaults: settings that refuse to start wrong, database limits, headers, CORS and
-allowed hosts."""
+"""Production defaults: settings that refuse to start wrong, response headers, CORS and allowed
+hosts."""
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
-from asgi_lifespan import LifespanManager
 from fastapi import FastAPI, Response
-from pydantic import ValidationError
-from sqlalchemy import text
-from sqlalchemy.exc import DBAPIError
 
-from app.db import create_engine
 from app.main import create_app
 from app.settings import Settings
 
 pytestmark = pytest.mark.anyio
 
-PRODUCTION_DB = "postgresql+psycopg://app:secret@db.internal:5432/app"
-
 
 def test_the_tests_never_read_a_developers_env_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    (tmp_path / ".env").write_text("LOG_LEVEL=DEBUG\nOPENAI_API_KEY=sk-from-a-real-env-file\n")
+    (tmp_path / ".env").write_text("LOG_LEVEL=DEBUG\nLOG_JSON=true\n")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    for name in ("LOG_LEVEL", "LOG_JSON"):
+        monkeypatch.delenv(name, raising=False)
     settings = Settings()
     assert settings.log_level == "INFO"
-    assert settings.openai_api_key is None
+    assert settings.log_json is False
 
 
-def test_production_refuses_the_local_database_default() -> None:
-    with pytest.raises(ValidationError, match="DATABASE_URL is the local default"):
-        Settings(_env_file=None, app_env="production")
-    ok = Settings(_env_file=None, app_env="production", database_url=PRODUCTION_DB)
-    assert ok.app_env == "production"
-
-
-async def test_a_runaway_query_is_cancelled_by_the_statement_timeout(database_url: str) -> None:
-    engine = create_engine(
-        Settings(_env_file=None, database_url=database_url, db_statement_timeout_ms=200)
-    )
-    try:
-        async with engine.connect() as connection:
-            with pytest.raises(DBAPIError, match="statement timeout"):
-                await connection.execute(text("SELECT pg_sleep(2)"))
-    finally:
-        await engine.dispose()
+def test_production_starts_when_every_rendered_part_has_real_values(
+    production_values: dict[str, Any],
+) -> None:
+    settings = Settings(_env_file=None, app_env="production", **production_values)
+    assert settings.app_env == "production"
 
 
 def add_routes(app: FastAPI) -> None:
@@ -113,14 +96,6 @@ async def test_only_allowed_hosts_are_answered() -> None:
     add_routes(app)
     assert (await request(app, "GET", "/plain")).status_code == 400  # Host: test
     assert (await request(app, "GET", "/plain", Host="api.example.com")).status_code == 200
-
-
-async def test_the_budget_has_its_own_pool(app: FastAPI) -> None:
-    # A request holding a session from the main pool must never wait on that pool to reserve.
-    async with LifespanManager(app):
-        budget = app.state.budget_sessionmaker.kw["bind"]
-        assert budget is not app.state.engine
-        assert budget.pool.size() == 2
 
 
 async def test_an_unexpected_error_still_carries_cors_and_the_headers() -> None:

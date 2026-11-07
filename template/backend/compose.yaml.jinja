@@ -1,16 +1,31 @@
-# Owned by house-template-fastapi. Included by the root compose.yaml (house-template-base), so
-# `make db-up`{% if storage %} and `make storage-up` start{% else %} starts{% endif %} the local services for `make dev`; `make up` runs the
-# whole backend from its image (migrate once, then the API), as production would.
+# Owned by house-template-fastapi. Included by the root compose.yaml (house-template-base).
+{%- if database and storage %}
+# `make db-up` and `make storage-up` start the local services for `make dev`; `make up` runs the
+{%- elif database %}
+# `make db-up` starts the local services for `make dev`; `make up` runs the
+{%- elif storage %}
+# `make storage-up` starts the local services for `make dev`; `make up` runs the
+{%- else %}
+# `make up` runs the backend from its image (the API), as production would.
+{%- endif %}
+{%- if database or storage %}
+# whole backend from its image ({% if database %}migrate once, then the API{% else %}the API{% endif %}), as production would.
+{%- endif %}
 # Local credentials only; production gets its URLs and keys from its environment.
+{%- if database or storage %}
 # The pinned service images live in plain files under compose/ (Dependabot cannot read a template).
 
 include:
+{%- if database %}
   - compose/db/compose.yaml
+{%- endif %}
 {%- if storage %}
   - compose/storage/compose.yaml
 {%- endif %}
+{%- endif %}
 
 services:
+{%- if database %}
   # Applies migrations once, then exits; the API starts only if it succeeded. Production runs the
   # same image with the same command as a one-off job before each rollout.
   migrate:
@@ -36,21 +51,35 @@ services:
       db:
         condition: service_healthy
     restart: "no"
-
-  api:
+{%- endif %}
+{{ "\n" if database else "" }}  api:
     build: .
+{%- if database %}
     environment: *api-environment
+{%- else %}
+    environment:
+      APP_ENV: local
+      LOG_JSON: "false"
+{%- if storage %}
+      # Service names, not localhost: these run inside Compose's network.
+      STORAGE_ENDPOINT_URL: http://storage:9000
+      # Presigned URLs go to browsers on this machine, which reach the storage here.
+      STORAGE_PUBLIC_ENDPOINT_URL: http://localhost:${STORAGE_PORT:-9000}
+{%- endif %}
+{%- endif %}
     env_file:
       - path: .env
         required: false
     ports:
       # Set API_PORT to run two projects side by side.
       - "127.0.0.1:${API_PORT:-8000}:8000"
+{%- if database %}
     depends_on:
       migrate:
         condition: service_completed_successfully
       db:
         condition: service_healthy
+{%- endif %}
     healthcheck:
       # The slim image has no curl; Python is there.
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=3)"]
@@ -65,8 +94,10 @@ services:
       watch:
         - action: rebuild
           path: src
+{%- if database %}
         - action: rebuild
           path: migrations
+{%- endif %}
         - action: rebuild
           path: pyproject.toml
         - action: rebuild

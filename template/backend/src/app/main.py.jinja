@@ -1,7 +1,7 @@
 """The FastAPI app; `fastapi dev` and `fastapi run` find it through [tool.fastapi].
 
 create_app builds a fresh app (tests build one per test); resources that live as long as the
-process (the database engine, model clients) are opened and closed in lifespan.
+process{% if database %} (the database engine, model clients){% elif storage %} (the storage client){% endif %} are opened and closed in lifespan.
 """
 
 from __future__ import annotations
@@ -15,11 +15,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.telemetry import TelemetryConfig
 
-from app import api, db, health
+from app import api, {% if database %}db, {% endif %}health
 from app.limits import BodyLimit, SecurityHeaders
+{%- if database %}
 from app.llm import checkpoints
 from app.llm.errors import install_model_error_handlers
 from app.llm.gateway import Gateway
+{%- endif %}
 from app.log import REQUEST_ID_HEADER, configure_logging, request_context
 from app.problems import UnhandledErrors, install_problem_handlers
 from app.settings import Settings, get_settings
@@ -30,6 +32,7 @@ from app.storage import Storage
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+{%- if database %}
     engine = db.create_engine(app.state.settings)
     app.state.engine = engine
     app.state.sessionmaker = db.create_sessionmaker(engine)
@@ -57,10 +60,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 {%- endif %}
         await budget_engine.dispose()
         await engine.dispose()
+{%- elif storage %}
+    settings: Settings = app.state.settings
+    app.state.storage = Storage(settings) if settings.storage_bucket else None
+    try:
+        yield
+    finally:
+        if app.state.storage:
+            app.state.storage.close()
+{%- else %}
+    yield
+{%- endif %}
+{%- if database %}
 
 
 async def _database_ready(app: FastAPI) -> None:
     await db.ping(app.state.engine)
+{%- endif %}
 
 
 def _not_health(scope: MutableMapping[str, Any]) -> bool:
@@ -98,7 +114,9 @@ def create_app(
     install_problem_handlers(app)
     # Registered before request_context, which therefore wraps it: a 413 still gets an access line.
     app.add_middleware(BodyLimit, max_bytes=settings.max_request_bytes)
+{%- if database %}
     install_model_error_handlers(app)
+{%- endif %}
     app.middleware("http")(request_context)
     # Outside request_context (so it knows the request id), inside CORS and the headers (so an
     # unexpected 500 still carries them).
@@ -118,7 +136,9 @@ def create_app(
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
     app.include_router(health.router)
     app.include_router(api.router)
+{%- if database %}
     health.add_readiness_check(app, "database", lambda: _database_ready(app))
+{%- endif %}
 {%- if storage %}
     if settings.storage_bucket:
         health.add_readiness_check(app, "storage", lambda: app.state.storage.ping())

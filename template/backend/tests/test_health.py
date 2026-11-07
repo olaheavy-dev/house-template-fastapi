@@ -43,8 +43,19 @@ async def test_ready_names_the_failing_check_and_returns_503(
     assert response.json() == {"status": "unavailable", "failing": ["database"]}
 
 
-async def test_readiness_checks_only_what_the_settings_turn_on(
+async def test_ready_is_ok_when_no_check_is_registered(
     app: FastAPI, client: httpx.AsyncClient
 ) -> None:
-    # Without optional parts (no storage bucket, for one) only the database is checked.
-    assert set(app.state.readiness_checks) == {"database"}
+    # A project without a database or storage registers nothing, and is ready once it is up.
+    app.state.readiness_checks.clear()
+    response = await client.get("/health/ready")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+async def test_readiness_checks_only_what_the_settings_turn_on(
+    app: FastAPI, client: httpx.AsyncClient, expected_readiness_checks: set[str]
+) -> None:
+    # Without a storage bucket, only the parts that always check (the database, when the project
+    # has one) are registered.
+    assert set(app.state.readiness_checks) == expected_readiness_checks

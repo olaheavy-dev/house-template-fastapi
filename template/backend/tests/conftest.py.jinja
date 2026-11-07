@@ -1,47 +1,54 @@
-"""Test fixtures: an app per test, driven in-process through httpx with its lifespan running,
+"""Test fixtures: an app per test, driven in-process through httpx with its lifespan running{% if database %},
 a real database for the tests that ask for one (db_session, db_client), and recorded model
 responses for the tests marked vcr (cassettes in tests/cassettes/, replayed, never re-recorded:
-`make record-llm` records them)."""
+`make record-llm` records them){% endif %}."""
 
 from __future__ import annotations
 
-import os
-{% if storage %}import uuid
-{% endif %}from collections.abc import AsyncIterator, Iterator
+{% if database %}import os
+{% endif %}{% if storage %}import uuid
+{% endif %}from collections.abc import AsyncIterator{% if database or storage %}, Iterator{% endif %}
 from typing import Any
 
 import httpx
 import pytest
-from alembic import command
-from asgi_lifespan import LifespanManager
+{% if database %}from alembic import command
+{% endif %}from asgi_lifespan import LifespanManager
 from fastapi import FastAPI
-from pydantic import SecretStr
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+{% if database or storage %}from pydantic import SecretStr
+{% endif %}{% if database %}from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.db import get_session
-from app.main import create_app
+{% else %}
+{% endif %}from app.main import create_app
 from app.settings import Settings
 {%- if storage %}
 from app.storage import create_bucket
-from tests import db, storage
-{%- else %}
-from tests import db
 {%- endif %}
+{%- if database and storage %}
+from tests import db, storage
+{%- elif database %}
+from tests import db
+{%- elif storage %}
+from tests import storage
+{%- endif %}
+{%- if database %}
 from tests.models import CHAT_MODEL, EMBEDDING_MODEL
 from tests.recording import missing_recording_keys
-
+{%- endif %}
+{% if database %}
 # Before langsmith first reads them (it caches them): tests never send traces or sync results to
 # LangSmith, whatever the developer's shell exports. Evals (`make eval`, LLM_EVAL=1) upload an
 # experiment and its traces when a LangSmith key is set, from the shell or backend/.env.
 _upload = os.environ.get("LLM_EVAL") == "1" and bool(os.environ.get("LANGSMITH_API_KEY"))
 os.environ["LANGSMITH_TRACING"] = os.environ["LANGSMITH_TEST_TRACKING"] = str(_upload).lower()
-
+{% endif %}
 
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
-
+{% if database %}
 
 def is_eval_run() -> bool:
     """`make eval` (LLM_EVAL=1): the evals call the project's own model, so they follow the
@@ -85,7 +92,7 @@ def live_runs_need_models_and_a_key(request: pytest.FixtureRequest) -> None:
             "backend/.env (their prices must be in app/llm/prices.py)",
             returncode=2,
         )
-
+{% endif %}{% if database %}
 
 @pytest.fixture
 def settings() -> Settings:
@@ -99,7 +106,54 @@ def settings() -> Settings:
         openai_api_key=key("OPENAI_API_KEY"),
         anthropic_api_key=key("ANTHROPIC_API_KEY"),
     )
+{% else %}
 
+@pytest.fixture
+def settings() -> Settings:
+    return Settings(_env_file=None, app_env="test")
+{% endif %}{% if database %}
+
+# A production database URL that is not the local default (the production guard refuses that).
+PRODUCTION_DB = "postgresql+psycopg://app:secret@db.internal:5432/app"
+
+
+@pytest.fixture
+def production_values() -> dict[str, Any]:
+    """The settings a production start needs because this project's parts have no safe default
+    for them. Splat into Settings(app_env="production", **production_values)."""
+    return {"database_url": PRODUCTION_DB}
+
+
+@pytest.fixture
+def expected_readiness_checks() -> set[str]:
+    """The readiness checks a fresh app registers (storage adds one only when a bucket is set)."""
+    return {"database"}
+
+
+@pytest.fixture
+def database_settings(database_url: str) -> dict[str, Any]:
+    """Settings that point an app at the test database (empty in a project with no database)."""
+    return {"database_url": SecretStr(database_url)}
+{% else %}
+
+@pytest.fixture
+def production_values() -> dict[str, Any]:
+    """The settings a production start needs because this project's parts have no safe default
+    for them (none here). Splat into Settings(app_env="production", **production_values)."""
+    return {}
+
+
+@pytest.fixture
+def expected_readiness_checks() -> set[str]:
+    """The readiness checks a fresh app registers (storage adds one only when a bucket is set)."""
+    return set()
+
+
+@pytest.fixture
+def database_settings() -> dict[str, Any]:
+    """Settings that point an app at the test database (empty in a project with no database)."""
+    return {}
+{% endif %}{% if database %}
 
 # Sent with every recorded request, so never written to a cassette.
 SECRET_HEADERS = ["authorization", "x-api-key", "openai-organization", "openai-project"]
@@ -126,14 +180,14 @@ def vcr_config() -> dict[str, Any]:
         # The app's own in-process test client goes through httpx too; never record it.
         "ignore_hosts": ["test"],
     }
-
+{% endif %}{% if database %}
 
 @pytest.fixture
 def allowed_hosts() -> list[str]:
     """Hosts a block_network test may still reach: this machine (the test database, Docker's
     socket). Model providers are blocked unless a test is recording."""
     return ["127.0.0.1", "localhost", "::1", "/.*"]
-
+{% endif %}
 
 @pytest.fixture
 def app(settings: Settings) -> FastAPI:
@@ -146,9 +200,9 @@ async def client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
         transport = httpx.ASGITransport(app=manager.app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             yield client
+{% if storage %}
 
-
-{% if storage %}@pytest.fixture(scope="session")
+@pytest.fixture(scope="session")
 def storage_endpoint() -> Iterator[str]:
     """A running S3-compatible storage for the whole test session (see tests/storage.py)."""
     yield from storage.storage_endpoint()
@@ -167,9 +221,9 @@ def storage_settings(storage_endpoint: str) -> Settings:
     )
     create_bucket(settings)
     return settings
+{% endif %}{% if database %}
 
-
-{% endif %}@pytest.fixture(scope="session")
+@pytest.fixture(scope="session")
 def database_url() -> Iterator[str]:
     """A migrated database for the whole test session (see tests/db.py)."""
     for url in db.database_url():
@@ -216,3 +270,4 @@ async def db_client(
         transport = httpx.ASGITransport(app=manager.app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             yield client
+{% endif %}

@@ -330,3 +330,140 @@ def test_a_project_that_already_has_storage_off_does_not_get_it_back_on_update(
     assert not any((dst / p).exists() for p in STORAGE_PATHS)
     assert (dst / "backend/user_added.txt").read_text() == "mine\n"
     assert "A rule added by the second version." in (dst / ".claude/rules/fastapi.md").read_text()
+
+
+DATABASE_PATHS = [
+    "backend/src/app/db.py", "backend/src/app/models.py", "backend/src/app/llm/gateway.py",
+    "backend/src/app/prompts/README.md", "backend/migrations/env.py",
+    "backend/migrations/versions/20261026_app_project_root.py", "backend/compose/db/compose.yaml",
+    "backend/tests/db.py", "backend/tests/test_db.py", "backend/tests/evals/conftest.py",
+]
+USER_MIGRATION = "backend/migrations/versions/20270101_mine.py"
+
+
+def assert_clean_tree(dst: Path) -> None:
+    assert not list(dst.rglob("*.rej")) and not list(dst.rglob("*.orig"))
+    assert [p for p, data in files_of(dst).items() if b"<<<<<<<" in data] == []
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+def test_turning_the_database_off_on_update_deletes_its_files_and_keeps_user_files(
+    tmp_path, tagged_repo
+):
+    # `copier update --trust --defaults -d database=false` (#29). Directory patterns in `_exclude`
+    # (backend/migrations, backend/src/app/llm) remove the template's files inside them, and the
+    # user's own file inside a removed directory stays (U5, not stated in the Copier docs).
+    dst = committed_project(tagged_repo, tmp_path / "project", "v100.0.0")
+    assert all((dst / p).is_file() for p in DATABASE_PATHS)
+    (dst / "backend/migrations/versions/20270101_mine.py").write_text("# my migration\n")
+    (dst / "backend/src/app/product.py").write_text("# the product\n")
+    git(dst, "add", "-A")
+    git(dst, "commit", "-q", "-m", "feat: product")
+    lock = (dst / "backend/uv.lock").read_bytes()
+
+    update(dst, "v100.0.1", database=False)
+
+    assert answers(dst)["database"] is False
+    assert [p for p in DATABASE_PATHS if (dst / p).exists()] == []
+    assert (dst / USER_MIGRATION).read_text() == "# my migration\n"
+    assert (dst / "backend/src/app/product.py").read_text() == "# the product\n"
+    assert (dst / "backend/user_added.txt").read_text() == "mine\n"
+    assert (dst / "backend/uv.lock").read_bytes() == lock
+    assert_clean_tree(dst)
+    after = files_of(dst)
+    fresh = tmp_path / "fresh"
+    write_base(fresh)
+    copy_layer(tagged_repo, fresh, "v100.0.1", database=False)
+    expected = files_of(fresh)
+    for own in ("backend/user_added.txt", "backend/src/app/product.py", "backend/uv.lock",
+                USER_MIGRATION):
+        after.pop(own)
+    expected.pop("backend/uv.lock")
+    # The whole tree equals a fresh database=false render, apart from the user's files.
+    assert after == expected
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+def test_turning_the_database_off_deletes_its_files_even_if_the_user_edited_them(
+    tmp_path, tagged_repo
+):
+    dst = committed_project(tagged_repo, tmp_path / "project", "v100.0.0")
+    for rel in ("backend/src/app/db.py", "backend/migrations/env.py"):
+        path = dst / rel
+        path.write_text(path.read_text() + "\n# my own change\n")
+    git(dst, "add", "-A")
+    git(dst, "commit", "-q", "-m", "feat: edit the database files")
+
+    update(dst, "v100.0.1", database=False)
+
+    assert not (dst / "backend/src/app/db.py").exists()
+    assert not (dst / "backend/migrations/env.py").exists()
+    assert "my own change" in git(dst, "show", "HEAD:backend/src/app/db.py")  # recoverable
+    assert "my own change" in git(dst, "show", "HEAD:backend/migrations/env.py")
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+def test_turning_the_database_back_on_restores_the_template_versions_not_the_edits(
+    tmp_path, tagged_repo
+):
+    dst = committed_project(tagged_repo, tmp_path / "project", "v100.0.0")
+    db_py = dst / "backend/src/app/db.py"
+    original = db_py.read_bytes()
+    db_py.write_text(db_py.read_text() + "\n# my own change\n")
+    git(dst, "add", "-A")
+    git(dst, "commit", "-q", "-m", "feat: edit db")
+    update(dst, "v100.0.1", database=False)
+    git(dst, "add", "-A")
+    git(dst, "commit", "-q", "-m", "chore: database off")
+
+    update(dst, "v100.0.1", database=True)
+
+    assert answers(dst)["database"] is True
+    assert all((dst / p).is_file() for p in DATABASE_PATHS)
+    assert db_py.read_bytes() == original
+    assert (dst / "backend/user_added.txt").read_text() == "mine\n"
+    assert_clean_tree(dst)
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+def test_a_project_that_already_has_the_database_off_does_not_get_it_back_on_update(
+    tmp_path, tagged_repo
+):
+    dst = tmp_path / "project"
+    write_base(dst)
+    copy_layer(tagged_repo, dst, "v100.0.0", database=False)
+    git(dst, "init", "-q", "-b", "main")
+    (dst / "backend/user_added.txt").write_text("mine\n")
+    git(dst, "add", "-A")
+    git(dst, "commit", "-q", "-m", "chore: start")
+    assert not any((dst / p).exists() for p in DATABASE_PATHS)
+
+    update(dst, "v100.0.1")
+
+    assert answers(dst)["database"] is False
+    assert not any((dst / p).exists() for p in DATABASE_PATHS)
+    assert (dst / "backend/user_added.txt").read_text() == "mine\n"
+    assert "A rule added by the second version." in (dst / ".claude/rules/fastapi.md").read_text()
+    assert_clean_tree(dst)
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+def test_turning_both_parts_off_in_one_update_matches_a_fresh_minimal_render(
+    tmp_path, tagged_repo
+):
+    dst = committed_project(tagged_repo, tmp_path / "project", "v100.0.0")
+    lock = (dst / "backend/uv.lock").read_bytes()
+
+    update(dst, "v100.0.1", database=False, storage=False)
+
+    assert (answers(dst)["database"], answers(dst)["storage"]) == (False, False)
+    assert_clean_tree(dst)
+    after = files_of(dst)
+    fresh = tmp_path / "fresh"
+    write_base(fresh)
+    copy_layer(tagged_repo, fresh, "v100.0.1", database=False, storage=False)
+    expected = files_of(fresh)
+    after.pop("backend/user_added.txt")
+    assert after.pop("backend/uv.lock") == lock
+    expected.pop("backend/uv.lock")
+    assert after == expected
