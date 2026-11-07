@@ -9,7 +9,9 @@ from alembic import command
 from alembic.script import ScriptDirectory
 from asgi_lifespan import LifespanManager
 from fastapi import FastAPI
+from pydantic import ValidationError
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import SessionDep, create_engine, ping
@@ -18,6 +20,8 @@ from app.settings import Settings
 from tests import BACKEND, db
 
 pytestmark = pytest.mark.anyio
+
+PRODUCTION_DB = "postgresql+psycopg://app:secret@db.internal:5432/app"
 
 
 async def test_migrations_enable_pgvector(db_session: AsyncSession) -> None:
@@ -142,3 +146,26 @@ def test_only_the_project_root_starts_the_app_branch() -> None:
         rev.revision: rev.branch_labels for rev in script.walk_revisions() if not rev.down_revision
     }
     assert roots == {"0001": {"template"}, "app_root": {"app"}}
+
+
+async def test_the_database_is_a_readiness_check(app: FastAPI) -> None:
+    assert "database" in app.state.readiness_checks
+
+
+def test_production_refuses_the_local_database_default() -> None:
+    with pytest.raises(ValidationError, match="DATABASE_URL is the local default"):
+        Settings(_env_file=None, app_env="production")
+    ok = Settings(_env_file=None, app_env="production", database_url=PRODUCTION_DB)
+    assert ok.app_env == "production"
+
+
+async def test_a_runaway_query_is_cancelled_by_the_statement_timeout(database_url: str) -> None:
+    engine = create_engine(
+        Settings(_env_file=None, database_url=database_url, db_statement_timeout_ms=200)
+    )
+    try:
+        async with engine.connect() as connection:
+            with pytest.raises(DBAPIError, match="statement timeout"):
+                await connection.execute(text("SELECT pg_sleep(2)"))
+    finally:
+        await engine.dispose()

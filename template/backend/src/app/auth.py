@@ -7,7 +7,7 @@ route answers 401. Locally and in tests, an X-Dev-User header stands in for a si
 the app can be built and tested before real sign-in exists; production ignores it.
 
     @router.get("/courses")
-    async def my_courses(user: CurrentUser, session: SessionDep) -> list[CourseOut]:
+    async def my_courses(user: CurrentUser) -> list[CourseOut]:
         ...
 
 User.id is an opaque, stable id (the provider's subject), never an email: it is what model calls

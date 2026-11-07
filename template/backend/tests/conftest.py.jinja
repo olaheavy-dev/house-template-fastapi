@@ -101,6 +101,29 @@ def settings() -> Settings:
     )
 
 
+# A production database URL that is not the local default (the production guard refuses that).
+PRODUCTION_DB = "postgresql+psycopg://app:secret@db.internal:5432/app"
+
+
+@pytest.fixture
+def production_values() -> dict[str, Any]:
+    """The settings a production start needs because this project's parts have no safe default
+    for them. Splat into Settings(app_env="production", **production_values)."""
+    return {"database_url": PRODUCTION_DB}
+
+
+@pytest.fixture
+def expected_readiness_checks() -> set[str]:
+    """The readiness checks a fresh app registers (storage adds one only when a bucket is set)."""
+    return {"database"}
+
+
+@pytest.fixture
+def database_settings(database_url: str) -> dict[str, Any]:
+    """Settings that point an app at the test database (empty in a project with no database)."""
+    return {"database_url": SecretStr(database_url)}
+
+
 # Sent with every recorded request, so never written to a cassette.
 SECRET_HEADERS = ["authorization", "x-api-key", "openai-organization", "openai-project"]
 

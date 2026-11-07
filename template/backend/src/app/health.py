@@ -1,8 +1,8 @@
 """Liveness and readiness.
 
 /health/live says the process is up and never touches a dependency, so a slow database can't
-get the container restarted. /health/ready runs each registered readiness check (the database
-layer adds one) and returns 503 with the failing names until all pass.
+get the container restarted. /health/ready runs each registered readiness check (a part that needs a
+service adds one) and returns 503 with the failing names until all pass.
 """
 
 from __future__ import annotations
