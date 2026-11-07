@@ -89,6 +89,7 @@ INTENDED: dict[str, str] = {
     "backend/src/app/llm/langchain/usage.py": "new: from_langchain converts LangChain usage to the neutral Usage (#33)",
     "backend/tests/test_llm_core.py": "new: tests of the neutral core (#33)",
     "backend/tests/test_llm_usage.py": "new: tests of from_langchain (#33)",
+    "backend/tests/test_llm_error_logs.py": "new: characterises what a model failure logs (#33)",
     "backend/tests/recording.py": "recording key check, importable by its test (#41); key_setting from app/llm/core/registry.py (#33)",
     "backend/tests/test_recording_keys.py": "tests for the recording key check (#41)",
 }
