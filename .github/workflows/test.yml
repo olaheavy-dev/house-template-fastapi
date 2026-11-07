@@ -110,18 +110,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # absent: the packages of each switched-off part, which the image must not hold.
           - id: storage-off
             name: storage=false
             database: "true"
             storage: "false"
+            absent: boto3
           - id: no-database
             name: database=false
             database: "false"
             storage: "true"
+            absent: sqlalchemy alembic langchain
           - id: minimal
             name: database=false storage=false
             database: "false"
             storage: "false"
+            absent: boto3 sqlalchemy alembic langchain
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -174,10 +178,9 @@ jobs:
           docker compose down -v
 
       - name: Build the image and check it holds none of the switched-off packages
-        if: matrix.id != 'no-database'
         working-directory: ${{ runner.temp }}/demo-${{ matrix.id }}
         env:
-          ABSENT: ${{ matrix.id == 'storage-off' && 'boto3' || 'boto3 sqlalchemy alembic langchain' }}
+          ABSENT: ${{ matrix.absent }}
         run: |
           make image
           read -r -a absent <<< "$ABSENT"
