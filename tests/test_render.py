@@ -152,6 +152,17 @@ def test_the_api_waits_for_migrations_that_run_once(render):
     assert all(port.startswith("127.0.0.1:") for port in api["ports"])
 
 
+def test_the_api_starts_on_its_own_without_the_database(render):
+    compose = yaml.safe_load((render(database=False) / "backend" / "compose.yaml").read_text())
+    api = compose["services"]["api"]
+    assert "migrate" not in compose["services"]
+    assert "depends_on" not in api
+    assert api["environment"]["APP_ENV"] == "local" and api["environment"]["LOG_JSON"] == "false"
+    assert all(port.startswith("127.0.0.1:") for port in api["ports"])
+    # Rebuild on source changes still watches the app, but not a migrations/ folder that is gone.
+    assert [w["path"] for w in api["develop"]["watch"]] == ["src", "pyproject.toml", "uv.lock"]
+
+
 @pytest.mark.parametrize("images", [True, False])
 def test_the_publish_workflow_follows_the_base_answer(render, project, images):
     dst = render(project(container_images=images))

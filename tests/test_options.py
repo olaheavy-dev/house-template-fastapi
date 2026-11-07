@@ -361,23 +361,34 @@ def compose_config(project: Path) -> dict:
     return json.loads(result.stdout)
 
 
-@ON_OFF
-def test_compose_services_follow_the_answers(render, storage):
-    project = render(storage=storage)
+@ANSWERS
+def test_compose_services_follow_the_answers(render, database, storage):
+    project = render(database=database, storage=storage)
     compose = yaml.safe_load((project / "backend/compose.yaml").read_text())
-    includes = [i if isinstance(i, str) else i["path"] for i in compose["include"]]
-    assert includes == ["compose/db/compose.yaml"] + (
+    includes = [i if isinstance(i, str) else i["path"] for i in compose.get("include", [])]
+    assert includes == (["compose/db/compose.yaml"] if database else []) + (
         ["compose/storage/compose.yaml"] if storage else [])
-    api_env = compose["services"]["api"]["environment"]
-    assert any(k.startswith("STORAGE_") for k in api_env) is storage
+    assert ("include" in compose) is (database or storage)
+    api = compose["services"]["api"]
+    assert any(k.startswith("STORAGE_") for k in api["environment"]) is storage
+    assert api["environment"]["APP_ENV"] == "local"
+    assert api["environment"]["LOG_JSON"] == "false"
+    assert ("DATABASE_URL" in api["environment"]) is database
+    assert ("depends_on" in api) is database
+    assert set(compose["services"]) == {"api"} | ({"migrate"} if database else set())
     if shutil.which("docker") is None:
         pytest.skip("docker not installed")
     config = compose_config(project)
-    assert set(config["services"]) == {"db", "migrate", "api"} | ({"storage"} if storage else set())
-    # depends_on still reaches the included database service.
-    assert config["services"]["migrate"]["depends_on"]["db"]["condition"] == "service_healthy"
-    assert config["services"]["api"]["depends_on"]["db"]["condition"] == "service_healthy"
-    assert set(config["volumes"]) == {"db-data"} | ({"storage-data"} if storage else set())
+    assert set(config["services"]) == (
+        {"api"} | ({"db", "migrate"} if database else set()) | ({"storage"} if storage else set()))
+    if database:
+        # depends_on still reaches the included database service.
+        assert config["services"]["migrate"]["depends_on"]["db"]["condition"] == "service_healthy"
+        assert config["services"]["api"]["depends_on"]["db"]["condition"] == "service_healthy"
+    else:
+        assert "depends_on" not in config["services"]["api"]
+    assert set(config.get("volumes", {})) == (
+        ({"db-data"} if database else set()) | ({"storage-data"} if storage else set()))
 
 
 def test_the_pins_dependabot_reads_live_in_plain_compose_files():
