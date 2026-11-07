@@ -34,8 +34,8 @@ BASELINE_REF = "d67ca3807ae74a78cc9728bf20da829be035117c"
 # Not compared: file modes, symlinks and empty directories (the template has no tracked
 # executables today).
 INTENDED: dict[str, str] = {
-    ".copier-answers.fastapi.yml": "records container_images (#49) and storage (#29)",
-    ".claude/rules/fastapi.md": "rule text moved after backend/.env (#41); extras rule, 413 sentence moved out of the Files bullet into its own (#29)",
+    ".copier-answers.fastapi.yml": "records container_images (#49), storage and database (#29)",
+    ".claude/rules/fastapi.md": "rule text moved after backend/.env (#41); extras rule naming db, langchain and storage, the switch command for each answer, turning the database off, make check type-checks migrations/, 413 sentence moved out of the Files bullet into its own (#29)",
     "mk/fastapi.mk": "record-llm help says provider keys (#41); EXTRAS, compose path, mypy paths (#29)",
     "backend/src/app/llm/prices.py": "comment matches the UTC+1 date rule (#41)",
     "backend/tests/test_llm_prices.py": "cache_creation ceiling case, UTC+1 date rule (#41)",
