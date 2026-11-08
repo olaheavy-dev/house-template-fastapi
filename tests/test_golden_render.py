@@ -39,7 +39,7 @@ INTENDED: dict[str, str] = {
     "mk/fastapi.mk": "record-llm help says provider keys (#41); EXTRAS, compose path, mypy paths (#29); check-fastapi also runs lint-imports --config llm-contracts.toml with the database (#33); llm-report runs python -m app.llm.core.report (#33)",
     "backend/src/app/llm/prices.py": "comment matches the UTC+1 date rule (#41); keeps only the price tables, the arithmetic moved to app/llm/core/prices.py and the old names warn until 0.8.0 (#33)",
     "backend/tests/test_llm_prices.py": "cache_creation ceiling case, UTC+1 date rule (#41); imports from app/llm/core (#33)",
-    ".github/template-owned/fastapi.txt": "lists the compose files under compose/ (#29); lists backend/.python-version (#59); lists the llm core and langchain adapter files and llm-contracts.toml (#33)",
+    ".github/template-owned/fastapi.txt": "lists the compose files under compose/ (#29); lists backend/.python-version (#59); lists the llm core and langchain adapter files and llm-contracts.toml (#33); lists the errors and embeddings shims and migrations 0001-0005 (#33)",
     "backend/.python-version": "uv stops looking for .python-version at the project root, so backend/ needs its own copy (#59)",
     "backend/Dockerfile": "installs the answered extras; the uvicorn comment is a whole sentence (#29)",
     "backend/compose.yaml": "includes the db and storage services from compose/ (#29)",
@@ -137,7 +137,7 @@ def require_ref(ref: str) -> None:
     found = subprocess.run(["git", "cat-file", "-e", f"{ref}^{{commit}}"], cwd=ROOT,
                            capture_output=True)
     if found.returncode != 0:
-        pytest.fail(f"BASELINE_REF {ref} is not in this clone. Fetch the full history "
+        pytest.fail(f"Commit {ref} is not in this clone. Fetch the full history "
                     "(`git fetch --unshallow`, or `fetch-depth: 0` in actions/checkout).")
 
 
