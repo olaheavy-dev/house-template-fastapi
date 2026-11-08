@@ -45,6 +45,9 @@ INTENDED: dict[str, str] = {
     "backend/src/app/llm/prices.py": "the cost warning no longer says to pass None, cost takes a Usage only (#85)",
     "backend/tests/test_llm_shims.py": "expects the new cost warning wording (#85)",
     "backend/tests/test_llm_checkpoints.py": "new: what the checkpointer can read back (#36)",
+    "backend/src/app/llm/langchain/checkpoints.py": "saved threads load strictly: serializer() (#36)",
+    "backend/src/app/llm/checkpoint_types.py": "new: the project's list of its own saved classes (#36)",
+    "backend/tests/test_llm_surface.py": "expects the new serializer name (#36)",
 }
 
 # DEPENDABOT_*: what Dependabot updates in this repository's rendered output

@@ -190,6 +190,7 @@ PUBLIC_NAMES: dict[str, tuple[str, ...]] = {
         "apply_migrations",
         "migration_sql",
         "open_checkpointer",
+        "serializer",
     ),
     "app.llm.core.report": (
         "GROUPS",

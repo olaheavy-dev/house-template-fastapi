@@ -9,19 +9,24 @@ apply_migrations again.
 
 The checkpointer gets its own small psycopg pool (the library needs autocommit, no prepared
 statements and dict rows), opened in the lifespan; it holds no connection until an agent runs.
+
+Saved threads load strictly (#36): see serializer().
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.postgres.base import BasePostgresSaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 from sqlalchemy import make_url, text
 from sqlalchemy.engine import Connection
 
+from app.llm import checkpoint_types
 from app.settings import Settings
 
 MIGRATIONS: list[str] = BasePostgresSaver.MIGRATIONS
@@ -54,6 +59,20 @@ def migration_sql() -> list[str]:
     return statements
 
 
+def serializer(allowed: Iterable[type] = ()) -> JsonPlusSerializer:
+    """LangGraph's serializer, loading strictly: a saved object is rebuilt only if its class is on
+    LangGraph's safe list (messages, dates, UUIDs, `Send` and so on) or in `allowed`, which adds to
+    that list. Any other object comes back as its plain data and LangGraph logs "Blocked
+    deserialization of <module>.<name>" once per class and process. LangGraph's default loader
+    imports and calls whatever a row names (GHSA-g48c-2wqr-h844).
+
+    Set here, not with LANGGRAPH_STRICT_MSGPACK: LangGraph reads that variable once, at import, and
+    backend/.env never reaches the process environment under `make dev` or the tests, so dev and
+    tests would load differently from production."""
+    # An empty tuple means "the safe list only", the same as None.
+    return JsonPlusSerializer(allowed_msgpack_modules=tuple(allowed) or None)
+
+
 async def open_checkpointer(settings: Settings) -> tuple[AsyncPostgresSaver, AsyncConnectionPool]:
     # libpq takes the URL without SQLAlchemy's "+psycopg" driver suffix.
     url = make_url(settings.database_url.get_secret_value()).set(drivername="postgresql")
@@ -66,4 +85,6 @@ async def open_checkpointer(settings: Settings) -> tuple[AsyncPostgresSaver, Asy
         open=False,
     )
     await pool.open()
-    return AsyncPostgresSaver(pool), pool  # type: ignore[arg-type]
+    # checkpoint_types.ALLOWED is read here, at call time, so a project or a test can change it.
+    saver = AsyncPostgresSaver(pool, serde=serializer(checkpoint_types.ALLOWED))  # type: ignore[arg-type]
+    return saver, pool
