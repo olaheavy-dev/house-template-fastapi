@@ -17,9 +17,9 @@ from fastapi.telemetry import TelemetryConfig
 
 from app import api, db, health
 from app.limits import BodyLimit, SecurityHeaders
-from app.llm import checkpoints
 from app.llm.core.errors import install_failure_handlers
 from app.llm.gateway import Gateway
+from app.llm.langchain import checkpoints
 from app.llm.langchain.errors import install_model_error_handlers
 from app.log import REQUEST_ID_HEADER, configure_logging, request_context
 from app.problems import UnhandledErrors, install_problem_handlers

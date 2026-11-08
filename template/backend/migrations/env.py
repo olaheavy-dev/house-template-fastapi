@@ -16,7 +16,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
 import app.models
-from app.llm import checkpoints
+from app.llm.langchain import checkpoints
 from app.settings import get_settings
 
 config = context.config
@@ -29,8 +29,9 @@ target_metadata = app.models.Base.metadata
 
 
 def include_name(name: str | None, type_: str, parent_names: object) -> bool:
-    # LangGraph's checkpoint tables are created by its own migrations (app/llm/checkpoints.py),
-    # so autogenerate must neither drop them nor report them as unmodelled.
+    # LangGraph's checkpoint tables are created by its own migrations
+    # (app/llm/langchain/checkpoints.py), so autogenerate must neither drop them nor report them
+    # as unmodelled.
     return not (type_ == "table" and name in checkpoints.TABLES)
 
 

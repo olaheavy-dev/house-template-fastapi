@@ -17,9 +17,9 @@ import pytest
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.llm import checkpoints
 from app.llm.core.registry import key_setting
 from app.llm.gateway import Gateway
+from app.llm.langchain import checkpoints
 from app.settings import Settings
 
 

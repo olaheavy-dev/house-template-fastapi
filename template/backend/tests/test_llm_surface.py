@@ -182,6 +182,13 @@ PUBLIC_NAMES: dict[str, tuple[str, ...]] = {
         "migration_sql",
         "open_checkpointer",
     ),
+    "app.llm.langchain.checkpoints": (
+        "MIGRATIONS",
+        "TABLES",
+        "apply_migrations",
+        "migration_sql",
+        "open_checkpointer",
+    ),
     "app.llm.core.report": (
         "GROUPS",
         "SpendRow",
@@ -269,6 +276,11 @@ MOVED: dict[tuple[str, str], str] = {
     ("app.llm.prompts", "load_prompt"): "app.llm.langchain.prompts",
     # #33 T5a
     **{("app.llm.report", name): "app.llm.core.report" for name in PUBLIC_NAMES["app.llm.report"]},
+    # #33 T5b
+    **{
+        ("app.llm.checkpoints", name): "app.llm.langchain.checkpoints"
+        for name in PUBLIC_NAMES["app.llm.checkpoints"]
+    },
 }
 
 

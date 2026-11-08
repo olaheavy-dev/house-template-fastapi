@@ -19,9 +19,9 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import User
-from app.llm import checkpoints
 from app.llm.core.budget import LlmCall
 from app.llm.gateway import Gateway
+from app.llm.langchain import checkpoints
 from app.llm.langchain.prompts import Prompt
 from app.settings import Settings
 

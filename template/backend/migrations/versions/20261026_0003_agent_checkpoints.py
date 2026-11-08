@@ -1,7 +1,8 @@
 """Agent checkpoints: LangGraph's Postgres checkpointer tables
 
-Created by the library's own migration list (app/llm/checkpoints.py), outside a transaction
-because it builds indexes CONCURRENTLY. The tables are new, so no existing rows are affected.
+Created by the library's own migration list (app/llm/langchain/checkpoints.py), outside a
+transaction because it builds indexes CONCURRENTLY. The tables are new, so no existing rows are
+affected.
 Downgrading drops every saved agent thread.
 
 Revision ID: 0003
@@ -15,7 +16,7 @@ from collections.abc import Sequence
 
 from alembic import op
 
-from app.llm import checkpoints
+from app.llm.langchain import checkpoints
 
 revision: str = "0003"
 down_revision: str | Sequence[str] | None = "0002"

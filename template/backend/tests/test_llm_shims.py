@@ -79,6 +79,7 @@ def test_an_unknown_name_is_still_an_attribute_error() -> None:
         "app.llm.embeddings",
         "app.llm.prompts",
         "app.llm.report",
+        "app.llm.checkpoints",
     ):
         with pytest.raises(AttributeError, match="has no attribute 'nope'"):
             _ = importlib.import_module(old).nope
@@ -139,7 +140,12 @@ def test_the_template_never_uses_an_old_path() -> None:
     # warning is an error at import time), so the template must not have any.
     found = {
         path.relative_to(BACKEND).as_posix(): old_path_uses(path)
-        for path in [*BACKEND.glob("src/**/*.py"), *BACKEND.glob("tests/**/*.py")]
+        for path in [
+            *BACKEND.glob("src/**/*.py"),
+            *BACKEND.glob("tests/**/*.py"),
+            # A revision that calls the old path would warn in conftest's in-process upgrade.
+            *BACKEND.glob("migrations/**/*.py"),
+        ]
         if path.name != "test_llm_shims.py"
     }
     assert {path: uses for path, uses in found.items() if uses} == {}
@@ -223,6 +229,20 @@ def test_the_old_prompts_and_report_modules_import_without_a_warning() -> None:
         "import app.llm.prompts, app.llm.report\n"
         "assert 'load_prompt' in app.llm.prompts.__all__\n"
         "assert 'collect' in app.llm.report.__all__\n"
+    )
+    subprocess.run(  # noqa: S603 - this interpreter, running code written above
+        [sys.executable, "-c", code], check=True
+    )
+
+
+def test_the_old_checkpoints_module_imports_without_a_warning() -> None:
+    # As for the other old modules: importing it is silent, only a moved name warns. Its new
+    # module is imported first (LangChain warns on import on Python 3.14, see above).
+    code = (
+        "import warnings, app.llm.langchain.checkpoints\n"
+        "warnings.simplefilter('error')\n"
+        "import app.llm.checkpoints\n"
+        "assert 'apply_migrations' in app.llm.checkpoints.__all__\n"
     )
     subprocess.run(  # noqa: S603 - this interpreter, running code written above
         [sys.executable, "-c", code], check=True
