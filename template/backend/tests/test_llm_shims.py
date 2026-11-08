@@ -257,9 +257,11 @@ def test_gateway_dep_is_one_object_whichever_path_names_it() -> None:
     from app.llm.langchain import gateway as new
 
     old = importlib.import_module("app.llm.gateway")
-    with pytest.warns(
-        DeprecationWarning, match="app.llm.gateway.GatewayDep moved to app.llm."
-    ) as w:
+    message = (
+        r"^app\.llm\.gateway\.GatewayDep moved to app\.llm\.GatewayDep: import it from there "
+        r"\(the old name goes in 0\.8\.0\)$"
+    )
+    with pytest.warns(DeprecationWarning, match=message) as w:
         moved = old.GatewayDep
     assert app.llm.GatewayDep is new.GatewayDep is moved
     assert [x.filename for x in w] == [__file__]
