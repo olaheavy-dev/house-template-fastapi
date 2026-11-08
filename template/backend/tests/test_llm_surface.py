@@ -34,7 +34,7 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 from app.db import Base
-from app.llm import budget, embeddings, prices, report
+from app.llm import embeddings, prices, report
 from app.llm.core import metrics as core_metrics
 from app.llm.core.errors import DEFAULT_RETRY_AFTER, Outcome
 from app.llm.langchain.errors import OUTCOMES, outcome_for
@@ -116,6 +116,7 @@ PUBLIC_NAMES: dict[str, tuple[str, ...]] = {
         "record_refusal",
         "record_call",
     ),
+    "app.llm.langchain.callbacks": ("BudgetGuard", "input_bound"),
     "app.llm.prices": (
         "MICRO_USD",
         "Rates",
@@ -203,6 +204,35 @@ MOVED: dict[tuple[str, str], str] = {
     ("app.llm.errors", "install_model_error_handlers"): "app.llm.langchain.errors",
     # #33 T3
     **{
+        ("app.llm.budget", name): "app.llm.core.budget"
+        for name in (
+            "LlmSpendDay",
+            "LlmSpendUserDay",
+            "LlmCall",
+            "BudgetExhausted",
+            "UserBudgetExhausted",
+            "reserve",
+            "reserve_for",
+            "settle",
+            "expire_stale",
+            "utc_today",
+            "WARN_SHARE",
+        )
+    },
+    **{
+        ("app.llm.budget", name): "app.llm.core.bounds"
+        for name in (
+            "PromptTooLong",
+            "UnboundedMedia",
+            "UnpricedRequest",
+            "check_priced",
+            "INPUT_MARGIN_TOKENS",
+            "IMAGE_TOKENS",
+        )
+    },
+    ("app.llm.budget", "BudgetGuard"): "app.llm.langchain.callbacks",
+    ("app.llm.budget", "input_bound"): "app.llm.langchain.callbacks",
+    **{
         ("app.llm.metrics", name): "app.llm.core.metrics"
         for name in PUBLIC_NAMES["app.llm.metrics"]
     },
@@ -218,6 +248,11 @@ def moved_names(old: str) -> SimpleNamespace:
             if module == old
         }
     )
+
+
+# Aliases (#33 T3): the old app.llm.budget names, from their new modules, so the checks below read
+# as before. Only these lines changed.
+budget = moved_names("app.llm.budget")
 
 
 @pytest.mark.parametrize("module", sorted(PUBLIC_NAMES))

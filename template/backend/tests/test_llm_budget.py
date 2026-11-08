@@ -26,23 +26,21 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.llm import budget, prices, report
-from app.llm.budget import (
+from app.llm import prices, report
+from app.llm.core import bounds, budget
+from app.llm.core.bounds import PromptTooLong, UnboundedMedia, UnpricedRequest
+from app.llm.core.budget import (
     BudgetExhausted,
-    BudgetGuard,
     LlmCall,
     LlmSpendDay,
     LlmSpendUserDay,
-    PromptTooLong,
-    UnboundedMedia,
-    UnpricedRequest,
     UserBudgetExhausted,
     expire_stale,
-    input_bound,
     reserve,
     reserve_for,
     settle,
 )
+from app.llm.langchain.callbacks import BudgetGuard, input_bound
 
 pytestmark = pytest.mark.anyio
 
@@ -277,7 +275,7 @@ async def test_images_are_reserved_at_their_maximum_however_they_are_sent(
     await model.ainvoke([HumanMessage(content=[image, {"type": "text", "text": "What is 2 + 2?"}])])
     text_only, with_image = sorted(c.reserved_micro_usd for c in await calls(db_session))
     # At least IMAGE_TOKENS more input at the highest input rate ($4/M for 1h cache writes).
-    assert with_image - text_only >= budget.IMAGE_TOKENS * 4
+    assert with_image - text_only >= bounds.IMAGE_TOKENS * 4
 
 
 async def test_media_the_budget_cant_bound_is_refused_before_sending(

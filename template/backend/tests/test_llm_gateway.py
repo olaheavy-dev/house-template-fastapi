@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.llm import prices
-from app.llm.budget import LlmCall
+from app.llm.core.budget import LlmCall
 from app.llm.core.prices import cost
 from app.llm.gateway import Gateway, GatewayDep
 from app.llm.langchain.usage import from_langchain

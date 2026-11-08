@@ -19,6 +19,7 @@ TAKES_USAGE = {
     ("app.llm.prices", "cost"),
     ("app.llm.prices", "token_details"),
     # #33 T3
+    ("app.llm.budget", "settle"),
     ("app.llm.metrics", "record_call"),
 }
 BACKEND = Path(__file__).resolve().parents[1]
@@ -73,6 +74,7 @@ def test_an_unknown_name_is_still_an_attribute_error() -> None:
         "app.llm.prices",
         "app.llm.gateway",
         "app.llm.errors",
+        "app.llm.budget",
         "app.llm.metrics",
     ):
         with pytest.raises(AttributeError, match="has no attribute 'nope'"):
@@ -179,15 +181,36 @@ def test_the_old_errors_module_imports_without_a_warning() -> None:
     )
 
 
-def test_the_old_metrics_module_imports_without_a_warning() -> None:
-    # As for app.llm.errors: importing the old module is silent, only a moved name warns. The new
-    # module is imported first (LangChain warns on import on Python 3.14, see above).
+def test_the_old_budget_and_metrics_modules_import_without_a_warning() -> None:
+    # As for app.llm.errors: importing the old modules is silent, only a moved name warns. Their
+    # new modules are imported first (LangChain warns on import on Python 3.14, see above).
     code = (
-        "import warnings, app.llm.core.metrics\n"
+        "import warnings, app.llm.core.budget, app.llm.core.bounds, app.llm.core.metrics\n"
+        "import app.llm.langchain.callbacks\n"
         "warnings.simplefilter('error')\n"
-        "import app.llm.metrics\n"
+        "import app.llm.budget, app.llm.metrics\n"
+        "assert 'BudgetGuard' in app.llm.budget.__all__\n"
         "assert 'record_call' in app.llm.metrics.__all__\n"
     )
     subprocess.run(  # noqa: S603 - this interpreter, running code written above
         [sys.executable, "-c", code], check=True
     )
+
+
+def test_the_budget_tables_are_mapped_once_whichever_path_names_them() -> None:
+    # One class per table: the old path is the core's class, not a second mapping of the table.
+    from app.db import Base
+    from app.llm.core import budget
+
+    for name, table in (
+        ("LlmCall", "llm_call"),
+        ("LlmSpendDay", "llm_spend_day"),
+        ("LlmSpendUserDay", "llm_spend_user_day"),
+    ):
+        with pytest.warns(DeprecationWarning, match=f"app.llm.budget.{name} moved"):
+            old = getattr(importlib.import_module("app.llm.budget"), name)
+        assert old is getattr(budget, name)
+        assert old.__module__ == "app.llm.core.budget"
+        assert old.__table__ is Base.metadata.tables[table]
+        mapped = [m.class_ for m in Base.registry.mappers if m.class_.__name__ == name]
+        assert mapped == [old]

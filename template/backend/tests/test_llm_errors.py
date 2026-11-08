@@ -20,7 +20,7 @@ from langchain_core.exceptions import (
     ModelTimeoutError,
 )
 
-from app.llm.budget import BudgetExhausted
+from app.llm.core.budget import BudgetExhausted
 
 pytestmark = pytest.mark.anyio
 
