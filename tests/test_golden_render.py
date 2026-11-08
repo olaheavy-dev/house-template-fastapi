@@ -113,6 +113,7 @@ INTENDED: dict[str, str] = {
     "backend/tests/test_llm_core_embeddings.py": "new: tests of the core's embeddings and OpenAI's call (#33)",
     "backend/tests/test_llm_langchain_callbacks.py": "new: tests of BudgetGuard driving the Meter (#33)",
     "backend/tests/test_llm_langchain_embeddings.py": "new: characterises GatewayEmbeddings through its public calls before it moves onto the Meter (#33)",
+    "backend/tests/test_llm_report_cli.py": "new: pins the spend report's command line (#33)",
 }
 
 # Lines Copier writes that name where and when the template was applied, not what it generated.
