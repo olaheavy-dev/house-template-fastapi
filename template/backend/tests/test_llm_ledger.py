@@ -37,8 +37,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
-from app.llm import prices, report
-from app.llm.core import budget
+from app.llm import prices
+from app.llm.core import budget, report
 from app.llm.core.bounds import IMAGE_TOKENS, INPUT_MARGIN_TOKENS
 from app.llm.core.budget import (
     BudgetExhausted,
@@ -48,9 +48,9 @@ from app.llm.core.budget import (
     reserve,
     reserve_for,
 )
-from app.llm.embeddings import GatewayEmbeddings
-from app.llm.gateway import Gateway
 from app.llm.langchain.callbacks import BudgetGuard, input_bound
+from app.llm.langchain.embeddings import GatewayEmbeddings
+from app.llm.langchain.gateway import Gateway
 from app.llm.langchain.usage import from_langchain
 from app.settings import Settings
 from tests.models import CHAT_MODEL, EMBEDDING_MODEL
@@ -658,9 +658,9 @@ def provider_errors() -> list[tuple[Exception, type[ModelError], bool]]:
 async def test_an_openai_embedding_error_becomes_the_model_error_family_and_settles_by_kind(
     sessions: async_sessionmaker[AsyncSession], db_session: AsyncSession, case: int
 ) -> None:
-    # Private seam note: this pins embeddings._KINDS, _kind_of and _as_model_error(error, kind), and
-    # the core's REJECTED, through the public call. T4 moves the table; keep this test and retarget
-    # it, do not delete it.
+    # Private seam note: this pins core/openai_embeddings.py KINDS and kind_of, GatewayEmbeddings'
+    # translation of the core's ProviderError, and the core's REJECTED, through the public call
+    # (before #33 T4 they were embeddings._KINDS, _kind_of and _as_model_error).
     source, target, unbilled = provider_errors()[case]
     api = FailingEmbeddingsApi(source)
     vectors = GatewayEmbeddings(

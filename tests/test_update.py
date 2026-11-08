@@ -203,6 +203,7 @@ def test_container_images_turning_on_adds_the_publish_workflow_on_update(tmp_pat
 @pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
 def test_recopy_moves_a_v0_6_1_project_to_head(tmp_path, tagged_repo):
     """Recopy a v0.6.1 project to a tag of the throwaway repo, then update to the next tag."""
+    # Goes when the README stops supporting a recopy from v0.6.1.
     require_ref("v0.6.1")
     dst = tmp_path / "project"
     write_base(dst)
@@ -244,6 +245,189 @@ def test_recopy_moves_a_v0_6_1_project_to_head(tmp_path, tagged_repo):
     assert (dst / "backend/src/app/product.py").read_text() == "# the product\n"
     assert not list(dst.rglob("*.rej"))
     assert [p for p, data in files_of(dst).items() if b"<<<<<<<" in data] == []
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+def test_recopy_overwrites_a_v0_6_1_price_table_and_models_but_git_keeps_the_edits(
+        tmp_path, tagged_repo):
+    """A recopy overwrites every file the template renders: the price table and app/models.py too
+    (#33). It leaves no conflict, so the project's edits come back only from `git diff` or
+    `git show HEAD:<path>`. Only backend/uv.lock is kept (copier.yml _skip_if_exists)."""
+    # Goes when the README stops supporting a recopy from v0.6.1.
+    require_ref("v0.6.1")
+    dst = tmp_path / "project"
+    write_base(dst)
+    copy_layer(ROOT, dst, "v0.6.1")
+    recorded = (dst / ANSWERS_FILE).read_text()
+    (dst / ANSWERS_FILE).write_text(
+        "".join(f"_src_path: {tagged_repo}\n" if ln.startswith("_src_path:") else ln
+                for ln in recorded.splitlines(keepends=True)))
+    prices = dst / "backend/src/app/llm/prices.py"
+    models = dst / "backend/src/app/models.py"
+    entry = '    "openai:gpt-demo": Price(_rates(1, 4, 0.10, 1.25, 2)),\n'
+    old = prices.read_text()
+    prices.write_text(old.replace("PRICES: dict[str, Price] = {\n", f"PRICES: dict[str, Price] = {{\n{entry}", 1))
+    models.write_text(models.read_text() + "from app.course import Course  # noqa: E402,F401\n")
+    assert entry in prices.read_text()
+    git(dst, "init", "-q", "-b", "main")
+    git(dst, "add", "-A")
+    git(dst, "commit", "-q", "-m", "chore: v0.6.1 with a price and a model")
+    edited = {p: (dst / p).read_text() for p in ("backend/src/app/llm/prices.py",
+                                                 "backend/src/app/models.py")}
+
+    copier.run_recopy(dst, answers_file=ANSWERS_FILE, defaults=True, overwrite=True, unsafe=True,
+                      quiet=True, vcs_ref="v100.0.0")
+
+    fresh = tmp_path / "fresh"
+    write_base(fresh)
+    copy_layer(tagged_repo, fresh, "v100.0.0")
+    for rel, text in edited.items():
+        assert (dst / rel).read_bytes() == (fresh / rel).read_bytes(), rel  # overwritten
+        assert (dst / rel).read_text() != text, rel
+        assert git(dst, "show", f"HEAD:{rel}") == text, rel  # recoverable from git
+    assert "gpt-demo" not in prices.read_text()
+    assert "app.course" not in models.read_text()
+
+
+# main just before the core split (T0, #63); it already has the #49 fix, so `copier update` works.
+PRE_SPLIT = "160b8453a96e996355f1d7e5ff46e0c14f3bbcda"
+SHIMS = ("gateway", "checkpoints", "errors", "embeddings")
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+def test_update_from_before_the_core_split_merges_the_price_table_and_conflicts_on_edited_shims(
+        tmp_path):
+    # Goes when 0.8.0 removes the shims (#33). This unreleased main commit stands in for a project
+    # made from main between 0.6.1 and 0.7.0, because a 0.6.1 project cannot `copier update` at all.
+    require_ref(PRE_SPLIT)
+    dst = tmp_path / "project"
+    write_base(dst)
+    copy_layer(ROOT, dst, PRE_SPLIT)
+    llm = dst / "backend/src/app/llm"
+    entry = ('    "openai:gpt-demo": Price(\n        _rates(1, 4, 0.10, 1.25, 2), checked="2026-11-06",\n'
+             '        source=OPENAI_PRICING,\n    ),\n')
+    prices = (llm / "prices.py").read_text()
+    assert "PRICES: dict[str, Price] = {\n" in prices
+    (llm / "prices.py").write_text(prices.replace("PRICES: dict[str, Price] = {\n",
+                                                  f"PRICES: dict[str, Price] = {{\n{entry}", 1))
+    for name in SHIMS:
+        with (llm / f"{name}.py").open("a") as f:
+            f.write(f"# my edit to {name}\n")
+    product = dst / "backend/src/app/api/ask.py"
+    product.parent.mkdir(parents=True, exist_ok=True)
+    product.write_text("from app.llm.gateway import GatewayDep\n")
+    git(dst, "init", "-q", "-b", "main")
+    git(dst, "add", "-A")
+    git(dst, "commit", "-q", "-m", "chore: pre-split project with edits")
+    product_before = product.read_bytes()
+
+    copier.run_update(dst, answers_file=ANSWERS_FILE, defaults=True, unsafe=True, overwrite=True,
+                      quiet=True, vcs_ref="HEAD")
+
+    merged = (llm / "prices.py").read_text()
+    assert entry in merged  # the project's price entry survived
+    assert "_MOVED" in merged  # and the new template's text arrived around it
+    assert "<<<<<<<" not in merged
+    # Observed on Copier 9.19.1 with the default inline conflict mode: exactly the four edited
+    # shims conflict, nothing is left as .rej or .orig, and the product file is untouched.
+    conflicted = sorted(p for p, data in files_of(dst).items() if b"<<<<<<<" in data)
+    assert conflicted == sorted(f"backend/src/app/llm/{name}.py" for name in SHIMS)
+    assert not list(dst.rglob("*.rej")) and not list(dst.rglob("*.orig"))
+    assert product.read_bytes() == product_before
+
+
+# main right after #53 (`copier update` works) and before #54 (`storage`) and #60 (`database`).
+PRE_OPTIONS = "91943a4f696d414abb721066926bf1b926cbaad8"
+# The files `database: false` removes from a PRE_OPTIONS project (observed on Copier 9.19.1). The
+# gateway has no core/ or langchain/ yet and there is no compose/db: those came later.
+PRE_OPTIONS_DATABASE_FILES = {
+    "backend/migrations/env.py",
+    "backend/migrations/script.py.mako",
+    "backend/migrations/versions/20261025_0001_enable_pgvector.py",
+    "backend/migrations/versions/20261026_0002_llm_budget.py",
+    "backend/migrations/versions/20261026_0003_agent_checkpoints.py",
+    "backend/migrations/versions/20261026_0004_llm_call_details.py",
+    "backend/migrations/versions/20261026_0005_per_user_llm_budget.py",
+    "backend/migrations/versions/20261026_app_project_root.py",
+    "backend/src/app/db.py",
+    "backend/src/app/llm/__init__.py",
+    "backend/src/app/llm/budget.py",
+    "backend/src/app/llm/checkpoints.py",
+    "backend/src/app/llm/embeddings.py",
+    "backend/src/app/llm/errors.py",
+    "backend/src/app/llm/gateway.py",
+    "backend/src/app/llm/metrics.py",
+    "backend/src/app/llm/prices.py",
+    "backend/src/app/llm/prompts.py",
+    "backend/src/app/llm/report.py",
+    "backend/src/app/models.py",
+    "backend/src/app/prompts/README.md",
+    "backend/tests/cassettes/test_llm_gateway/test_a_replayed_call_is_answered_and_its_cost_settled.yaml",
+    "backend/tests/db.py",
+    "backend/tests/evals/__init__.py",
+    "backend/tests/evals/conftest.py",
+    "backend/tests/evals/test_gateway_evals.py",
+    "backend/tests/models.py",
+    "backend/tests/recording.py",
+    "backend/tests/test_db.py",
+    "backend/tests/test_llm_agents.py",
+    "backend/tests/test_llm_budget.py",
+    "backend/tests/test_llm_embeddings.py",
+    "backend/tests/test_llm_gateway.py",
+    "backend/tests/test_llm_prices.py",
+    "backend/tests/test_observability.py",
+    "backend/tests/test_recording_keys.py",
+}
+PRE_OPTIONS_STORAGE_FILES = {"backend/src/app/storage.py", "backend/tests/storage.py",
+                             "backend/tests/test_storage.py"}
+
+
+def pre_options_project(path: Path) -> Path:
+    require_ref(PRE_OPTIONS)
+    write_base(path)
+    copy_layer(ROOT, path, PRE_OPTIONS)
+    assert not {"storage", "database"} & answers(path).keys()
+    git(path, "init", "-q", "-b", "main")
+    (path / "backend" / "user_added.txt").write_text("mine\n")
+    git(path, "add", "-A")
+    git(path, "commit", "-q", "-m", "chore: start")
+    return path
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+def test_update_from_before_the_storage_and_database_questions_keeps_every_file(tmp_path):
+    # Goes when the README stops supporting updates from main between #53 and #54/#60. README:
+    # "Projects made before the `storage` question existed take `storage: true` on update".
+    dst = pre_options_project(tmp_path / "project")
+    before = tracked(dst)
+
+    copier.run_update(dst, answers_file=ANSWERS_FILE, defaults=True, unsafe=True, overwrite=True,
+                      quiet=True, vcs_ref="HEAD")
+
+    recorded = answers(dst)
+    assert (recorded["storage"], recorded["database"]) == (True, True)
+    assert before - set(files_of(dst)) == set(), "update deleted files"
+    assert (dst / "backend/user_added.txt").read_text() == "mine\n"
+    assert not list(dst.rglob("*.rej"))
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+@pytest.mark.parametrize(("answer", "expected"), [
+    ("storage", PRE_OPTIONS_STORAGE_FILES), ("database", PRE_OPTIONS_DATABASE_FILES)])
+def test_update_from_before_the_questions_with_one_turned_off_removes_only_its_files(
+        tmp_path, answer, expected):
+    # Goes when the README stops supporting updates from main between #53 and #54/#60. This is
+    # what the `is defined` guards in copier.yml are for: the old copy has no such answer.
+    dst = pre_options_project(tmp_path / "project")
+    before = tracked(dst)
+
+    copier.run_update(dst, answers_file=ANSWERS_FILE, data={answer: False}, defaults=True,
+                      unsafe=True, overwrite=True, quiet=True, vcs_ref="HEAD")
+
+    assert before - set(files_of(dst)) == expected
+    assert answers(dst)[answer] is False
+    assert (dst / "backend/user_added.txt").read_text() == "mine\n"
+    assert not list(dst.rglob("*.rej"))
 
 
 STORAGE_PATHS = ["backend/src/app/storage.py", "backend/tests/storage.py",

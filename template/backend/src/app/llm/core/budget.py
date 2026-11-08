@@ -321,7 +321,8 @@ async def expire_stale(session: AsyncSession, *, older_than: timedelta) -> int:
     """Close reservations left open by a process that died mid-call (a crash, a SIGKILL after
     the grace period). Whether the provider billed them is unknown, so each keeps its
     reservation as its cost (the day's total already counts it) and is marked failed. Returns how
-    many were closed. Run it from a scheduled job, or `python -m app.llm.report --expire-stale`."""
+    many were closed. Run it from a scheduled job, or
+    `python -m app.llm.core.report --expire-stale`."""
     closed = await session.execute(
         update(LlmCall)
         .where(LlmCall.status == "reserved", LlmCall.created_at < func.now() - older_than)
@@ -348,8 +349,9 @@ class CallTags:
 
 class Meter:
     """The budget for one model, driven by an adapter: reserve() before a call is sent, then
-    settle() when it ends or failed() when it fails. Each call gets one llm_call row and adds to
-    the llm.* metrics; the call id is the adapter's (unique per call: it is the row's key).
+    settle() when it ends, failed() when it fails or abandon() if it is cancelled. Each call gets
+    one llm_call row and adds to the llm.* metrics; the call id is the adapter's (unique per call:
+    it is the row's key).
 
     The settings are plain attributes, read on every call (tests and the gateway may change them).
     `sessionmaker` is looked up per call, so tests can point the app at their own transaction;
@@ -432,6 +434,13 @@ class Meter:
         included, keeps the reservation as its cost."""
         rejected = kind in REJECTED and not streamed
         await self._close(call_id, "failed", 0 if rejected else None, None)
+
+    def abandon(self, call_id: uuid.UUID) -> None:
+        """Stop tracking a call that ended without settle() or failed(), one cancelled mid-flight.
+        Whether it was billed is unknown, so its row stays reserved (counted at its reservation)
+        until expire_stale closes it. Never awaits, so it is safe while the task is being
+        cancelled."""
+        self._started.pop(call_id, None)
 
     async def _close(
         self, call_id: uuid.UUID, status: str, cost: int | None, usage: Usage | None

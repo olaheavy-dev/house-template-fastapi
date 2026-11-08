@@ -1,48 +1,36 @@
-"""Prompts are versioned files in the repo, never pulled at runtime, so a prompt change shows up in
-review and a replayed test sends exactly what was recorded.
-
-Each prompt is a Markdown file in app/prompts/ whose content hash is its version. Pass
-prompt.config() with the call: the hash goes on the call's cost row and on its LangSmith trace,
-so experiments and costs can be compared prompt version by prompt version.
-
-    summarise = load_prompt("summarise")
-    answer = await model.ainvoke(
-        [SystemMessage(summarise.text), HumanMessage(text)], config=summarise.config()
-    )
+"""Moved (#33): the prompt, its hash and loading the file are in app/llm/core/prompts.py (PROMPTS),
+and the LangChain `Prompt` with `config()` and `load_prompt` in app/llm/langchain/prompts.py. Until
+0.8.0 the old names still answer here, with a DeprecationWarning, and are the same objects as the
+new ones.
 """
 
 from __future__ import annotations
 
-import hashlib
-from dataclasses import dataclass
-from functools import cache
-from pathlib import Path
+import warnings
+from typing import TYPE_CHECKING
 
-from langchain_core.runnables import RunnableConfig
+from app.llm.core import prompts as _core
+from app.llm.langchain import prompts as _langchain
 
-PROMPTS = Path(__file__).parents[1] / "prompts"
+if TYPE_CHECKING:
+    from app.llm.core.prompts import PROMPTS as PROMPTS
+    from app.llm.langchain.prompts import Prompt as Prompt
+    from app.llm.langchain.prompts import load_prompt as load_prompt
 
+__all__ = ["PROMPTS", "Prompt", "load_prompt"]
 
-@dataclass(frozen=True, slots=True)
-class Prompt:
-    name: str
-    text: str
+_MOVED = {"PROMPTS": _core, "Prompt": _langchain, "load_prompt": _langchain}
 
-    @property
-    def sha(self) -> str:
-        return hashlib.sha256(self.text.encode()).hexdigest()[:12]
+if not TYPE_CHECKING:
 
-    def config(self) -> RunnableConfig:
-        return {
-            "run_name": self.name,
-            "metadata": {"prompt": self.name, "prompt_sha": self.sha},
-            "tags": [f"prompt:{self.name}@{self.sha}"],
-        }
-
-
-@cache
-def load_prompt(name: str, directory: Path = PROMPTS) -> Prompt:
-    path = (directory / f"{name}.md").resolve()
-    if path.parent != directory.resolve():
-        raise ValueError(f"not a prompt name: {name!r}")
-    return Prompt(name=name, text=path.read_text(encoding="utf-8"))
+    def __getattr__(name: str) -> object:
+        if name in _MOVED:
+            new = _MOVED[name]
+            warnings.warn(
+                f"app.llm.prompts.{name} moved to {new.__name__}.{name}: import it from there "
+                "(the old name goes in 0.8.0)",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return getattr(new, name)
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

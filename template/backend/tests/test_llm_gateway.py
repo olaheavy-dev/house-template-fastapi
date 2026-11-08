@@ -14,12 +14,12 @@ from langchain_core.tracers.langchain import LangChainTracer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.llm import prices
+from app.llm import GatewayDep, prices
 from app.llm.core.budget import LlmCall
 from app.llm.core.prices import cost
-from app.llm.gateway import Gateway, GatewayDep
+from app.llm.langchain.gateway import Gateway
+from app.llm.langchain.prompts import load_prompt
 from app.llm.langchain.usage import from_langchain
-from app.llm.prompts import load_prompt
 from app.settings import Settings
 from tests.models import CHAT_MODEL, EMBEDDING_MODEL
 

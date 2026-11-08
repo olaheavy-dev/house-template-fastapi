@@ -17,8 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.llm import prices
 from app.llm.core.budget import BudgetExhausted, LlmCall, LlmSpendDay, UserBudgetExhausted
-from app.llm.embeddings import GatewayEmbeddings
-from app.llm.gateway import Gateway
+from app.llm.langchain.embeddings import GatewayEmbeddings
+from app.llm.langchain.gateway import Gateway
 from app.settings import Settings
 from tests.models import EMBEDDING_MODEL
 

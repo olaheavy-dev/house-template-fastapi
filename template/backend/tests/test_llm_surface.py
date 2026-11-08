@@ -6,6 +6,7 @@ and the prompt version hash. The framework-neutral split must keep every one of 
 from __future__ import annotations
 
 import importlib
+import warnings
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,12 +35,14 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 from app.db import Base
-from app.llm import embeddings, prices, report
+from app.llm import embeddings, prices
 from app.llm.core import metrics as core_metrics
+from app.llm.core import report
 from app.llm.core.errors import DEFAULT_RETRY_AFTER, Outcome
+from app.llm.core.prompts import PROMPTS
 from app.llm.langchain.errors import OUTCOMES, outcome_for
+from app.llm.langchain.prompts import Prompt, load_prompt
 from app.llm.langchain.usage import from_langchain
-from app.llm.prompts import PROMPTS, Prompt, load_prompt
 
 pytestmark = pytest.mark.anyio
 
@@ -58,6 +61,9 @@ PUBLIC_NAMES: dict[str, tuple[str, ...]] = {
     ),
     "app.llm.core.registry": ("KEY_SETTINGS", "key_setting", "chat_price", "embedding_price"),
     "app.llm.langchain.usage": ("from_langchain",),
+    "app.llm.core.embeddings": ("MAX_INPUTS", "MAX_BYTES", "Create", "batches", "embed"),
+    "app.llm.core.openai_embeddings": ("KINDS", "kind_of", "openai_client", "create"),
+    "app.llm.langchain.embeddings": ("GatewayEmbeddings",),
     "app.llm.core.errors": (
         "FailureKind",
         "Outcome",
@@ -164,15 +170,37 @@ PUBLIC_NAMES: dict[str, tuple[str, ...]] = {
         "record_refusal",
         "record_call",
     ),
+    "app.llm.core.prompts": ("PROMPTS", "Prompt", "prompt_text"),
+    "app.llm.langchain.prompts": ("Prompt", "prompt_config", "load_prompt"),
     "app.llm.prompts": ("PROMPTS", "Prompt", "load_prompt"),
     "app.llm.embeddings": ("GatewayEmbeddings", "openai_client"),
     "app.llm.gateway": ("Gateway", "GatewayDep", "get_gateway", "key_setting", "KEY_SETTINGS"),
+    "app.llm.langchain.gateway": ("Gateway", "GatewayDep", "get_gateway"),
+    "app.llm": ("GatewayDep",),
     "app.llm.checkpoints": (
         "MIGRATIONS",
         "TABLES",
         "apply_migrations",
         "migration_sql",
         "open_checkpointer",
+    ),
+    "app.llm.langchain.checkpoints": (
+        "MIGRATIONS",
+        "TABLES",
+        "apply_migrations",
+        "migration_sql",
+        "open_checkpointer",
+    ),
+    "app.llm.core.report": (
+        "GROUPS",
+        "SpendRow",
+        "spend",
+        "render",
+        "stale",
+        "collect",
+        "main",
+        "STALE_AFTER",
+        "cli",
     ),
     "app.llm.report": (
         "GROUPS",
@@ -236,6 +264,28 @@ MOVED: dict[tuple[str, str], str] = {
         ("app.llm.metrics", name): "app.llm.core.metrics"
         for name in PUBLIC_NAMES["app.llm.metrics"]
     },
+    # #33 T4
+    ("app.llm.embeddings", "GatewayEmbeddings"): "app.llm.langchain.embeddings",
+    ("app.llm.embeddings", "openai_client"): "app.llm.core.openai_embeddings",
+    **{
+        ("app.llm.embeddings", name): "app.llm.core.budget"
+        for name in ("BudgetExhausted", "UserBudgetExhausted", "reserve_for", "settle")
+    },
+    ("app.llm.embeddings", "INPUT_MARGIN_TOKENS"): "app.llm.core.bounds",
+    # #33 T5a
+    ("app.llm.prompts", "PROMPTS"): "app.llm.core.prompts",
+    ("app.llm.prompts", "Prompt"): "app.llm.langchain.prompts",
+    ("app.llm.prompts", "load_prompt"): "app.llm.langchain.prompts",
+    # #33 T5a
+    **{("app.llm.report", name): "app.llm.core.report" for name in PUBLIC_NAMES["app.llm.report"]},
+    # #33 T5b
+    ("app.llm.gateway", "Gateway"): "app.llm.langchain.gateway",
+    ("app.llm.gateway", "get_gateway"): "app.llm.langchain.gateway",
+    ("app.llm.gateway", "GatewayDep"): "app.llm",
+    **{
+        ("app.llm.checkpoints", name): "app.llm.langchain.checkpoints"
+        for name in PUBLIC_NAMES["app.llm.checkpoints"]
+    },
 }
 
 
@@ -267,7 +317,10 @@ def test_every_public_name_is_importable_from_its_module(module: str) -> None:
 
 
 def attr(module: object, name: str) -> Any:
-    return getattr(module, name)
+    # A moved name on a shim module (app.llm.embeddings) warns; test_llm_shims.py checks that.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        return getattr(module, name)
 
 
 def test_names_imported_from_one_module_into_another_are_the_same_object() -> None:
@@ -501,8 +554,8 @@ def test_budget_refusals_carry_their_status_detail_and_retry_after() -> None:
 
 
 def test_embedding_batches_are_bounded_by_count_and_bytes() -> None:
-    assert embeddings.GatewayEmbeddings.MAX_INPUTS == 2048
-    assert embeddings.GatewayEmbeddings.MAX_BYTES == 300_000 - 1024
+    assert attr(embeddings, "GatewayEmbeddings").MAX_INPUTS == 2048
+    assert attr(embeddings, "GatewayEmbeddings").MAX_BYTES == 300_000 - 1024
 
 
 # --- metrics --------------------------------------------------------------------------------------
