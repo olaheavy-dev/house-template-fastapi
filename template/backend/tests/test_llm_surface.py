@@ -614,6 +614,8 @@ def test_a_failed_call_without_cost_or_usage_records_only_the_count_and_latency(
 
 
 def test_an_empty_usage_dict_records_no_token_points(local_metrics: InMemoryMetricReader) -> None:
+    # Since T3 this covers the adapter convention (`from_langchain(u) if u else None`, via the
+    # alias above); the core itself rejects {}: test_llm_core_budget.py.
     # Pins metrics.record_call's `if usage` guard: {} means nothing was reported.
     labels = metrics.labels("pin-model-emptyusage")
     empty: Any = {}

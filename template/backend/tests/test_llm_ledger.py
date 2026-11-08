@@ -265,6 +265,8 @@ async def test_settling_without_a_cost_keeps_the_reservation_and_without_usage_r
 async def test_settling_with_an_empty_usage_dict_records_none_like_no_usage(
     db_session: AsyncSession,
 ) -> None:
+    # Since T3 this covers the adapter convention (`from_langchain(u) if u else None`, via the
+    # alias above); the core itself rejects {}: test_llm_core_budget.py.
     # Pins the `if usage` guards: LangChain can hand over {} for "nothing reported", which is not a
     # usage (no input_tokens key) and must be stored as unknown, never raise or record zeros.
     call_id = uuid.uuid4()

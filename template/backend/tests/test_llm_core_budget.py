@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib
 import subprocess
 import sys
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from datetime import date
@@ -44,6 +45,7 @@ from app.llm.core.budget import (
     LlmSpendUserDay,
     Meter,
     UserBudgetExhausted,
+    settle,
 )
 from app.llm.core.errors import FailureKind
 from app.llm.core.prices import Price, Rates
@@ -218,6 +220,43 @@ async def test_a_call_without_usage_keeps_its_reservation_and_warns(
         None,
         None,
     )
+
+
+async def test_the_default_clock_reads_time_monotonic_on_every_call(
+    meter: Callable[..., Meter], db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A project test may patch time.monotonic (the guard looked it up on each call). Patched to
+    # 10.0 at the reservation and 10.25 at the settlement: 0.25 s is 250 ms.
+    now = [10.0]
+    m, call = meter(), uuid.uuid4()
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    await m.reserve(call, input_tokens=1_000, output_tokens=500)
+    now[0] = 10.25
+    await m.settle(call, Usage(input_tokens=1_000, output_tokens=500))
+    monkeypatch.undo()
+    [row] = await rows(db_session)
+    assert row.latency_ms == 250
+
+
+async def test_an_empty_usage_dict_is_no_longer_accepted_by_the_ledger(
+    meter: Callable[..., Meter], db_session: AsyncSession
+) -> None:
+    # The breaking change: usage is a Usage or None, and {} (LangChain's "nothing reported") is
+    # neither. It raises before any statement runs, so the call stays reserved and nothing is
+    # recorded as zero. An adapter converts first: from_langchain(u) if u else None.
+    call = uuid.uuid4()
+    await meter().reserve(call, input_tokens=1_000, output_tokens=500)
+    empty: Any = {}
+    with pytest.raises(AttributeError):
+        await settle(db_session, call_id=call, status="settled", cost=None, usage=empty)
+    [row] = await rows(db_session)
+    assert (row.status, row.cost_micro_usd, row.input_tokens, row.output_tokens) == (
+        "reserved",
+        None,
+        None,
+        None,
+    )
+    assert await total(db_session) == 9_000
 
 
 # Written out, not read from core/errors.py REJECTED: the kinds a failed call is refunded for.
@@ -426,6 +465,17 @@ def test_a_zero_usage_records_no_tokens_and_none_records_no_tokens(
     assert sorted(points(reader, "pin-core-zero")) == ["llm.calls", "llm.latency"]
     metrics.record_call(metrics.labels("pin-core-none"), "failed", None, None, None)
     assert sorted(points(reader, "pin-core-none")) == ["llm.calls"]
+
+
+def test_an_empty_usage_dict_is_no_longer_accepted_by_record_call(
+    reader: InMemoryMetricReader,
+) -> None:
+    # The breaking change: usage is a Usage or None. {} raises, and no token point is written (the
+    # call's own count is added first, as the outcome is known). An adapter converts first.
+    empty: Any = {}
+    with pytest.raises(AttributeError):
+        metrics.record_call(metrics.labels("pin-core-emptydict"), "settled", None, empty, None)
+    assert "llm.tokens" not in points(reader, "pin-core-emptydict")
 
 
 async def test_a_metered_call_records_its_metrics_with_its_tags(

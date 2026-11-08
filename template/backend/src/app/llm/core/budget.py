@@ -365,7 +365,7 @@ class Meter:
         user_cap_micro_usd: int | None = None,
         sessionmaker: Callable[[], async_sessionmaker[AsyncSession]],
         today: Callable[[], date] = utc_today,
-        clock: Callable[[], float] = time.monotonic,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self.model = model
         self.price = price
@@ -374,7 +374,8 @@ class Meter:
         self.user_cap = user_cap_micro_usd
         self.sessionmaker = sessionmaker
         self.today = today
-        self.clock = clock
+        # Looked up on every call (not bound here), so a test may patch time.monotonic.
+        self.clock = clock if clock is not None else (lambda: time.monotonic())
         # Per call in flight: when it started, and what the metrics break it down by.
         self._started: dict[uuid.UUID, tuple[float, dict[str, str]]] = {}
 
