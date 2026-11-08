@@ -62,7 +62,7 @@ def test_prompt_text_refuses_a_nested_or_escaping_name_and_a_missing_file(tmp_pa
 
 
 def test_the_prompts_directory_is_app_prompts() -> None:
-    assert Path(__file__).resolve().parents[1] / "src" / "app" / "prompts" == core.PROMPTS
+    assert Path(__file__).resolve().parents[1] / "src" / "app" / "prompts" == core.PROMPTS.resolve()
 
 
 def test_load_prompt_gives_the_langchain_prompt_which_is_a_core_prompt(tmp_path: Path) -> None:

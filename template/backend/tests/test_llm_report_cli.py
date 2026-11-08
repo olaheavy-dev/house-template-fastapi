@@ -5,6 +5,7 @@ and returns for a bad or a help request, on the new module and on the old one th
 from __future__ import annotations
 
 import os
+import runpy
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -93,3 +94,14 @@ def test_a_bad_by_is_refused_before_main_runs(
 
 def test_importing_the_report_loads_no_model_framework() -> None:
     assert loaded_by("app.llm.core.report") == "[]"
+
+
+def test_the_old_module_run_as_main_passes_a_crons_arguments_to_main(
+    seen: list[tuple[int, list[str], bool]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        sys, "argv", ["report.py", "--expire-stale", "--days", "3", "--by", "feature"]
+    )
+    with pytest.warns(DeprecationWarning, match="python -m app.llm.report moved"):
+        runpy.run_module("app.llm.report", run_name="__main__")
+    assert seen == [(3, ["feature"], True)]
