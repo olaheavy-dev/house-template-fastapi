@@ -287,6 +287,52 @@ def test_recopy_overwrites_a_v0_6_1_price_table_and_models_but_git_keeps_the_edi
     assert "app.course" not in models.read_text()
 
 
+# main just before the core split (T0, #63); it already has the #49 fix, so `copier update` works.
+PRE_SPLIT = "160b8453a96e996355f1d7e5ff46e0c14f3bbcda"
+SHIMS = ("gateway", "checkpoints", "errors", "embeddings")
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+def test_update_from_before_the_core_split_merges_the_price_table_and_conflicts_on_edited_shims(
+        tmp_path):
+    # Goes when 0.8.0 removes the shims (#33).
+    require_ref(PRE_SPLIT)
+    dst = tmp_path / "project"
+    write_base(dst)
+    copy_layer(ROOT, dst, PRE_SPLIT)
+    llm = dst / "backend/src/app/llm"
+    entry = ('    "openai:gpt-demo": Price(\n        _rates(1, 4, 0.10, 1.25, 2), checked="2026-11-06",\n'
+             '        source=OPENAI_PRICING,\n    ),\n')
+    prices = (llm / "prices.py").read_text()
+    assert "PRICES: dict[str, Price] = {\n" in prices
+    (llm / "prices.py").write_text(prices.replace("PRICES: dict[str, Price] = {\n",
+                                                  f"PRICES: dict[str, Price] = {{\n{entry}", 1))
+    for name in SHIMS:
+        with (llm / f"{name}.py").open("a") as f:
+            f.write(f"# my edit to {name}\n")
+    product = dst / "backend/src/app/api/ask.py"
+    product.parent.mkdir(parents=True, exist_ok=True)
+    product.write_text("from app.llm.gateway import GatewayDep\n")
+    git(dst, "init", "-q", "-b", "main")
+    git(dst, "add", "-A")
+    git(dst, "commit", "-q", "-m", "chore: pre-split project with edits")
+    product_before = product.read_bytes()
+
+    copier.run_update(dst, answers_file=ANSWERS_FILE, defaults=True, unsafe=True, overwrite=True,
+                      quiet=True, vcs_ref="HEAD")
+
+    merged = (llm / "prices.py").read_text()
+    assert entry in merged  # the project's price entry survived
+    assert "_MOVED" in merged  # and the new template's text arrived around it
+    assert "<<<<<<<" not in merged
+    # Observed on Copier 9.19.1 with the default inline conflict mode: exactly the four edited
+    # shims conflict, nothing is left as .rej or .orig, and the product file is untouched.
+    conflicted = sorted(p for p, data in files_of(dst).items() if b"<<<<<<<" in data)
+    assert conflicted == sorted(f"backend/src/app/llm/{name}.py" for name in SHIMS)
+    assert not list(dst.rglob("*.rej")) and not list(dst.rglob("*.orig"))
+    assert product.read_bytes() == product_before
+
+
 STORAGE_PATHS = ["backend/src/app/storage.py", "backend/tests/storage.py",
                  "backend/tests/test_storage.py", "backend/compose/storage/compose.yaml"]
 
