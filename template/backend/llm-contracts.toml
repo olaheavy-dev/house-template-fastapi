@@ -28,3 +28,8 @@ forbidden_modules = [
     "langsmith",
     "openai",
 ]
+# The one module of the core that calls a provider: OpenAI's embeddings endpoint, whose usage
+# LangChain's embedding classes discard (core/openai_embeddings.py). Nothing else in the core, and
+# nothing that imports it by way of another module, may import openai: the ignore names this one
+# import and no other.
+ignore_imports = ["app.llm.core.openai_embeddings -> openai"]
