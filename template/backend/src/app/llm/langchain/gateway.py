@@ -3,7 +3,7 @@
 The model comes from LLM_MODEL with a pinned id, its price must be in app/llm/prices.py, and it is
 built with init_chat_model with a token limit, a timeout, the SDK's retries as the only retry
 layer, usage reporting on streams, the daily budget and, when on, LangSmith tracing. Code asks for
-it through GatewayDep and always awaits it:
+it through GatewayDep (`from app.llm import GatewayDep`) and always awaits it:
 
     @router.post("/summaries")
     async def summarise(body: SummaryIn, gateway: GatewayDep) -> SummaryOut:
@@ -14,7 +14,7 @@ it through GatewayDep and always awaits it:
         return SummaryOut(text=answer.text)
 
 Never build a model elsewhere or hand a "provider:model" string to LangChain: that skips the
-budget. lint-imports allows `langchain` and the provider SDKs only in this package.
+budget. lint-imports allows `langchain` and the provider SDKs only under app/llm.
 
 Use the model from one event loop per process, as the app does. langchain-openai and
 langchain-anthropic cache one HTTP client per process whose connections belong to the loop that

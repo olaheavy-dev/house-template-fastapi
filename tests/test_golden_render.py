@@ -85,7 +85,7 @@ INTENDED: dict[str, str] = {
     "backend/src/app/llm/core/usage.py": "new: the neutral Usage type (#33)",
     "backend/src/app/llm/core/prices.py": "new: the price arithmetic moved out of app/llm/prices.py (#33); the max_prompt_tokens comment says an embedding price bounds each request (#33)",
     "backend/src/app/llm/core/registry.py": "new: provider-key and price lookup moved out of the gateway (#33)",
-    "backend/src/app/llm/langchain/__init__.py": "new: the LangChain adapter package (#33); converts model errors too (#33); names callbacks.py (#33); names embeddings.py (#33); names prompts.py, the LangChain call config (#33)",
+    "backend/src/app/llm/langchain/__init__.py": "new: the LangChain adapter package (#33); converts model errors too (#33); names callbacks.py (#33); names embeddings.py (#33); names prompts.py, the LangChain call config (#33); names gateway.py and checkpoints.py (#33)",
     "backend/src/app/llm/langchain/usage.py": "new: from_langchain converts LangChain usage to the neutral Usage (#33)",
     "backend/tests/test_llm_core.py": "new: tests of the neutral core (#33); the core may import openai in openai_embeddings.py only (#33)",
     "backend/tests/test_llm_usage.py": "new: tests of from_langchain (#33)",
