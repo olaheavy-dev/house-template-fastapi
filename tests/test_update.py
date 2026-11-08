@@ -253,6 +253,7 @@ def test_recopy_overwrites_a_v0_6_1_price_table_and_models_but_git_keeps_the_edi
     """A recopy overwrites every file the template renders: the price table and app/models.py too
     (#33). It leaves no conflict, so the project's edits come back only from `git diff` or
     `git show HEAD:<path>`. Only backend/uv.lock is kept (copier.yml _skip_if_exists)."""
+    # Goes when the README stops supporting a recopy from v0.6.1.
     require_ref("v0.6.1")
     dst = tmp_path / "project"
     write_base(dst)
