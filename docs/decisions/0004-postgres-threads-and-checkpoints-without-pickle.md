@@ -30,6 +30,8 @@ For OpenAI's Responses client, the spike found MAF sends no `store` by default a
 
 Nothing of this is built: [#35](https://github.com/olaheavy-dev/house-template-fastapi/issues/35) sub-tasks 5b (sessions) and 5c (checkpoints) are open, and there is no MAF adapter yet.
 
+Separately, the LangChain side already loads its checkpoints with LangGraph's strict allowlist ([#36](https://github.com/olaheavy-dev/house-template-fastapi/issues/36)), so a MAF store should be no less strict (question 1).
+
 ## Consequences
 
 - Rows stay under our control for deletion, export and budget accounting.
