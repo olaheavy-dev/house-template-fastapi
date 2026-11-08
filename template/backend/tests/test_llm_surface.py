@@ -175,7 +175,16 @@ PUBLIC_NAMES: dict[str, tuple[str, ...]] = {
     "app.llm.prompts": ("PROMPTS", "Prompt", "load_prompt"),
     "app.llm.embeddings": ("GatewayEmbeddings", "openai_client"),
     "app.llm.gateway": ("Gateway", "GatewayDep", "get_gateway", "key_setting", "KEY_SETTINGS"),
+    "app.llm.langchain.gateway": ("Gateway", "GatewayDep", "get_gateway"),
+    "app.llm": ("GatewayDep",),
     "app.llm.checkpoints": (
+        "MIGRATIONS",
+        "TABLES",
+        "apply_migrations",
+        "migration_sql",
+        "open_checkpointer",
+    ),
+    "app.llm.langchain.checkpoints": (
         "MIGRATIONS",
         "TABLES",
         "apply_migrations",
@@ -269,6 +278,14 @@ MOVED: dict[tuple[str, str], str] = {
     ("app.llm.prompts", "load_prompt"): "app.llm.langchain.prompts",
     # #33 T5a
     **{("app.llm.report", name): "app.llm.core.report" for name in PUBLIC_NAMES["app.llm.report"]},
+    # #33 T5b
+    ("app.llm.gateway", "Gateway"): "app.llm.langchain.gateway",
+    ("app.llm.gateway", "get_gateway"): "app.llm.langchain.gateway",
+    ("app.llm.gateway", "GatewayDep"): "app.llm",
+    **{
+        ("app.llm.checkpoints", name): "app.llm.langchain.checkpoints"
+        for name in PUBLIC_NAMES["app.llm.checkpoints"]
+    },
 }
 
 

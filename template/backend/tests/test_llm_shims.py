@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.test_llm_core_embeddings import loaded_by
 from tests.test_llm_surface import MOVED
 
 # The moved names whose signature changed too (they take the neutral Usage).
@@ -79,6 +80,9 @@ def test_an_unknown_name_is_still_an_attribute_error() -> None:
         "app.llm.embeddings",
         "app.llm.prompts",
         "app.llm.report",
+        "app.llm.checkpoints",
+        "app.llm",
+        "app.llm.langchain.gateway",
     ):
         with pytest.raises(AttributeError, match="has no attribute 'nope'"):
             _ = importlib.import_module(old).nope
@@ -139,7 +143,12 @@ def test_the_template_never_uses_an_old_path() -> None:
     # warning is an error at import time), so the template must not have any.
     found = {
         path.relative_to(BACKEND).as_posix(): old_path_uses(path)
-        for path in [*BACKEND.glob("src/**/*.py"), *BACKEND.glob("tests/**/*.py")]
+        for path in [
+            *BACKEND.glob("src/**/*.py"),
+            *BACKEND.glob("tests/**/*.py"),
+            # A revision that calls the old path would warn in conftest's in-process upgrade.
+            *BACKEND.glob("migrations/**/*.py"),
+        ]
         if path.name != "test_llm_shims.py"
     }
     assert {path: uses for path, uses in found.items() if uses} == {}
@@ -223,6 +232,70 @@ def test_the_old_prompts_and_report_modules_import_without_a_warning() -> None:
         "import app.llm.prompts, app.llm.report\n"
         "assert 'load_prompt' in app.llm.prompts.__all__\n"
         "assert 'collect' in app.llm.report.__all__\n"
+    )
+    subprocess.run(  # noqa: S603 - this interpreter, running code written above
+        [sys.executable, "-c", code], check=True
+    )
+
+
+def test_the_old_checkpoints_module_imports_without_a_warning() -> None:
+    # As for the other old modules: importing it is silent, only a moved name warns. Its new
+    # module is imported first (LangChain warns on import on Python 3.14, see above).
+    code = (
+        "import warnings, app.llm.langchain.checkpoints\n"
+        "warnings.simplefilter('error')\n"
+        "import app.llm.checkpoints\n"
+        "assert 'apply_migrations' in app.llm.checkpoints.__all__\n"
+    )
+    subprocess.run(  # noqa: S603 - this interpreter, running code written above
+        [sys.executable, "-c", code], check=True
+    )
+
+
+def test_gateway_dep_is_one_object_whichever_path_names_it() -> None:
+    import app.llm
+    from app.llm.langchain import gateway as new
+
+    old = importlib.import_module("app.llm.gateway")
+    message = (
+        r"^app\.llm\.gateway\.GatewayDep moved to app\.llm\.GatewayDep: import it from there "
+        r"\(the old name goes in 0\.8\.0\)$"
+    )
+    with pytest.warns(DeprecationWarning, match=message) as w:
+        moved = old.GatewayDep
+    assert app.llm.GatewayDep is new.GatewayDep is moved
+    assert [x.filename for x in w] == [__file__]
+
+
+def test_importing_the_package_loads_no_framework() -> None:
+    # app.llm runs before any app.llm.core module, so GatewayDep must not be imported eagerly.
+    assert loaded_by("app.llm") == "[]"
+    assert loaded_by("app.llm.core.prices") == "[]"
+
+
+def test_the_package_attribute_hook_does_not_shadow_submodules() -> None:
+    # A fresh interpreter: `from app.llm import <module>` finds the module, not the hook.
+    code = (
+        "from app.llm import report, checkpoints, prices, gateway\n"
+        "import types\n"
+        "mods = (report, checkpoints, prices, gateway)\n"
+        "assert all(isinstance(m, types.ModuleType) for m in mods)\n"
+        "assert checkpoints.__name__ == 'app.llm.checkpoints'\n"
+        "assert gateway.__name__ == 'app.llm.gateway'\n"
+    )
+    subprocess.run(  # noqa: S603 - this interpreter, running code written above
+        [sys.executable, "-c", code], check=True
+    )
+
+
+def test_the_old_gateway_module_imports_without_a_warning() -> None:
+    # As for the other old modules: importing it is silent, only a moved name warns. Its new
+    # modules are imported first (LangChain warns on import on Python 3.14, see above).
+    code = (
+        "import warnings, app.llm.langchain.gateway\n"
+        "warnings.simplefilter('error')\n"
+        "import app.llm, app.llm.gateway\n"
+        "assert 'Gateway' in app.llm.gateway.__all__\n"
     )
     subprocess.run(  # noqa: S603 - this interpreter, running code written above
         [sys.executable, "-c", code], check=True

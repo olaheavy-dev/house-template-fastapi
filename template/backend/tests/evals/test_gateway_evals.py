@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.llm.core.budget import BudgetExhausted, LlmCall
-from app.llm.gateway import Gateway
+from app.llm.langchain.gateway import Gateway
 
 pytestmark = [pytest.mark.anyio, pytest.mark.eval]
 

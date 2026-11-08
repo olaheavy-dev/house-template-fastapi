@@ -48,9 +48,9 @@ from app.llm.core.budget import (
     reserve,
     reserve_for,
 )
-from app.llm.gateway import Gateway
 from app.llm.langchain.callbacks import BudgetGuard, input_bound
 from app.llm.langchain.embeddings import GatewayEmbeddings
+from app.llm.langchain.gateway import Gateway
 from app.llm.langchain.usage import from_langchain
 from app.settings import Settings
 from tests.models import CHAT_MODEL, EMBEDDING_MODEL
