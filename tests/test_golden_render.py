@@ -10,8 +10,9 @@ How it works
 - A feature PR that changes the default output on purpose adds `path: "reason (#NN)"` to INTENDED.
 - After each release a `chore:` PR moves BASELINE_REF to the new tag and empties INTENDED.
 - No snapshot is stored: both renders are made fresh, so there is nothing to keep in step.
-- Dependabot PRs pass on their own. They change only what Dependabot maintains in the rendered
-  output (see DEPENDABOT_LOCK_FILES and DEPENDABOT_COMPOSE_FILE), and the comparison ignores exactly that: the generated
+- Dependabot PRs that change only `uv.lock` or an image tag or digest pass; one that edits
+  `pyproject.toml` still needs an INTENDED entry. The comparison ignores what Dependabot maintains
+  in the rendered output (see DEPENDABOT_LOCK_FILES and DEPENDABOT_COMPOSE_FILE): the generated
   `backend/uv.lock` completely, and the tag or digest of the `image:` lines in the compose files
   under `backend/compose/`. Any other change in those files, and any other file, still counts.
   Dockerfile `FROM` lines and the workflows are not ignored: `.github/dependabot.yml` does not
@@ -45,11 +46,16 @@ INTENDED: dict[str, str] = {
     "backend/tests/test_llm_shims.py": "expects the new cost warning wording (#85)",
 }
 
-# DEPENDABOT_*: what Dependabot updates in this repository's rendered output (.github/dependabot.yml). Its PRs
-# must pass this test unchanged, so these are normalised away before comparing; nothing else is.
+# DEPENDABOT_*: what Dependabot updates in this repository's rendered output
+# (.github/dependabot.yml). Its PRs must pass this test unchanged, so these are normalised away
+# before comparing; nothing else is.
 # - uv.lock: generated, never hand-edited, so the whole file is skipped.
 # - `image:` lines in the compose files: only the tag and digest are masked; the image name, and
-#   every other line of the file, still count.
+#   every other line of the file, still count. The mask drops everything after the first `:` or `@`
+#   in the last path segment, so losing the pin or changing the tag by hand passes this test; the
+#   pin format is checked by test_render.py (test_local_database_is_pinned_and_keeps_its_data,
+#   test_local_storage_is_pinned_private_and_healthchecked) and by test_options.py
+#   (test_the_pins_dependabot_reads_live_in_plain_compose_files).
 DEPENDABOT_LOCK_FILES = frozenset({"backend/uv.lock"})
 DEPENDABOT_COMPOSE_FILE = re.compile(r"backend/compose/[^/]+/compose\.ya?ml")
 IMAGE_LINE = re.compile(rb"^(\s*image:\s*)(\S+)(\s*)$")
@@ -190,6 +196,10 @@ def test_compare_still_reports_other_changes_in_a_compose_file():
     # A comment change is not an image line.
     commented = COMPOSE_TEXT.replace(b"pinned", b"unpinned")
     assert compare({COMPOSE: COMPOSE_TEXT}, {COMPOSE: commented}, {}) != []
+    # The mask is for `image:` only: not another key, and not a commented-out image line.
+    for old, new in ((b"    command: a:1\n", b"    command: a:2\n"),
+                     (b"    # image: a:1\n", b"    # image: a:2\n")):
+        assert compare({COMPOSE: old}, {COMPOSE: new}, {}) != [], old
     # A registry with a port keeps its host in the name.
     assert mask_image_version(b"    image: localhost:5000/app:1") == (
         b"    image: localhost:5000/app:<pinned>")
