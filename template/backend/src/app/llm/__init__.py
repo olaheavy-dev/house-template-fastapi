@@ -1,9 +1,34 @@
 """The model gateway: the only package that configures or calls a language model provider.
 
-gateway.py builds the model, prices.py holds the project's price tables, and prompts live in
+langchain/gateway.py builds the model (see it for how to call the model; product code imports
+`from app.llm import GatewayDep`), prices.py holds the project's price tables, and prompts live in
 core/prompts.py (the prompt and its hash) and langchain/prompts.py (load_prompt and config()).
 core/ prices calls, caps daily spend (budget.py, bounds.py), records metrics, classifies failures
 and meters batched OpenAI embeddings (embeddings.py) without any framework; langchain/ converts
 LangChain's data, drives the budget from its callbacks and wraps the embeddings as LangChain's
-Embeddings class (embeddings.py). See gateway.py for how to call the model.
+Embeddings class (embeddings.py).
+
+GatewayDep is loaded on first use (the module __getattr__ below), not at import: importing any
+app.llm.core module runs this file first, and the core must load no framework. For the same reason
+no core module may import the package `app.llm` itself (lint-imports would then see a path from
+the core to LangChain). The __getattr__ answers GatewayDep only, so `from app.llm import prices`
+and the other submodules still import as modules.
 """
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.llm.langchain.gateway import GatewayDep as GatewayDep
+
+__all__ = ["GatewayDep"]
+
+if not TYPE_CHECKING:
+
+    def __getattr__(name: str) -> object:
+        if name == "GatewayDep":
+            from app.llm.langchain.gateway import GatewayDep
+
+            return GatewayDep
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

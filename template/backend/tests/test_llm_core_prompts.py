@@ -12,7 +12,7 @@ import pytest
 
 from app.auth import User
 from app.llm.core import prompts as core
-from app.llm.gateway import Gateway
+from app.llm.langchain.gateway import Gateway
 from app.llm.langchain.prompts import Prompt as LangChainPrompt
 from app.llm.langchain.prompts import load_prompt
 from app.settings import Settings
