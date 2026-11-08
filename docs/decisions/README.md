@@ -18,4 +18,4 @@ These records describe the template repository itself. They are not copied into 
 | Date | Choice | Why |
 | --- | --- | --- |
 
-No entries yet.
+| 2026-11-08 | Strict checkpoint loading is set in code (`serializer()` in `app/llm/langchain/checkpoints.py`), not with `LANGGRAPH_STRICT_MSGPACK`; a project lists its own classes in `app/llm/checkpoint_types.py`, nothing is allowed by default (#36) | LangGraph reads the variable once, at import, and `.env` never sets it under `make dev` or the tests, so dev and tests would load differently from production. Easy to reverse: drop `serde=` |
