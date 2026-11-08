@@ -10,11 +10,18 @@ How it works
 - A feature PR that changes the default output on purpose adds `path: "reason (#NN)"` to INTENDED.
 - After each release a `chore:` PR moves BASELINE_REF to the new tag and empties INTENDED.
 - No snapshot is stored: both renders are made fresh, so there is nothing to keep in step.
+- Dependabot PRs pass on their own. They change only what Dependabot maintains in the rendered
+  output (see DEPENDABOT_LOCK_FILES and DEPENDABOT_COMPOSE_FILE), and the comparison ignores exactly that: the generated
+  `backend/uv.lock` completely, and the tag or digest of the `image:` lines in the compose files
+  under `backend/compose/`. Any other change in those files, and any other file, still counts.
+  Dockerfile `FROM` lines and the workflows are not ignored: `.github/dependabot.yml` does not
+  maintain them in this repository (a generated project's own Dependabot does).
 """
 
 from __future__ import annotations
 
 import difflib
+import re
 import subprocess
 from collections.abc import Mapping
 from pathlib import Path
@@ -37,6 +44,15 @@ INTENDED: dict[str, str] = {
     "backend/src/app/llm/prices.py": "the cost warning no longer says to pass None, cost takes a Usage only (#85)",
     "backend/tests/test_llm_shims.py": "expects the new cost warning wording (#85)",
 }
+
+# DEPENDABOT_*: what Dependabot updates in this repository's rendered output (.github/dependabot.yml). Its PRs
+# must pass this test unchanged, so these are normalised away before comparing; nothing else is.
+# - uv.lock: generated, never hand-edited, so the whole file is skipped.
+# - `image:` lines in the compose files: only the tag and digest are masked; the image name, and
+#   every other line of the file, still count.
+DEPENDABOT_LOCK_FILES = frozenset({"backend/uv.lock"})
+DEPENDABOT_COMPOSE_FILE = re.compile(r"backend/compose/[^/]+/compose\.ya?ml")
+IMAGE_LINE = re.compile(rb"^(\s*image:\s*)(\S+)(\s*)$")
 
 # Lines Copier writes that name where and when the template was applied, not what it generated.
 VOLATILE_PREFIXES = ("_commit:", "_src_path:")
@@ -74,6 +90,29 @@ def files_of(root: Path) -> dict[str, bytes]:
             if p.is_file() and ".git" not in p.relative_to(root).parts}
 
 
+def mask_image_version(line: bytes) -> bytes:
+    """`image: repo/name:tag@sha256:...` becomes `image: repo/name:<pinned>`; other lines are kept."""
+    match = IMAGE_LINE.match(line)
+    if not match:
+        return line
+    prefix, reference, suffix = match.groups()
+    registry_and_path, slash, last = reference.rpartition(b"/")
+    name = re.split(rb"[:@]", last, maxsplit=1)[0]
+    return prefix + registry_and_path + slash + name + b":<pinned>" + suffix
+
+
+def ignore_dependabot_changes(files: Mapping[str, bytes]) -> dict[str, bytes]:
+    """The files without what Dependabot maintains (the constants above)."""
+    result = {}
+    for path, data in files.items():
+        if path in DEPENDABOT_LOCK_FILES:
+            continue
+        if DEPENDABOT_COMPOSE_FILE.fullmatch(path):
+            data = b"\n".join(mask_image_version(ln) for ln in data.split(b"\n"))
+        result[path] = data
+    return result
+
+
 def describe(path: str, old: bytes | None, new: bytes | None) -> str:
     if old is None:
         return f"  added in HEAD: {path}"
@@ -90,6 +129,8 @@ def describe(path: str, old: bytes | None, new: bytes | None) -> str:
 def compare(baseline: Mapping[str, bytes], head: Mapping[str, bytes],
             intended: Mapping[str, str]) -> list[str]:
     """Problems found, one entry per path; empty when the renders differ only as intended."""
+    baseline = ignore_dependabot_changes(baseline)
+    head = ignore_dependabot_changes(head)
     differing = {p for p in baseline.keys() | head.keys() if baseline.get(p) != head.get(p)}
     problems = [describe(p, baseline.get(p), head.get(p)) for p in sorted(differing - intended.keys())]
     problems += [f"  INTENDED lists {p} ({intended[p]}) but it no longer differs: remove it"
@@ -118,6 +159,48 @@ def test_compare_reports_every_unlisted_difference_and_every_stale_entry():
     assert "INTENDED lists b.txt" in text
     assert "new.txt" not in text.replace("added (#2)", "")
     assert compare(base, base, {}) == []
+
+
+COMPOSE = "backend/compose/db/compose.yaml"
+COMPOSE_TEXT = (b"services:\n  db:\n    # pinned (Dependabot updates it).\n"
+                b"    image: pgvector/pgvector:0.8.7-pg18-trixie@sha256:aaa\n"
+                b"    environment:\n      POSTGRES_USER: app\n")
+
+
+def test_compare_ignores_a_change_to_the_lock_file_only():
+    base = {"backend/uv.lock": b"vcrpy 8.1.0\n", "a.txt": b"x\n"}
+    head = {"backend/uv.lock": b"vcrpy 8.2.0\n", "a.txt": b"x\n"}
+    assert compare(base, head, {}) == []
+
+
+def test_compare_ignores_an_image_tag_or_digest_change_in_a_compose_file():
+    new = COMPOSE_TEXT.replace(b"0.8.7-pg18-trixie@sha256:aaa", b"0.9.0-pg18-trixie@sha256:bbb")
+    assert new != COMPOSE_TEXT
+    assert compare({COMPOSE: COMPOSE_TEXT}, {COMPOSE: new}, {}) == []
+    digest_only = COMPOSE_TEXT.replace(b"sha256:aaa", b"sha256:bbb")
+    assert compare({COMPOSE: COMPOSE_TEXT}, {COMPOSE: digest_only}, {}) == []
+
+
+def test_compare_still_reports_other_changes_in_a_compose_file():
+    other = COMPOSE_TEXT.replace(b"POSTGRES_USER: app", b"POSTGRES_USER: root")
+    assert "POSTGRES_USER: root" in "\n".join(compare({COMPOSE: COMPOSE_TEXT}, {COMPOSE: other}, {}))
+    # A different image name is not a version change.
+    renamed = COMPOSE_TEXT.replace(b"pgvector/pgvector:", b"other/image:")
+    assert "differs: " + COMPOSE in "\n".join(compare({COMPOSE: COMPOSE_TEXT}, {COMPOSE: renamed}, {}))
+    # A comment change is not an image line.
+    commented = COMPOSE_TEXT.replace(b"pinned", b"unpinned")
+    assert compare({COMPOSE: COMPOSE_TEXT}, {COMPOSE: commented}, {}) != []
+    # A registry with a port keeps its host in the name.
+    assert mask_image_version(b"    image: localhost:5000/app:1") == (
+        b"    image: localhost:5000/app:<pinned>")
+
+
+def test_compare_still_reports_the_same_change_in_other_files():
+    for path in ("backend/Dockerfile", "backend/pyproject.toml", ".github/workflows/ci.yaml",
+                 "backend/compose.yaml", "backend/compose/db/other.txt"):
+        for old, new in ((b"    image: a:1\n", b"    image: a:2\n"), (b"uses: x@v1\n", b"uses: x@v2\n")):
+            problems = compare({path: old}, {path: new}, {})
+            assert len(problems) == 1 and path in problems[0], path
 
 
 def test_answers_file_ignores_only_commit_and_src_path(tmp_path):
