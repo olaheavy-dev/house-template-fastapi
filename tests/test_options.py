@@ -317,6 +317,37 @@ def test_every_template_owned_entry_exists(render, database, storage):
             assert (path in patterns) is storage, path
 
 
+def _owned_patterns(project: Path) -> list[str]:
+    owned = (project / ".github/template-owned/fastapi.txt").read_text().splitlines()
+    return [ln for ln in owned if ln and not ln.startswith("#")]
+
+
+def _is_owned(patterns: list[str], path: str) -> bool:
+    # The base project's checker uses fnmatch, whose `*` also matches `/`.
+    return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
+
+
+def test_every_llm_module_but_prices_and_every_template_migration_is_template_owned(render):
+    # The warning shims (errors, embeddings, ...) and the template's own migrations are the
+    # template's: an edit to one would conflict on `copier update` (#33). prices.py is the
+    # project's price table, so it stays off the list.
+    project = render(database=True, storage=True)
+    patterns = _owned_patterns(project)
+    llm = sorted(f for f in files(project)
+                 if f.startswith("backend/src/app/llm/") and f.endswith(".py"))
+    assert len(llm) > 20  # the prefix found the modules
+    versions = sorted(f"backend/migrations/versions/{v.name}"
+                      for v in (TEMPLATE / "backend/migrations/versions").glob("*.py"))
+    assert len(versions) == 6  # five numbered migrations and the project-root one
+    not_owned = [f for f in llm if f != "backend/src/app/llm/prices.py" and not _is_owned(patterns, f)]
+    not_owned += [v for v in versions if v not in patterns]  # by exact path
+    assert not_owned == []
+    # Spelled out in full: a `versions/*` glob would also capture the project's own migrations.
+    for mine in ("backend/migrations/versions/20270101_abcd1234_mine.py",
+                 "backend/src/app/llm/prices.py", "backend/src/app/api/mine.py"):
+        assert not _is_owned(patterns, mine), mine
+
+
 @ANSWERS
 def test_rendered_project_has_no_leftover_template_syntax(render, database, storage):
     for path in files(render(database=database, storage=storage)).values():
