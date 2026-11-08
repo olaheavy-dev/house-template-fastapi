@@ -31,7 +31,14 @@ def test_old_import_paths_still_work(old: str, name: str) -> None:
     module = importlib.import_module(old)
     new = importlib.import_module(MOVED[(old, name)])
     message = rf"^{old}\.{name} moved to {MOVED[(old, name)]}\.{name}: import it from there"
-    if (old, name) in TAKES_USAGE:
+    if (old, name) == ("app.llm.prices", "cost"):
+        # cost takes a Usage only: None is not "no usage" for it, it raises AttributeError.
+        message += (
+            r" \(the old name goes in 0\.8\.0\) and now takes app\.llm\.core\.usage\.Usage: "
+            r"convert LangChain usage with app\.llm\.langchain\.usage\.from_langchain "
+            r"\(it takes a Usage only, never None or \{\}: skip pricing when there is no usage\)$"
+        )
+    elif (old, name) in TAKES_USAGE:
         message += (
             r" \(the old name goes in 0\.8\.0\) and now takes app\.llm\.core\.usage\.Usage: "
             r"convert LangChain usage with app\.llm\.langchain\.usage\.from_langchain "
