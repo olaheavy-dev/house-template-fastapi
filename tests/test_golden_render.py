@@ -44,6 +44,7 @@ BASELINE_REF = "v0.7.0"
 INTENDED: dict[str, str] = {
     "backend/src/app/llm/prices.py": "the cost warning no longer says to pass None, cost takes a Usage only (#85)",
     "backend/tests/test_llm_shims.py": "expects the new cost warning wording (#85)",
+    "backend/tests/test_llm_checkpoints.py": "new: what the checkpointer can read back (#36)",
 }
 
 # DEPENDABOT_*: what Dependabot updates in this repository's rendered output
