@@ -8,7 +8,7 @@ A project that uses LangChain should not install MAF, and the other way round. T
 
 ## Decision
 
-Dependencies are optional extras in the one plain `backend/pyproject.toml` (`db`, `langchain`, `storage` exist today; `maf` is planned in [#35](https://github.com/olaheavy-dev/house-template-fastapi/issues/35)). `langchain` and `maf` are declared as conflicting, so they lock together in one `uv.lock` but cannot be installed together. Make targets and the image install only the extras the project answered for.
+Dependencies are optional extras in the one plain `backend/pyproject.toml`. Today there are three extras, `db`, `langchain` and `storage`, and **no `conflicts` declaration and no `maf` extra** (checked in `template/backend/pyproject.toml`). When `maf` is added ([#35](https://github.com/olaheavy-dev/house-template-fastapi/issues/35)), `langchain` and `maf` will be declared as conflicting, so they lock together in one `uv.lock` but cannot be installed together. Make targets and the image install only the extras the project answered for. Progress is tracked on #35 and [#30](https://github.com/olaheavy-dev/house-template-fastapi/issues/30), not here.
 
 ## What the spike found
 
@@ -22,7 +22,7 @@ Dependencies are optional extras in the one plain `backend/pyproject.toml` (`db`
 
 ## Consequences
 
-- Dependabot still sees one `pyproject.toml` (the reason for not templating it).
+- Dependabot still sees one `pyproject.toml` (the reason for not templating it). Whether it can re-lock a project with `conflicts` is unverified (see the spike findings above), so this benefit is proven only once `conflicts` exists.
 - Anyone installing the backend by hand must pass `--extra` (the README's Upgrading section already warns of this for `db`, `langchain` and `storage`).
 - Switching framework later is a lockfile change plus code, not a template re-render of dependencies.
 

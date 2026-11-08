@@ -17,3 +17,5 @@ These records describe the template repository itself. They are not copied into 
 
 | Date | Choice | Why |
 | --- | --- | --- |
+
+No entries yet.
