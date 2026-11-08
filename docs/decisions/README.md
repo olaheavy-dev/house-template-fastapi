@@ -10,7 +10,7 @@ These records describe the template repository itself. They are not copied into 
 | --- | --- | --- |
 | [0001](0001-framework-neutral-core-with-adapters.md) | A framework-neutral core with framework adapters, chosen by the `llm` answer | Accepted |
 | [0002](0002-dependencies-as-extras-in-one-lockfile.md) | Dependencies are chosen by extras in one lockfile, with conflicts | Accepted |
-| [0003](0003-step-limit-returns-a-final-answer.md) | Both frameworks return a final answer at the step limit | Proposed |
+| [0003](0003-step-limit-returns-a-final-answer.md) | Both frameworks return a final answer at the step limit | Accepted |
 | [0004](0004-postgres-threads-and-checkpoints-without-pickle.md) | MAF conversation threads and workflow checkpoints live in Postgres, without pickle | Proposed |
 
 ## Register
