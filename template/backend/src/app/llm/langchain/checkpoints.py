@@ -26,7 +26,6 @@ from psycopg_pool import AsyncConnectionPool
 from sqlalchemy import make_url, text
 from sqlalchemy.engine import Connection
 
-from app.llm import checkpoint_types
 from app.settings import Settings
 
 MIGRATIONS: list[str] = BasePostgresSaver.MIGRATIONS
@@ -68,7 +67,12 @@ def serializer(allowed: Iterable[type] = ()) -> JsonPlusSerializer:
 
     Set here, not with LANGGRAPH_STRICT_MSGPACK: LangGraph reads that variable once, at import, and
     backend/.env never reaches the process environment under `make dev` or the tests, so dev and
-    tests would load differently from production."""
+    tests would load differently from production.
+
+    The variable has one more effect this route lacks: with LANGGRAPH_STRICT_MSGPACK on,
+    StateGraph.compile derives an allowlist from the graph's own state types (pydantic models,
+    dataclasses and enums, nested ones too), but an explicit allowed_msgpack_modules gets none of
+    that. So list every class your graph keeps in its state in app/llm/checkpoint_types.py."""
     # An empty tuple means "the safe list only", the same as None.
     return JsonPlusSerializer(allowed_msgpack_modules=tuple(allowed) or None)
 
@@ -85,6 +89,9 @@ async def open_checkpointer(settings: Settings) -> tuple[AsyncPostgresSaver, Asy
         open=False,
     )
     await pool.open()
-    # checkpoint_types.ALLOWED is read here, at call time, so a project or a test can change it.
+    # Imported and read here, not at the top: your classes then load only when the app opens the
+    # checkpointer, not in every `alembic upgrade` (migration 0003 and env.py import this module).
+    from app.llm import checkpoint_types
+
     saver = AsyncPostgresSaver(pool, serde=serializer(checkpoint_types.ALLOWED))  # type: ignore[arg-type]
     return saver, pool

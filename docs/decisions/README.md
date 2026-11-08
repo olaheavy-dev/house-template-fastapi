@@ -17,5 +17,4 @@ These records describe the template repository itself. They are not copied into 
 
 | Date | Choice | Why |
 | --- | --- | --- |
-
-| 2026-11-08 | Strict checkpoint loading is set in code (`serializer()` in `app/llm/langchain/checkpoints.py`), not with `LANGGRAPH_STRICT_MSGPACK`; a project lists its own classes in `app/llm/checkpoint_types.py`, nothing is allowed by default (#36) | LangGraph reads the variable once, at import, and `.env` never sets it under `make dev` or the tests, so dev and tests would load differently from production. Easy to reverse: drop `serde=` |
+| 2026-11-08 | Strict checkpoint loading is set in code (`serializer()` in `app/llm/langchain/checkpoints.py`), not with `LANGGRAPH_STRICT_MSGPACK`; a project lists its own classes in `app/llm/checkpoint_types.py`, nothing is allowed by default (#36) | LangGraph reads the variable once, at import, and `.env` never sets it under `make dev` or the tests, so dev and tests would load differently from production. Not equivalent: with the variable on, `StateGraph.compile` derives an allowlist from the graph's state types (pydantic models, dataclasses, enums); the explicit setting gets none, so a project must list every state class itself. Easy to reverse: drop `serde=` |

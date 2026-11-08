@@ -45,6 +45,7 @@ def add(a: int, b: int) -> int:
 
 CALLS: list[str] = []
 BUILT: list[int] = []
+# LangGraph warns once per class and process, so each class below is used in exactly one test.
 BLOCKED = "langgraph.checkpoint.serde.jsonplus"
 
 
