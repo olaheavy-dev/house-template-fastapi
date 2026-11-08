@@ -15,7 +15,12 @@ import pytest
 from tests.test_llm_surface import MOVED
 
 # The moved names whose signature changed too (they take the neutral Usage).
-TAKES_USAGE = {("app.llm.prices", "cost"), ("app.llm.prices", "token_details")}
+TAKES_USAGE = {
+    ("app.llm.prices", "cost"),
+    ("app.llm.prices", "token_details"),
+    # #33 T3
+    ("app.llm.metrics", "record_call"),
+}
 BACKEND = Path(__file__).resolve().parents[1]
 
 
@@ -64,7 +69,12 @@ def test_the_price_table_module_imports_without_a_warning() -> None:
 
 
 def test_an_unknown_name_is_still_an_attribute_error() -> None:
-    for old in ("app.llm.prices", "app.llm.gateway", "app.llm.errors"):
+    for old in (
+        "app.llm.prices",
+        "app.llm.gateway",
+        "app.llm.errors",
+        "app.llm.metrics",
+    ):
         with pytest.raises(AttributeError, match="has no attribute 'nope'"):
             _ = importlib.import_module(old).nope
 
@@ -163,6 +173,20 @@ def test_the_old_errors_module_imports_without_a_warning() -> None:
         "warnings.simplefilter('error')\n"
         "import app.llm.errors\n"
         "assert 'install_model_error_handlers' in app.llm.errors.__all__\n"
+    )
+    subprocess.run(  # noqa: S603 - this interpreter, running code written above
+        [sys.executable, "-c", code], check=True
+    )
+
+
+def test_the_old_metrics_module_imports_without_a_warning() -> None:
+    # As for app.llm.errors: importing the old module is silent, only a moved name warns. The new
+    # module is imported first (LangChain warns on import on Python 3.14, see above).
+    code = (
+        "import warnings, app.llm.core.metrics\n"
+        "warnings.simplefilter('error')\n"
+        "import app.llm.metrics\n"
+        "assert 'record_call' in app.llm.metrics.__all__\n"
     )
     subprocess.run(  # noqa: S603 - this interpreter, running code written above
         [sys.executable, "-c", code], check=True

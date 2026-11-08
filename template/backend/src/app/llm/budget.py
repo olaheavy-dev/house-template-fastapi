@@ -26,7 +26,6 @@ model with invoke() or stream().
 
 from __future__ import annotations
 
-import json
 import time
 import uuid
 from collections.abc import Callable, Sequence
@@ -53,8 +52,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
-from app.llm import metrics
-from app.llm.core import prices
+from app.llm.core import bounds, metrics, prices
+from app.llm.core.bounds import IMAGE_TOKENS as IMAGE_TOKENS
+from app.llm.core.bounds import INPUT_MARGIN_TOKENS as INPUT_MARGIN_TOKENS
+from app.llm.core.bounds import PromptTooLong as PromptTooLong
+from app.llm.core.bounds import UnboundedMedia as UnboundedMedia
+from app.llm.core.bounds import UnpricedRequest as UnpricedRequest
+from app.llm.core.bounds import check_priced as check_priced
 from app.llm.core.errors import REJECTED
 from app.llm.langchain.errors import kind_of
 from app.llm.langchain.usage import from_langchain
@@ -62,16 +66,8 @@ from app.problems import Problem
 
 log = structlog.get_logger()
 
-# Added to every reservation's input: message framing, and the system prompt a provider adds
-# when tools are bound (Anthropic documents a few hundred tokens).
-INPUT_MARGIN_TOKENS = 1024
 # Spend that triggers the day's one warning log, as a share of the cap.
 WARN_SHARE = 0.8
-# Per image, above Anthropic's documented maximum of 4,784 (high-resolution models, vision docs,
-# checked 26 Oct 2026). Check the provider's image pricing before sending images to another one.
-IMAGE_TOKENS = 6_000
-_IMAGE_BLOCKS = {"image", "image_url", "input_image"}
-_UNBOUNDED_BLOCKS = {"document", "file", "input_file", "audio", "input_audio", "video"}
 
 
 class LlmSpendDay(Base):
@@ -264,11 +260,6 @@ async def settle(
     )
 
 
-class PromptTooLong(Problem):
-    def __init__(self) -> None:
-        super().__init__(422, detail="The input is too long for the language model.")
-
-
 class UserBudgetExhausted(Problem):
     """One user's daily share is used up; everyone else can still call the model."""
 
@@ -344,66 +335,12 @@ async def expire_stale(session: AsyncSession, *, older_than: timedelta) -> int:
     return count
 
 
-class UnboundedMedia(Problem):
-    """A message carries content whose token cost the budget can't bound in advance."""
-
-    def __init__(self, kind: str) -> None:
-        super().__init__(422, detail="This kind of attachment can't be sent to the language model.")
-        self.kind = kind
-
-
-def _images(value: Any) -> int:
-    """Image blocks anywhere in a message's content (tool results can hold them too)."""
-    if isinstance(value, list):
-        return sum(_images(item) for item in value)
-    if not isinstance(value, dict):
-        return 0
-    kind = value.get("type")
-    if kind in _IMAGE_BLOCKS:
-        return 1
-    if kind in _UNBOUNDED_BLOCKS:
-        raise UnboundedMedia(str(kind))
-    return sum(_images(item) for item in value.values())
-
-
 def input_bound(messages: Sequence[BaseMessage], invocation_params: dict[str, Any]) -> int:
-    """More input tokens than the request can hold: its UTF-8 bytes (byte-level BPE tokenizers
-    never use more than one token per byte), IMAGE_TOKENS per image (an image sent by URL or file
-    id is only a few bytes here), plus a margin. Tools and schemas are in the params."""
-    payload = json.dumps(
-        [[m.model_dump() for m in messages], invocation_params], default=str, ensure_ascii=False
+    """More input tokens than the request can hold (core/bounds.py request_bound of the serialised
+    messages and the call's parameters; tools and schemas are in the params)."""
+    return bounds.request_bound(
+        [[m.model_dump() for m in messages], invocation_params], [m.content for m in messages]
     )
-    images = sum(_images(m.content) for m in messages)
-    return len(payload.encode()) + images * IMAGE_TOKENS + INPUT_MARGIN_TOKENS
-
-
-# Tools the app runs itself, which cost only the tokens of the call: OpenAI's "function" and
-# "custom" tools, and Anthropic's untyped ones. Any other type is a tool the provider runs.
-_TOKEN_ONLY_TOOL_TYPES = frozenset({None, "function", "custom"})
-# Service tiers billed at prices.py's standard rates or less (flex is cheaper, which only ever
-# over-records).
-_PRICED_SERVICE_TIERS = frozenset({None, "auto", "default", "flex", "standard_only"})
-
-
-class UnpricedRequest(ValueError):
-    """A call that would be billed for something prices.py doesn't price: a mistake in the code
-    that made it, refused before anything is reserved or sent."""
-
-
-def check_priced(invocation_params: dict[str, Any]) -> None:
-    for tool in invocation_params.get("tools") or ():
-        kind = tool.get("type") if isinstance(tool, dict) else None
-        if kind not in _TOKEN_ONLY_TOOL_TYPES:
-            raise UnpricedRequest(
-                f"The provider runs the {kind!r} tool and bills it per use, which "
-                "app/llm/prices.py doesn't price: use a tool the app runs instead."
-            )
-    tier = invocation_params.get("service_tier")
-    if tier not in _PRICED_SERVICE_TIERS:
-        raise UnpricedRequest(
-            f"The {tier!r} service tier costs more than the standard rates app/llm/prices.py "
-            "holds: add its prices before using it."
-        )
 
 
 def _usage(response: LLMResult) -> UsageMetadata | None:
@@ -458,15 +395,11 @@ class BudgetGuard(AsyncCallbackHandler):
         **kwargs: Any,
     ) -> None:
         params: dict[str, Any] = kwargs.get("invocation_params") or {}
-        check_priced(params)
+        bounds.check_priced(params)
         # A caller may bind a larger limit than the gateway's; reserve for whichever is larger.
-        bound = [params.get(k) for k in ("max_tokens", "max_completion_tokens")]
-        output = max([self.max_tokens, *(b for b in bound if isinstance(b, int))])
+        output = bounds.output_bound(self.max_tokens, params)
         given = sum(input_bound(batch, params) for batch in messages)
-        if self.price.max_prompt_tokens and given > self.price.max_prompt_tokens:
-            # The bound is bytes, an over-estimate of tokens: a prompt near the limit in tokens
-            # may be refused, never one past it sent and under-recorded.
-            raise PromptTooLong
+        bounds.check_prompt_size(self.price, given)
         amount = prices.ceiling(self.price, given, output)
         metadata = metadata or {}
         async with self.sessionmaker()() as session, session.begin():
@@ -533,4 +466,6 @@ class BudgetGuard(AsyncCallbackHandler):
                 )
         except Exception:
             log.exception("llm_settle_failed", model=self.model, call_id=str(run_id))
-        metrics.record_call(labels, status, cost, usage, latency_ms)
+        metrics.record_call(
+            labels, status, cost, from_langchain(usage) if usage else None, latency_ms
+        )

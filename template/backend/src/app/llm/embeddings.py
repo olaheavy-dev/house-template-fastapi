@@ -2,7 +2,7 @@
 
 LangChain's embedding classes discard the provider's usage and take no callbacks, so the gateway
 calls OpenAI's embeddings endpoint itself: each request is reserved before it is sent (its UTF-8
-bytes bound its tokens, as in budget.input_bound) and settled from the usage OpenAI returns. A
+bytes bound its tokens, as in core/bounds.py) and settled from the usage OpenAI returns. A
 request the provider rejected releases its reservation; any other failure keeps it (both decided by
 the error's core/errors.py FailureKind). Errors come back as LangChain's Model*Error family, so
 app/llm/langchain/errors.py answers them as it does chat calls.
@@ -27,16 +27,15 @@ from langchain_core.messages.ai import UsageMetadata
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.llm import metrics
 from app.llm.budget import (
-    INPUT_MARGIN_TOKENS,
     BudgetExhausted,
     UserBudgetExhausted,
     reserve_for,
     settle,
     utc_today,
 )
-from app.llm.core import prices
+from app.llm.core import metrics, prices
+from app.llm.core.bounds import INPUT_MARGIN_TOKENS
 from app.llm.core.errors import REJECTED, FailureKind
 from app.llm.langchain.errors import model_error
 from app.llm.langchain.usage import from_langchain
@@ -206,4 +205,6 @@ class GatewayEmbeddings(Embeddings):
                 )
         except Exception:
             log.exception("llm_settle_failed", model=self.model, call_id=str(call_id))
-        metrics.record_call(labels, status, cost, usage, latency_ms)
+        metrics.record_call(
+            labels, status, cost, from_langchain(usage) if usage else None, latency_ms
+        )
