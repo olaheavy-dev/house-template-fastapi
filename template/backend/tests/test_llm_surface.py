@@ -35,8 +35,9 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 from app.db import Base
-from app.llm import embeddings, prices, report
+from app.llm import embeddings, prices
 from app.llm.core import metrics as core_metrics
+from app.llm.core import report
 from app.llm.core.errors import DEFAULT_RETRY_AFTER, Outcome
 from app.llm.core.prompts import PROMPTS
 from app.llm.langchain.errors import OUTCOMES, outcome_for
@@ -181,6 +182,17 @@ PUBLIC_NAMES: dict[str, tuple[str, ...]] = {
         "migration_sql",
         "open_checkpointer",
     ),
+    "app.llm.core.report": (
+        "GROUPS",
+        "SpendRow",
+        "spend",
+        "render",
+        "stale",
+        "collect",
+        "main",
+        "STALE_AFTER",
+        "cli",
+    ),
     "app.llm.report": (
         "GROUPS",
         "SpendRow",
@@ -255,6 +267,8 @@ MOVED: dict[tuple[str, str], str] = {
     ("app.llm.prompts", "PROMPTS"): "app.llm.core.prompts",
     ("app.llm.prompts", "Prompt"): "app.llm.langchain.prompts",
     ("app.llm.prompts", "load_prompt"): "app.llm.langchain.prompts",
+    # #33 T5a
+    **{("app.llm.report", name): "app.llm.core.report" for name in PUBLIC_NAMES["app.llm.report"]},
 }
 
 

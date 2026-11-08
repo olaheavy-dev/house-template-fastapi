@@ -37,8 +37,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
-from app.llm import prices, report
-from app.llm.core import budget
+from app.llm import prices
+from app.llm.core import budget, report
 from app.llm.core.bounds import IMAGE_TOKENS, INPUT_MARGIN_TOKENS
 from app.llm.core.budget import (
     BudgetExhausted,

@@ -50,7 +50,7 @@ test: ## Run the backend tests{% if database %} (LLM_EVAL is for make eval only,
 	$(BACKEND) python -m app.storage
 
 {% endif %}{% if database %}llm-report: ## Model spend from llm_call: make llm-report [days=7] [by=day,model] (by: day, model, prompt, feature)
-	$(BACKEND) python -m app.llm.report --days $(or $(days),7) --by $(or $(by),day$(comma)model)
+	$(BACKEND) python -m app.llm.core.report --days $(or $(days),7) --by $(or $(by),day$(comma)model)
 
 {% endif %}image: ## Build the API image from backend/Dockerfile
 	docker compose build api
