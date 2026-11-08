@@ -102,6 +102,8 @@ LLM_EVAL=1 LLM_DAILY_BUDGET_USD=1 uv run --extra db --extra langchain --extra st
 
 `tests/test_golden_render.py` keeps the default output from changing by accident: it renders `BASELINE_REF` (a commit of this repository) and the working tree with the default answers and compares every file. A feature PR that changes the default output on purpose adds the path to `INTENDED` with a reason and an issue number, and the test fails if a listed path no longer differs. A path-level entry hides a second, accidental change to the same file until the next baseline move. After each release, a `chore:` PR moves `BASELINE_REF` to the new tag and empties `INTENDED`. It needs the full git history (`git fetch --unshallow` in a shallow clone).
 
+Design records for choices every project inherits are in [`docs/decisions/`](docs/decisions/README.md).
+
 ## Releases
 
 release-please turns Conventional Commit titles into a release PR and, on merge, a `vX.Y.Z` tag. Projects update from those tags.
