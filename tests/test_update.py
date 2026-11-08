@@ -336,6 +336,100 @@ def test_update_from_before_the_core_split_merges_the_price_table_and_conflicts_
     assert product.read_bytes() == product_before
 
 
+# main right after #53 (`copier update` works) and before #54 (`storage`) and #60 (`database`).
+PRE_OPTIONS = "91943a4f696d414abb721066926bf1b926cbaad8"
+# The files `database: false` removes from a PRE_OPTIONS project (observed on Copier 9.19.1). The
+# gateway has no core/ or langchain/ yet and there is no compose/db: those came later.
+PRE_OPTIONS_DATABASE_FILES = {
+    "backend/migrations/env.py",
+    "backend/migrations/script.py.mako",
+    "backend/migrations/versions/20261025_0001_enable_pgvector.py",
+    "backend/migrations/versions/20261026_0002_llm_budget.py",
+    "backend/migrations/versions/20261026_0003_agent_checkpoints.py",
+    "backend/migrations/versions/20261026_0004_llm_call_details.py",
+    "backend/migrations/versions/20261026_0005_per_user_llm_budget.py",
+    "backend/migrations/versions/20261026_app_project_root.py",
+    "backend/src/app/db.py",
+    "backend/src/app/llm/__init__.py",
+    "backend/src/app/llm/budget.py",
+    "backend/src/app/llm/checkpoints.py",
+    "backend/src/app/llm/embeddings.py",
+    "backend/src/app/llm/errors.py",
+    "backend/src/app/llm/gateway.py",
+    "backend/src/app/llm/metrics.py",
+    "backend/src/app/llm/prices.py",
+    "backend/src/app/llm/prompts.py",
+    "backend/src/app/llm/report.py",
+    "backend/src/app/models.py",
+    "backend/src/app/prompts/README.md",
+    "backend/tests/cassettes/test_llm_gateway/test_a_replayed_call_is_answered_and_its_cost_settled.yaml",
+    "backend/tests/db.py",
+    "backend/tests/evals/__init__.py",
+    "backend/tests/evals/conftest.py",
+    "backend/tests/evals/test_gateway_evals.py",
+    "backend/tests/models.py",
+    "backend/tests/recording.py",
+    "backend/tests/test_db.py",
+    "backend/tests/test_llm_agents.py",
+    "backend/tests/test_llm_budget.py",
+    "backend/tests/test_llm_embeddings.py",
+    "backend/tests/test_llm_gateway.py",
+    "backend/tests/test_llm_prices.py",
+    "backend/tests/test_observability.py",
+    "backend/tests/test_recording_keys.py",
+}
+PRE_OPTIONS_STORAGE_FILES = {"backend/src/app/storage.py", "backend/tests/storage.py",
+                             "backend/tests/test_storage.py"}
+
+
+def pre_options_project(path: Path) -> Path:
+    require_ref(PRE_OPTIONS)
+    write_base(path)
+    copy_layer(ROOT, path, PRE_OPTIONS)
+    assert not {"storage", "database"} & answers(path).keys()
+    git(path, "init", "-q", "-b", "main")
+    (path / "backend" / "user_added.txt").write_text("mine\n")
+    git(path, "add", "-A")
+    git(path, "commit", "-q", "-m", "chore: start")
+    return path
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+def test_update_from_before_the_storage_and_database_questions_keeps_every_file(tmp_path):
+    # Goes when the README stops supporting updates from main between #53 and #54/#60. README:
+    # "Projects made before the `storage` question existed take `storage: true` on update".
+    dst = pre_options_project(tmp_path / "project")
+    before = tracked(dst)
+
+    copier.run_update(dst, answers_file=ANSWERS_FILE, defaults=True, unsafe=True, overwrite=True,
+                      quiet=True, vcs_ref="HEAD")
+
+    recorded = answers(dst)
+    assert (recorded["storage"], recorded["database"]) == (True, True)
+    assert before - set(files_of(dst)) == set(), "update deleted files"
+    assert (dst / "backend/user_added.txt").read_text() == "mine\n"
+    assert not list(dst.rglob("*.rej"))
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+@pytest.mark.parametrize(("answer", "expected"), [
+    ("storage", PRE_OPTIONS_STORAGE_FILES), ("database", PRE_OPTIONS_DATABASE_FILES)])
+def test_update_from_before_the_questions_with_one_turned_off_removes_only_its_files(
+        tmp_path, answer, expected):
+    # Goes when the README stops supporting updates from main between #53 and #54/#60. This is
+    # what the `is defined` guards in copier.yml are for: the old copy has no such answer.
+    dst = pre_options_project(tmp_path / "project")
+    before = tracked(dst)
+
+    copier.run_update(dst, answers_file=ANSWERS_FILE, data={answer: False}, defaults=True,
+                      unsafe=True, overwrite=True, quiet=True, vcs_ref="HEAD")
+
+    assert before - set(files_of(dst)) == expected
+    assert answers(dst)[answer] is False
+    assert (dst / "backend/user_added.txt").read_text() == "mine\n"
+    assert not list(dst.rglob("*.rej"))
+
+
 STORAGE_PATHS = ["backend/src/app/storage.py", "backend/tests/storage.py",
                  "backend/tests/test_storage.py", "backend/compose/storage/compose.yaml"]
 
