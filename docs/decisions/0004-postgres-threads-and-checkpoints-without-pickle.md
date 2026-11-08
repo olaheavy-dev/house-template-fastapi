@@ -13,7 +13,7 @@ Status: Proposed. Part of it is decided; the storage design is not.
 
 For OpenAI's Responses client, the spike found MAF sends no `store` by default and OpenAI's default is `true`; passing `options={"store": False}` keeps history with us ([#32](https://github.com/olaheavy-dev/house-template-fastapi/issues/32), item 5). As of the planner's review on 6 Nov 2026, MAF has no Postgres history provider for agent sessions and no Postgres workflow `CheckpointStorage` ([#35](https://github.com/olaheavy-dev/house-template-fastapi/issues/35)). On the LangChain side, threads already use LangGraph's Postgres checkpointer (README).
 
-## Proposal
+## Decision (proposed)
 
 - **Threads:** a `PostgresSessionStore` keeps the session as JSON per `thread_id`, with a migration. The thread id is derived on the server from the current user, never taken from the caller ([#35](https://github.com/olaheavy-dev/house-template-fastapi/issues/35) 5b: "thread ids are server-derived"; the template's rule: "Derive or check every `thread_id` server-side", `template/.claude/rules/fastapi.md.jinja` line 37). 5b also persists the full `AgentSession` state (it holds pending approvals).
 - **Workflow checkpoints:** a Postgres `CheckpointStorage` that uses no pickle. In practice: loading a checkpoint can only build data we expect. Python's own documentation warns that unpickling untrusted data can run arbitrary code ([pickle docs](https://docs.python.org/3/library/pickle.html)).
