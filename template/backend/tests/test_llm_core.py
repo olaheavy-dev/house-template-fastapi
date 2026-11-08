@@ -140,11 +140,20 @@ def imported_roots(path: Path) -> set[str]:
     return found
 
 
+# The one import of a provider SDK the core is allowed (#33 T4), mirroring the import-linter ignore
+# in llm-contracts.toml: OpenAI's embeddings call, whose usage LangChain's classes discard.
+ALLOWED = frozenset({("openai_embeddings.py", "openai")})
+
+
 def test_core_imports_no_framework() -> None:
     modules = sorted(CORE.glob("*.py"))
     assert modules, CORE
     for path in modules:
-        bad = {name for name in imported_roots(path) if name.split(".")[0] in FRAMEWORKS}
+        bad = {
+            name
+            for name in imported_roots(path)
+            if name.split(".")[0] in FRAMEWORKS and (path.name, name) not in ALLOWED
+        }
         assert bad == set(), path.name
 
 

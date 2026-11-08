@@ -46,9 +46,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.auth import User
 from app.llm import prices
 from app.llm.core import registry
+from app.llm.core.openai_embeddings import openai_client
 from app.llm.core.prices import MICRO_USD
-from app.llm.embeddings import GatewayEmbeddings, openai_client
 from app.llm.langchain.callbacks import BudgetGuard
+from app.llm.langchain.embeddings import GatewayEmbeddings
 from app.llm.prompts import Prompt
 from app.problems import Problem
 from app.settings import Settings

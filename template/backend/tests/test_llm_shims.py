@@ -76,6 +76,7 @@ def test_an_unknown_name_is_still_an_attribute_error() -> None:
         "app.llm.errors",
         "app.llm.budget",
         "app.llm.metrics",
+        "app.llm.embeddings",
     ):
         with pytest.raises(AttributeError, match="has no attribute 'nope'"):
             _ = importlib.import_module(old).nope
@@ -191,6 +192,20 @@ def test_the_old_budget_and_metrics_modules_import_without_a_warning() -> None:
         "import app.llm.budget, app.llm.metrics\n"
         "assert 'BudgetGuard' in app.llm.budget.__all__\n"
         "assert 'record_call' in app.llm.metrics.__all__\n"
+    )
+    subprocess.run(  # noqa: S603 - this interpreter, running code written above
+        [sys.executable, "-c", code], check=True
+    )
+
+
+def test_the_old_embeddings_module_imports_without_a_warning() -> None:
+    # As for the other old modules: importing it is silent, only a moved name warns. Its new
+    # modules are imported first (LangChain warns on import on Python 3.14, see above).
+    code = (
+        "import warnings, app.llm.core.openai_embeddings, app.llm.langchain.embeddings\n"
+        "warnings.simplefilter('error')\n"
+        "import app.llm.embeddings\n"
+        "assert 'GatewayEmbeddings' in app.llm.embeddings.__all__\n"
     )
     subprocess.run(  # noqa: S603 - this interpreter, running code written above
         [sys.executable, "-c", code], check=True
