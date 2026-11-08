@@ -1,6 +1,7 @@
 """The model gateway: the only package that configures or calls a language model provider.
 
-gateway.py builds the model, budget.py caps daily spend, prices.py holds the project's price tables
-(core/ prices calls and classifies their failures without any framework) and prompts.py loads
-versioned prompts; langchain/ converts LangChain's data. See gateway.py for how to call the model.
+gateway.py builds the model, prices.py holds the project's price tables and prompts.py loads
+versioned prompts. core/ prices calls, caps daily spend (budget.py, bounds.py), records metrics and
+classifies failures without any framework; langchain/ converts LangChain's data and drives the
+budget from its callbacks. See gateway.py for how to call the model.
 """

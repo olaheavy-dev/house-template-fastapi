@@ -38,21 +38,20 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
 from app.llm import prices, report
-from app.llm.budget import (
-    IMAGE_TOKENS,
-    INPUT_MARGIN_TOKENS,
+from app.llm.core import budget
+from app.llm.core.bounds import IMAGE_TOKENS, INPUT_MARGIN_TOKENS
+from app.llm.core.budget import (
     BudgetExhausted,
-    BudgetGuard,
     LlmCall,
     LlmSpendDay,
     LlmSpendUserDay,
-    input_bound,
     reserve,
     reserve_for,
-    settle,
 )
 from app.llm.embeddings import GatewayEmbeddings
 from app.llm.gateway import Gateway
+from app.llm.langchain.callbacks import BudgetGuard, input_bound
+from app.llm.langchain.usage import from_langchain
 from app.settings import Settings
 from tests.models import CHAT_MODEL, EMBEDDING_MODEL
 
@@ -97,6 +96,13 @@ async def total(session: AsyncSession) -> int | None:
 
 async def rows(session: AsyncSession) -> list[LlmCall]:
     return list((await session.scalars(select(LlmCall).where(LlmCall.day == DAY))).all())
+
+
+# Alias beside end_of(): the ledger's settle takes the neutral Usage since #33 T3, so LangChain's
+# usage goes through the adapter first, as it does in the guard ({} is no usage). Only these lines
+# changed.
+async def settle(session: AsyncSession, *, usage: UsageMetadata | None = None, **call: Any) -> None:
+    await budget.settle(session, usage=from_langchain(usage) if usage else None, **call)
 
 
 def end_of(usage: UsageMetadata | None) -> LLMResult:
@@ -259,6 +265,8 @@ async def test_settling_without_a_cost_keeps_the_reservation_and_without_usage_r
 async def test_settling_with_an_empty_usage_dict_records_none_like_no_usage(
     db_session: AsyncSession,
 ) -> None:
+    # Since T3 this covers the adapter convention (`from_langchain(u) if u else None`, via the
+    # alias above); the core itself rejects {}: test_llm_core_budget.py.
     # Pins the `if usage` guards: LangChain can hand over {} for "nothing reported", which is not a
     # usage (no input_tokens key) and must be stored as unknown, never raise or record zeros.
     call_id = uuid.uuid4()

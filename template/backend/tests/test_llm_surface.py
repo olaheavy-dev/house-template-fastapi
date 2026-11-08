@@ -27,15 +27,18 @@ from langchain_core.exceptions import (
     ModelRateLimitError,
     ModelTimeoutError,
 )
+from langchain_core.messages.ai import UsageMetadata
 from langgraph.errors import GraphRecursionError
 from opentelemetry import metrics as otel_metrics
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 from app.db import Base
-from app.llm import budget, embeddings, metrics, prices, report
+from app.llm import embeddings, prices, report
+from app.llm.core import metrics as core_metrics
 from app.llm.core.errors import DEFAULT_RETRY_AFTER, Outcome
 from app.llm.langchain.errors import OUTCOMES, outcome_for
+from app.llm.langchain.usage import from_langchain
 from app.llm.prompts import PROMPTS, Prompt, load_prompt
 
 pytestmark = pytest.mark.anyio
@@ -77,6 +80,43 @@ PUBLIC_NAMES: dict[str, tuple[str, ...]] = {
         "model_error",
         "install_model_error_handlers",
     ),
+    "app.llm.core.bounds": (
+        "INPUT_MARGIN_TOKENS",
+        "IMAGE_TOKENS",
+        "PromptTooLong",
+        "UnboundedMedia",
+        "UnpricedRequest",
+        "count_images",
+        "request_bound",
+        "output_bound",
+        "check_prompt_size",
+        "check_priced",
+    ),
+    "app.llm.core.budget": (
+        "LlmSpendDay",
+        "LlmSpendUserDay",
+        "LlmCall",
+        "BudgetExhausted",
+        "UserBudgetExhausted",
+        "CallTags",
+        "Meter",
+        "reserve",
+        "reserve_for",
+        "settle",
+        "expire_stale",
+        "utc_today",
+        "WARN_SHARE",
+    ),
+    "app.llm.core.metrics": (
+        "calls",
+        "tokens",
+        "cost",
+        "latency",
+        "labels",
+        "record_refusal",
+        "record_call",
+    ),
+    "app.llm.langchain.callbacks": ("BudgetGuard", "input_bound"),
     "app.llm.prices": (
         "MICRO_USD",
         "Rates",
@@ -162,7 +202,57 @@ MOVED: dict[tuple[str, str], str] = {
     ("app.llm.errors", "OUTCOMES"): "app.llm.langchain.errors",
     ("app.llm.errors", "outcome_for"): "app.llm.langchain.errors",
     ("app.llm.errors", "install_model_error_handlers"): "app.llm.langchain.errors",
+    # #33 T3
+    **{
+        ("app.llm.budget", name): "app.llm.core.budget"
+        for name in (
+            "LlmSpendDay",
+            "LlmSpendUserDay",
+            "LlmCall",
+            "BudgetExhausted",
+            "UserBudgetExhausted",
+            "reserve",
+            "reserve_for",
+            "settle",
+            "expire_stale",
+            "utc_today",
+            "WARN_SHARE",
+        )
+    },
+    **{
+        ("app.llm.budget", name): "app.llm.core.bounds"
+        for name in (
+            "PromptTooLong",
+            "UnboundedMedia",
+            "UnpricedRequest",
+            "check_priced",
+            "INPUT_MARGIN_TOKENS",
+            "IMAGE_TOKENS",
+        )
+    },
+    ("app.llm.budget", "BudgetGuard"): "app.llm.langchain.callbacks",
+    ("app.llm.budget", "input_bound"): "app.llm.langchain.callbacks",
+    **{
+        ("app.llm.metrics", name): "app.llm.core.metrics"
+        for name in PUBLIC_NAMES["app.llm.metrics"]
+    },
 }
+
+
+def moved_names(old: str) -> SimpleNamespace:
+    """What the old module `old` held, each name taken from the module it moved to (no warning)."""
+    return SimpleNamespace(
+        **{
+            name: getattr(importlib.import_module(new), name)
+            for (module, name), new in MOVED.items()
+            if module == old
+        }
+    )
+
+
+# Aliases (#33 T3): the old app.llm.budget names, from their new modules, so the checks below read
+# as before. Only these lines changed.
+budget = moved_names("app.llm.budget")
 
 
 @pytest.mark.parametrize("module", sorted(PUBLIC_NAMES))
@@ -426,7 +516,27 @@ def test_metric_labels_default_to_none() -> None:
 
 # The module that CREATES the instruments (calls, tokens, cost, latency). The fixture reloads this
 # one. At T3 the creation moves to the core metrics module: change this one line.
-METRICS_MODULE = metrics
+METRICS_MODULE = core_metrics
+
+
+def record_call(
+    attributes: dict[str, str],
+    status: str,
+    cost_micro_usd: int | None,
+    usage: UsageMetadata | None,
+    latency_ms: int | None,
+) -> None:
+    """core.metrics.record_call takes the neutral Usage since T3: LangChain's usage goes through
+    the adapter first, as in the guard ({} is no usage)."""
+    core_metrics.record_call(
+        attributes, status, cost_micro_usd, from_langchain(usage) if usage else None, latency_ms
+    )
+
+
+# Alias (#33 T3): the metrics as the tests below have always called them. Only these lines changed.
+metrics = SimpleNamespace(
+    labels=core_metrics.labels, record_refusal=core_metrics.record_refusal, record_call=record_call
+)
 
 
 @pytest.fixture
@@ -504,6 +614,8 @@ def test_a_failed_call_without_cost_or_usage_records_only_the_count_and_latency(
 
 
 def test_an_empty_usage_dict_records_no_token_points(local_metrics: InMemoryMetricReader) -> None:
+    # Since T3 this covers the adapter convention (`from_langchain(u) if u else None`, via the
+    # alias above); the core itself rejects {}: test_llm_core_budget.py.
     # Pins metrics.record_call's `if usage` guard: {} means nothing was reported.
     labels = metrics.labels("pin-model-emptyusage")
     empty: Any = {}

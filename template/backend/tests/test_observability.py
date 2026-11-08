@@ -20,8 +20,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
 from app.llm import prices, report
-from app.llm.budget import BudgetGuard, LlmCall, reserve, settle
+from app.llm.core.budget import LlmCall, reserve, settle
 from app.llm.core.prices import cost
+from app.llm.langchain.callbacks import BudgetGuard
 from app.llm.langchain.usage import from_langchain
 from tests.models import CHAT_MODEL
 

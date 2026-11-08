@@ -17,6 +17,6 @@ after importing this module, so a model it can't see gets no migration.
 from __future__ import annotations
 
 from app.db import Base
-from app.llm.budget import LlmCall, LlmSpendDay, LlmSpendUserDay
+from app.llm.core.budget import LlmCall, LlmSpendDay, LlmSpendUserDay
 
 __all__ = ["Base", "LlmCall", "LlmSpendDay", "LlmSpendUserDay"]

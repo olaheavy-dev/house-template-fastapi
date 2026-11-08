@@ -1,58 +1,43 @@
-"""OpenTelemetry metrics for model calls, beside FastAPI's own HTTP metrics.
-
-Every settled call adds to these instruments, labelled by model, prompt and feature (bounded sets;
-never a user id). Without a meter provider they cost nothing: OpenTelemetry's API is a no-op until
-one is configured (FASTAPI_OTEL_AUTO_CONFIGURE with an OTLP endpoint, or a provider of your own).
-The llm_call table stays the record of truth; these are for dashboards and alerts.
+"""Moved (#33): the llm.* OpenTelemetry instruments and record_call are in app/llm/core/metrics.py.
+Until 0.8.0 the old names still answer here, with a DeprecationWarning, and are the same objects
+as the core's (the instruments are created once, there).
 """
 
 from __future__ import annotations
 
-from langchain_core.messages.ai import UsageMetadata
-from opentelemetry import metrics
+import warnings
+from typing import TYPE_CHECKING
 
-from app.llm.core.prices import token_details
-from app.llm.langchain.usage import from_langchain
+from app.llm.core import metrics as _core
 
-_meter = metrics.get_meter("app.llm")
-calls = _meter.create_counter("llm.calls", unit="{call}", description="Model calls by outcome")
-tokens = _meter.create_counter("llm.tokens", unit="{token}", description="Tokens by kind")
-cost = _meter.create_counter(
-    "llm.cost", unit="{micro_usd}", description="Settled model spend in micro-USD"
-)
-latency = _meter.create_histogram(
-    "llm.latency", unit="ms", description="Time from a model call's start to its end"
-)
+if TYPE_CHECKING:
+    from app.llm.core.metrics import calls as calls
+    from app.llm.core.metrics import cost as cost
+    from app.llm.core.metrics import labels as labels
+    from app.llm.core.metrics import latency as latency
+    from app.llm.core.metrics import record_call as record_call
+    from app.llm.core.metrics import record_refusal as record_refusal
+    from app.llm.core.metrics import tokens as tokens
 
+__all__ = ["calls", "cost", "labels", "latency", "record_call", "record_refusal", "tokens"]
 
-def labels(model: str, prompt: str | None = None, feature: str | None = None) -> dict[str, str]:
-    return {"model": model, "prompt": prompt or "none", "feature": feature or "none"}
+_MOVED = frozenset(__all__)
 
+if not TYPE_CHECKING:
 
-def record_refusal(attributes: dict[str, str]) -> None:
-    calls.add(1, {**attributes, "outcome": "refused"})
-
-
-def record_call(
-    attributes: dict[str, str],
-    status: str,
-    cost_micro_usd: int | None,
-    usage: UsageMetadata | None,
-    latency_ms: int | None,
-) -> None:
-    calls.add(1, {**attributes, "outcome": status})
-    if cost_micro_usd:
-        cost.add(cost_micro_usd, attributes)
-    if latency_ms is not None:
-        latency.record(latency_ms, {**attributes, "outcome": status})
-    if usage:
-        counts = {"input": usage["input_tokens"], "output": usage["output_tokens"]}
-        details = token_details(from_langchain(usage))
-        counts |= {
-            "reasoning": details["reasoning_tokens"] or 0,
-            "cache_read": details["cache_read_tokens"] or 0,
-            "cache_write": details["cache_write_tokens"] or 0,
-        }
-        for kind, count in counts.items():
-            if count:
-                tokens.add(count, {**attributes, "kind": kind})
+    def __getattr__(name: str) -> object:
+        if name in _MOVED:
+            takes_usage = (
+                " and now takes app.llm.core.usage.Usage: convert LangChain usage with "
+                "app.llm.langchain.usage.from_langchain (pass None, not {}, for no usage)"
+                if name == "record_call"
+                else ""
+            )
+            warnings.warn(
+                f"app.llm.metrics.{name} moved to app.llm.core.metrics.{name}: import it from "
+                f"there (the old name goes in 0.8.0){takes_usage}",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return getattr(_core, name)
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
