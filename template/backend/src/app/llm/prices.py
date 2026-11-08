@@ -88,17 +88,22 @@ EMBEDDING_PRICES: dict[str, Price] = {
 # The arithmetic moved to app/llm/core/prices.py (#33). Until 0.8.0 the old names still answer here,
 # with a DeprecationWarning, and are the same objects as the core's.
 _MOVED = frozenset({"cost", "ceiling", "token_details"})
+# Two of them take the core's Usage now. They differ on no usage: cost has no answer for it.
+_CONVERT = (
+    " and now takes app.llm.core.usage.Usage: convert LangChain usage with "
+    "app.llm.langchain.usage.from_langchain"
+)
+_TAKES_USAGE = {
+    "cost": _CONVERT
+    + " (it takes a Usage only, never None or {}: skip pricing when there is no usage)",
+    "token_details": _CONVERT + " (pass None, not {}, for no usage)",
+}
 
 if not TYPE_CHECKING:
 
     def __getattr__(name: str) -> object:
         if name in _MOVED:
-            takes_usage = (
-                " and now takes app.llm.core.usage.Usage: convert LangChain usage with "
-                "app.llm.langchain.usage.from_langchain (pass None, not {}, for no usage)"
-                if name in {"cost", "token_details"}
-                else ""
-            )
+            takes_usage = _TAKES_USAGE.get(name, "")
             warnings.warn(
                 f"app.llm.prices.{name} moved to app.llm.core.prices.{name}: import it from there "
                 f"(the old name goes in 0.8.0){takes_usage}",

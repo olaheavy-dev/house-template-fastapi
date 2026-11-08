@@ -19,7 +19,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
-from app.llm import prices, report
+from app.llm import prices
+from app.llm.core import report
 from app.llm.core.budget import LlmCall, reserve, settle
 from app.llm.core.prices import cost
 from app.llm.langchain.callbacks import BudgetGuard

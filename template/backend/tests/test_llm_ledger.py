@@ -37,8 +37,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
-from app.llm import prices, report
-from app.llm.core import budget
+from app.llm import prices
+from app.llm.core import budget, report
 from app.llm.core.bounds import IMAGE_TOKENS, INPUT_MARGIN_TOKENS
 from app.llm.core.budget import (
     BudgetExhausted,
@@ -48,9 +48,9 @@ from app.llm.core.budget import (
     reserve,
     reserve_for,
 )
-from app.llm.gateway import Gateway
 from app.llm.langchain.callbacks import BudgetGuard, input_bound
 from app.llm.langchain.embeddings import GatewayEmbeddings
+from app.llm.langchain.gateway import Gateway
 from app.llm.langchain.usage import from_langchain
 from app.settings import Settings
 from tests.models import CHAT_MODEL, EMBEDDING_MODEL

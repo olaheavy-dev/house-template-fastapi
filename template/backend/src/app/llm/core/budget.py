@@ -321,7 +321,8 @@ async def expire_stale(session: AsyncSession, *, older_than: timedelta) -> int:
     """Close reservations left open by a process that died mid-call (a crash, a SIGKILL after
     the grace period). Whether the provider billed them is unknown, so each keeps its
     reservation as its cost (the day's total already counts it) and is marked failed. Returns how
-    many were closed. Run it from a scheduled job, or `python -m app.llm.report --expire-stale`."""
+    many were closed. Run it from a scheduled job, or
+    `python -m app.llm.core.report --expire-stale`."""
     closed = await session.execute(
         update(LlmCall)
         .where(LlmCall.status == "reserved", LlmCall.created_at < func.now() - older_than)
