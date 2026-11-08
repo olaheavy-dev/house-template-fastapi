@@ -35,6 +35,7 @@ BASELINE_REF = "v0.7.0"
 # executables today).
 INTENDED: dict[str, str] = {
     "backend/src/app/llm/prices.py": "the cost warning no longer says to pass None, cost takes a Usage only (#85)",
+    "backend/tests/test_llm_shims.py": "expects the new cost warning wording (#85)",
 }
 
 # Lines Copier writes that name where and when the template was applied, not what it generated.
