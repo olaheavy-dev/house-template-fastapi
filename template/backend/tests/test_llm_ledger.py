@@ -37,7 +37,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
-from app.llm import prices, report
+from app.llm import budget, prices, report
 from app.llm.budget import (
     IMAGE_TOKENS,
     INPUT_MARGIN_TOKENS,
@@ -49,10 +49,10 @@ from app.llm.budget import (
     input_bound,
     reserve,
     reserve_for,
-    settle,
 )
 from app.llm.embeddings import GatewayEmbeddings
 from app.llm.gateway import Gateway
+from app.llm.langchain.usage import from_langchain
 from app.settings import Settings
 from tests.models import CHAT_MODEL, EMBEDDING_MODEL
 
@@ -97,6 +97,13 @@ async def total(session: AsyncSession) -> int | None:
 
 async def rows(session: AsyncSession) -> list[LlmCall]:
     return list((await session.scalars(select(LlmCall).where(LlmCall.day == DAY))).all())
+
+
+# Alias beside end_of(): the ledger's settle takes the neutral Usage since #33 T3, so LangChain's
+# usage goes through the adapter first, as it does in the guard ({} is no usage). Only these lines
+# changed.
+async def settle(session: AsyncSession, *, usage: UsageMetadata | None = None, **call: Any) -> None:
+    await budget.settle(session, usage=from_langchain(usage) if usage else None, **call)
 
 
 def end_of(usage: UsageMetadata | None) -> LLMResult:

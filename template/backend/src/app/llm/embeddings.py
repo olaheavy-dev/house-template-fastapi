@@ -23,22 +23,21 @@ from typing import Any
 import openai
 import structlog
 from langchain_core.embeddings import Embeddings
-from langchain_core.messages.ai import UsageMetadata
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.llm.budget import (
+from app.llm.core import metrics, prices
+from app.llm.core.bounds import INPUT_MARGIN_TOKENS
+from app.llm.core.budget import (
     BudgetExhausted,
     UserBudgetExhausted,
     reserve_for,
     settle,
     utc_today,
 )
-from app.llm.core import metrics, prices
-from app.llm.core.bounds import INPUT_MARGIN_TOKENS
 from app.llm.core.errors import REJECTED, FailureKind
+from app.llm.core.usage import Usage
 from app.llm.langchain.errors import model_error
-from app.llm.langchain.usage import from_langchain
 
 log = structlog.get_logger()
 
@@ -170,15 +169,9 @@ class GatewayEmbeddings(Embeddings):
             rejected = kind in REJECTED
             await self._settle(call_id, "failed", 0 if rejected else None, None, labels, started)
             raise _as_model_error(error, kind) from error
-        tokens = int(response.usage.prompt_tokens)
-        usage: UsageMetadata = {"input_tokens": tokens, "output_tokens": 0, "total_tokens": tokens}
+        usage = Usage(input_tokens=int(response.usage.prompt_tokens), output_tokens=0)
         await self._settle(
-            call_id,
-            "settled",
-            prices.cost(self.price, from_langchain(usage)),
-            usage,
-            labels,
-            started,
+            call_id, "settled", prices.cost(self.price, usage), usage, labels, started
         )
         return [item.embedding for item in sorted(response.data, key=lambda item: item.index)]
 
@@ -187,7 +180,7 @@ class GatewayEmbeddings(Embeddings):
         call_id: uuid.UUID,
         status: str,
         cost: int | None,
-        usage: UsageMetadata | None,
+        usage: Usage | None,
         labels: dict[str, str],
         started: float,
     ) -> None:
@@ -205,6 +198,4 @@ class GatewayEmbeddings(Embeddings):
                 )
         except Exception:
             log.exception("llm_settle_failed", model=self.model, call_id=str(call_id))
-        metrics.record_call(
-            labels, status, cost, from_langchain(usage) if usage else None, latency_ms
-        )
+        metrics.record_call(labels, status, cost, usage, latency_ms)
