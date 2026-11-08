@@ -37,7 +37,6 @@ from app.db import Base
 from app.llm import prices, report
 from app.llm.core import metrics as core_metrics
 from app.llm.core.errors import DEFAULT_RETRY_AFTER, Outcome
-from app.llm.embeddings import GatewayEmbeddings
 from app.llm.langchain.errors import OUTCOMES, outcome_for
 from app.llm.langchain.usage import from_langchain
 from app.llm.prompts import PROMPTS, Prompt, load_prompt
@@ -59,6 +58,9 @@ PUBLIC_NAMES: dict[str, tuple[str, ...]] = {
     ),
     "app.llm.core.registry": ("KEY_SETTINGS", "key_setting", "chat_price", "embedding_price"),
     "app.llm.langchain.usage": ("from_langchain",),
+    "app.llm.core.embeddings": ("MAX_INPUTS", "MAX_BYTES", "Create", "batches", "embed"),
+    "app.llm.core.openai_embeddings": ("KINDS", "kind_of", "openai_client", "create"),
+    "app.llm.langchain.embeddings": ("GatewayEmbeddings",),
     "app.llm.core.errors": (
         "FailureKind",
         "Outcome",
@@ -237,6 +239,9 @@ MOVED: dict[tuple[str, str], str] = {
         ("app.llm.metrics", name): "app.llm.core.metrics"
         for name in PUBLIC_NAMES["app.llm.metrics"]
     },
+    # #33 T4
+    ("app.llm.embeddings", "GatewayEmbeddings"): "app.llm.langchain.embeddings",
+    ("app.llm.embeddings", "openai_client"): "app.llm.core.openai_embeddings",
 }
 
 
@@ -254,10 +259,13 @@ def moved_names(old: str) -> SimpleNamespace:
 # Aliases (#33 T3): the old app.llm.budget names, from their new modules, so the checks below read
 # as before. Only these lines changed.
 budget = moved_names("app.llm.budget")
-# (#33 T4) What app.llm.embeddings used to hold: the class, and the budget names it imported, from
-# where they are now.
+# (#33 T4) What app.llm.embeddings used to hold: the class and openai_client from where they are
+# now, and the budget names it imported, from their core modules. The loop in
+# test_names_imported_from_one_module_into_another_are_the_same_object that reads the budget names
+# off it is therefore true by construction; test_llm_embeddings.py raising the core's classes is
+# the real proof.
 embeddings = SimpleNamespace(
-    GatewayEmbeddings=GatewayEmbeddings,
+    **vars(moved_names("app.llm.embeddings")),
     **{
         name: getattr(budget, name)
         for name in (

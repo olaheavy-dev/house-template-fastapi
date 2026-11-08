@@ -21,7 +21,7 @@ from app.llm.core.bounds import PromptTooLong
 from app.llm.core.budget import BudgetExhausted, LlmCall, LlmSpendDay
 from app.llm.core.errors import FailureKind, ProviderError
 from app.llm.core.prices import Price, Rates
-from app.llm.embeddings import GatewayEmbeddings
+from app.llm.langchain.embeddings import GatewayEmbeddings
 
 pytestmark = pytest.mark.anyio
 
