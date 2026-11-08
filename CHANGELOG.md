@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.1](https://github.com/olaheavy-dev/house-template-fastapi/compare/v0.7.0...v0.7.1) (2026-11-08)
+
+
+### Bug Fixes
+
+* **deps:** bump pgvector/pgvector from 0.8.7-pg18-trixie to 0.8.7-pg18-trixie in /template/backend/compose/db ([#68](https://github.com/olaheavy-dev/house-template-fastapi/issues/68)) ([e642527](https://github.com/olaheavy-dev/house-template-fastapi/commit/e64252774f4856042ab237d401d26f92dbc84ec7))
+* load agent checkpoints strictly, so a stored row cannot run code ([#36](https://github.com/olaheavy-dev/house-template-fastapi/issues/36)) ([#89](https://github.com/olaheavy-dev/house-template-fastapi/issues/89)) ([e0b171f](https://github.com/olaheavy-dev/house-template-fastapi/commit/e0b171f002b7a28c979b4fbed82f5b6044d2680b))
+* the cost warning no longer says to pass None (cost takes a Usage only) ([#85](https://github.com/olaheavy-dev/house-template-fastapi/issues/85)) ([6f5f51a](https://github.com/olaheavy-dev/house-template-fastapi/commit/6f5f51a9ce9a34d18b289773014147bf6517f750))
+
 ## [0.7.0](https://github.com/olaheavy-dev/house-template-fastapi/compare/v0.6.1...v0.7.0) (2026-11-08)
 
 
