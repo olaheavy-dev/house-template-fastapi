@@ -6,6 +6,7 @@ and the prompt version hash. The framework-neutral split must keep every one of 
 from __future__ import annotations
 
 import importlib
+import warnings
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,7 +35,7 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 from app.db import Base
-from app.llm import prices, report
+from app.llm import embeddings, prices, report
 from app.llm.core import metrics as core_metrics
 from app.llm.core.errors import DEFAULT_RETRY_AFTER, Outcome
 from app.llm.langchain.errors import OUTCOMES, outcome_for
@@ -242,6 +243,11 @@ MOVED: dict[tuple[str, str], str] = {
     # #33 T4
     ("app.llm.embeddings", "GatewayEmbeddings"): "app.llm.langchain.embeddings",
     ("app.llm.embeddings", "openai_client"): "app.llm.core.openai_embeddings",
+    **{
+        ("app.llm.embeddings", name): "app.llm.core.budget"
+        for name in ("BudgetExhausted", "UserBudgetExhausted", "reserve_for", "settle")
+    },
+    ("app.llm.embeddings", "INPUT_MARGIN_TOKENS"): "app.llm.core.bounds",
 }
 
 
@@ -259,24 +265,6 @@ def moved_names(old: str) -> SimpleNamespace:
 # Aliases (#33 T3): the old app.llm.budget names, from their new modules, so the checks below read
 # as before. Only these lines changed.
 budget = moved_names("app.llm.budget")
-# (#33 T4) What app.llm.embeddings used to hold: the class and openai_client from where they are
-# now, and the budget names it imported, from their core modules. The loop in
-# test_names_imported_from_one_module_into_another_are_the_same_object that reads the budget names
-# off it is therefore true by construction; test_llm_embeddings.py raising the core's classes is
-# the real proof.
-embeddings = SimpleNamespace(
-    **vars(moved_names("app.llm.embeddings")),
-    **{
-        name: getattr(budget, name)
-        for name in (
-            "BudgetExhausted",
-            "UserBudgetExhausted",
-            "reserve_for",
-            "settle",
-            "INPUT_MARGIN_TOKENS",
-        )
-    },
-)
 
 
 @pytest.mark.parametrize("module", sorted(PUBLIC_NAMES))
@@ -291,7 +279,10 @@ def test_every_public_name_is_importable_from_its_module(module: str) -> None:
 
 
 def attr(module: object, name: str) -> Any:
-    return getattr(module, name)
+    # A moved name on a shim module (app.llm.embeddings) warns; test_llm_shims.py checks that.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        return getattr(module, name)
 
 
 def test_names_imported_from_one_module_into_another_are_the_same_object() -> None:
@@ -525,8 +516,8 @@ def test_budget_refusals_carry_their_status_detail_and_retry_after() -> None:
 
 
 def test_embedding_batches_are_bounded_by_count_and_bytes() -> None:
-    assert embeddings.GatewayEmbeddings.MAX_INPUTS == 2048
-    assert embeddings.GatewayEmbeddings.MAX_BYTES == 300_000 - 1024
+    assert attr(embeddings, "GatewayEmbeddings").MAX_INPUTS == 2048
+    assert attr(embeddings, "GatewayEmbeddings").MAX_BYTES == 300_000 - 1024
 
 
 # --- metrics --------------------------------------------------------------------------------------

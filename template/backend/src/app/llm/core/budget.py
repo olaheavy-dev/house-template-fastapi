@@ -348,8 +348,9 @@ class CallTags:
 
 class Meter:
     """The budget for one model, driven by an adapter: reserve() before a call is sent, then
-    settle() when it ends or failed() when it fails. Each call gets one llm_call row and adds to
-    the llm.* metrics; the call id is the adapter's (unique per call: it is the row's key).
+    settle() when it ends, failed() when it fails or abandon() if it is cancelled. Each call gets
+    one llm_call row and adds to the llm.* metrics; the call id is the adapter's (unique per call:
+    it is the row's key).
 
     The settings are plain attributes, read on every call (tests and the gateway may change them).
     `sessionmaker` is looked up per call, so tests can point the app at their own transaction;

@@ -237,6 +237,38 @@ async def test_a_request_at_the_price_limit_is_sent_and_one_byte_more_is_refused
     assert len(await rows(db_session)) == 1
 
 
+async def test_a_text_past_the_limit_refuses_the_whole_call_before_any_batch_is_sent(
+    meter: Callable[..., Meter], db_session: AsyncSession
+) -> None:
+    provider = Provider()
+    # "abc" alone would be fine (3 + 1,024 = 1,027 <= 1,030), but "abcdefg" is 1,031 > 1,030: the
+    # call is refused up front, so "abc" is not sent and paid for first.
+    with pytest.raises(PromptTooLong) as raised:
+        await embeddings.embed(meter(limited(1_030)), provider.create, ["abc", "abcdefg"])
+    assert raised.value.status == 422
+    assert provider.requests == []
+    assert (await rows(db_session), await total(db_session)) == ([], None)
+
+
+async def test_the_reservation_is_the_sum_of_the_utf8_bytes_plus_the_margin(
+    sessions: async_sessionmaker[AsyncSession], db_session: AsyncSession
+) -> None:
+    # One micro-USD per token (1,000,000 per million), so the margin does not hide the bytes.
+    one = Price(Rates(1_000_000, 0, 0, 0, 0), checked="2026-11-06", source=SOURCE)
+    m = Meter(
+        model=MODEL,
+        price=one,
+        cap_micro_usd=10**9,
+        sessionmaker=lambda: sessions,
+        today=lambda: DAY,
+    )
+    await embeddings.embed(m, Provider().create, ["é", "ab"])
+    [row] = await rows(db_session)
+    # Reserved: "é" is 2 bytes, "ab" is 2: 2 + 2 + 1,024 margin = 1,028 tokens x 1 = 1,028.
+    # Settled: 2 texts x 7 = 14 tokens x 1 = 14.
+    assert (row.reserved_micro_usd, row.cost_micro_usd) == (1_028, 14)
+
+
 async def test_texts_are_batched_under_the_price_limit(
     meter: Callable[..., Meter], db_session: AsyncSession
 ) -> None:

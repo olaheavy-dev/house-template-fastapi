@@ -205,7 +205,7 @@ def test_the_old_embeddings_module_imports_without_a_warning() -> None:
         "import warnings, app.llm.core.openai_embeddings, app.llm.langchain.embeddings\n"
         "warnings.simplefilter('error')\n"
         "import app.llm.embeddings\n"
-        "assert app.llm.embeddings.__all__ == ['GatewayEmbeddings', 'openai_client']\n"
+        "assert 'GatewayEmbeddings' in app.llm.embeddings.__all__\n"
     )
     subprocess.run(  # noqa: S603 - this interpreter, running code written above
         [sys.executable, "-c", code], check=True

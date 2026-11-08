@@ -15,7 +15,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Awaitable, Callable, Iterator, Sequence
 
-from app.llm.core.bounds import INPUT_MARGIN_TOKENS
+from app.llm.core.bounds import INPUT_MARGIN_TOKENS, check_prompt_size
 from app.llm.core.budget import CallTags, Meter
 from app.llm.core.errors import ProviderError
 from app.llm.core.usage import Usage
@@ -57,13 +57,17 @@ async def embed(
     max_inputs: int = MAX_INPUTS,
     max_bytes: int = MAX_BYTES,
 ) -> list[list[float]]:
-    """The vectors of `texts`, in order. Raises BudgetExhausted or UserBudgetExhausted when a batch
-    is refused (the earlier ones are already sent and settled), PromptTooLong for a text past the
-    price's max_prompt_tokens, and whatever `create` raises (a ProviderError for a provider's
-    error)."""
+    """The vectors of `texts`, in order. Raises PromptTooLong, before anything is sent, for a text
+    past the price's max_prompt_tokens; BudgetExhausted or UserBudgetExhausted when a batch is
+    refused (the earlier ones are already sent and settled); and whatever `create` raises (a
+    ProviderError for a provider's error)."""
     limit = meter.price.max_prompt_tokens
     if limit:  # 0 is no limit, as in bounds.check_prompt_size
         max_bytes = min(max_bytes, limit - INPUT_MARGIN_TOKENS)
+        # Every text first: one past the limit refuses the call before any earlier batch is sent
+        # and paid for.
+        for text in texts:
+            check_prompt_size(meter.price, len(text.encode()) + INPUT_MARGIN_TOKENS)
     vectors: list[list[float]] = []
     for batch in batches(texts, max_inputs=max_inputs, max_bytes=max_bytes):
         vectors += await _embed(meter, create, batch, tags)

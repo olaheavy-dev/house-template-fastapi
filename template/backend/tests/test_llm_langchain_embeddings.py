@@ -209,3 +209,21 @@ async def test_the_settings_are_the_meters(embeddings: Callable[..., Any]) -> No
     marker = lambda: DAY  # noqa: E731
     e.today = marker
     assert e.meter.today is marker
+
+
+async def test_a_text_past_the_price_limit_refuses_the_call_before_any_batch_is_sent(
+    db_session: AsyncSession, embeddings: Callable[..., Any]
+) -> None:
+    limited = Price(
+        EMBED.rates,
+        checked="2026-11-06",
+        source="https://example.com/pricing",
+        max_prompt_tokens=1_030,
+    )
+    e, fake = embeddings(price=limited)
+    # "abc" fits (3 + 1,024 = 1,027 <= 1,030) but "abcdefg" is 1,031: nothing is sent or recorded.
+    with pytest.raises(PromptTooLong) as raised:
+        await e.aembed_documents(["abc", "abcdefg"])
+    assert raised.value.status == 422
+    assert fake.requests == []
+    assert (await rows(db_session), await total(db_session)) == ([], None)
