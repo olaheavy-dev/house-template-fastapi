@@ -77,6 +77,7 @@ def test_an_unknown_name_is_still_an_attribute_error() -> None:
         "app.llm.budget",
         "app.llm.metrics",
         "app.llm.embeddings",
+        "app.llm.prompts",
     ):
         with pytest.raises(AttributeError, match="has no attribute 'nope'"):
             _ = importlib.import_module(old).nope

@@ -48,9 +48,10 @@ from app.llm import prices
 from app.llm.core import registry
 from app.llm.core.openai_embeddings import openai_client
 from app.llm.core.prices import MICRO_USD
+from app.llm.core.prompts import Prompt
 from app.llm.langchain.callbacks import BudgetGuard
 from app.llm.langchain.embeddings import GatewayEmbeddings
-from app.llm.prompts import Prompt
+from app.llm.langchain.prompts import prompt_config
 from app.problems import Problem
 from app.settings import Settings
 
@@ -185,8 +186,8 @@ class Gateway:
                 messages, config=gateway.call_config(user, "answer", prompt)
             )
         """
-        merged: dict[str, Any] = {**(prompt.config() if prompt else {}), **config}
-        metadata = {**(prompt.config().get("metadata", {}) if prompt else {}), "feature": feature}
+        merged: dict[str, Any] = {**(prompt_config(prompt) if prompt else {}), **config}
+        metadata = {**(prompt.metadata() if prompt else {}), "feature": feature}
         if user is not None:
             metadata["user_ref"] = user.id
         merged["metadata"] = {**metadata, **config.get("metadata", {})}

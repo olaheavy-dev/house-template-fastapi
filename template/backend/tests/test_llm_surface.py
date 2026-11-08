@@ -38,9 +38,10 @@ from app.db import Base
 from app.llm import embeddings, prices, report
 from app.llm.core import metrics as core_metrics
 from app.llm.core.errors import DEFAULT_RETRY_AFTER, Outcome
+from app.llm.core.prompts import PROMPTS
 from app.llm.langchain.errors import OUTCOMES, outcome_for
+from app.llm.langchain.prompts import Prompt, load_prompt
 from app.llm.langchain.usage import from_langchain
-from app.llm.prompts import PROMPTS, Prompt, load_prompt
 
 pytestmark = pytest.mark.anyio
 
@@ -168,6 +169,8 @@ PUBLIC_NAMES: dict[str, tuple[str, ...]] = {
         "record_refusal",
         "record_call",
     ),
+    "app.llm.core.prompts": ("PROMPTS", "Prompt", "prompt_text"),
+    "app.llm.langchain.prompts": ("Prompt", "prompt_config", "load_prompt"),
     "app.llm.prompts": ("PROMPTS", "Prompt", "load_prompt"),
     "app.llm.embeddings": ("GatewayEmbeddings", "openai_client"),
     "app.llm.gateway": ("Gateway", "GatewayDep", "get_gateway", "key_setting", "KEY_SETTINGS"),
@@ -248,6 +251,10 @@ MOVED: dict[tuple[str, str], str] = {
         for name in ("BudgetExhausted", "UserBudgetExhausted", "reserve_for", "settle")
     },
     ("app.llm.embeddings", "INPUT_MARGIN_TOKENS"): "app.llm.core.bounds",
+    # #33 T5a
+    ("app.llm.prompts", "PROMPTS"): "app.llm.core.prompts",
+    ("app.llm.prompts", "Prompt"): "app.llm.langchain.prompts",
+    ("app.llm.prompts", "load_prompt"): "app.llm.langchain.prompts",
 }
 
 
