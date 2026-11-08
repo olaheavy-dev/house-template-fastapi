@@ -203,6 +203,7 @@ def test_container_images_turning_on_adds_the_publish_workflow_on_update(tmp_pat
 @pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
 def test_recopy_moves_a_v0_6_1_project_to_head(tmp_path, tagged_repo):
     """Recopy a v0.6.1 project to a tag of the throwaway repo, then update to the next tag."""
+    # Goes when the README stops supporting a recopy from v0.6.1.
     require_ref("v0.6.1")
     dst = tmp_path / "project"
     write_base(dst)
@@ -295,7 +296,8 @@ SHIMS = ("gateway", "checkpoints", "errors", "embeddings")
 @pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
 def test_update_from_before_the_core_split_merges_the_price_table_and_conflicts_on_edited_shims(
         tmp_path):
-    # Goes when 0.8.0 removes the shims (#33).
+    # Goes when 0.8.0 removes the shims (#33). This unreleased main commit stands in for a project
+    # made from main between 0.6.1 and 0.7.0, because a 0.6.1 project cannot `copier update` at all.
     require_ref(PRE_SPLIT)
     dst = tmp_path / "project"
     write_base(dst)

@@ -137,7 +137,7 @@ def require_ref(ref: str) -> None:
     found = subprocess.run(["git", "cat-file", "-e", f"{ref}^{{commit}}"], cwd=ROOT,
                            capture_output=True)
     if found.returncode != 0:
-        pytest.fail(f"BASELINE_REF {ref} is not in this clone. Fetch the full history "
+        pytest.fail(f"Commit {ref} is not in this clone. Fetch the full history "
                     "(`git fetch --unshallow`, or `fetch-depth: 0` in actions/checkout).")
 
 

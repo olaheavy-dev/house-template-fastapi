@@ -293,9 +293,14 @@ def test_no_rendered_python_file_has_an_unused_import(render, database, storage)
 # Template-owned files that exist only with the database (the project's own tests are not listed).
 DATABASE_OWNED = [
     "backend/src/app/llm/__init__.py",
+    "backend/src/app/llm/budget.py",
+    "backend/src/app/llm/checkpoints.py",
     "backend/src/app/llm/gateway.py",
     "backend/src/app/llm/embeddings.py",
     "backend/src/app/llm/errors.py",
+    "backend/src/app/llm/metrics.py",
+    "backend/src/app/llm/prompts.py",
+    "backend/src/app/llm/report.py",
     "backend/src/app/llm/core/*.py",
     "backend/src/app/llm/langchain/*.py",
     "backend/llm-contracts.toml",
@@ -341,8 +346,9 @@ def _is_owned(patterns: list[str], path: str) -> bool:
 
 def test_every_llm_module_but_prices_and_every_template_migration_is_template_owned(render):
     # The warning shims (errors, embeddings, ...) and the template's own migrations are the
-    # template's: an edit to one would conflict on `copier update` (#33). prices.py is the
-    # project's price table, so it stays off the list.
+    # template's (an edit to one would conflict on the next `copier update`); listing them makes
+    # the project's CI warn when a pull request edits one. prices.py is the project's price
+    # table, so it stays off the list.
     project = render(database=True, storage=True)
     patterns = _owned_patterns(project)
     llm = sorted(f for f in files(project)
@@ -350,7 +356,9 @@ def test_every_llm_module_but_prices_and_every_template_migration_is_template_ow
     assert len(llm) > 20  # the prefix found the modules
     versions = sorted(f"backend/migrations/versions/{v.name}"
                       for v in (TEMPLATE / "backend/migrations/versions").glob("*.py"))
-    assert len(versions) == 6  # five numbered migrations and the project-root one
+    # Five numbered migrations and the project-root one; `>=` still proves the glob found them.
+    # Update the owned list together with any new template migration.
+    assert len(versions) >= 6
     not_owned = [f for f in llm if f != "backend/src/app/llm/prices.py" and not _is_owned(patterns, f)]
     not_owned += [v for v in versions if v not in patterns]  # by exact path
     assert not_owned == []
