@@ -13,10 +13,13 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from langchain_core.exceptions import ModelRateLimitError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.llm.core.bounds import PromptTooLong
 from app.llm.core.budget import BudgetExhausted, LlmCall, LlmSpendDay
+from app.llm.core.errors import FailureKind, ProviderError
 from app.llm.core.prices import Price, Rates
 from app.llm.embeddings import GatewayEmbeddings
 
@@ -133,3 +136,76 @@ async def test_the_feature_and_user_are_recorded_with_the_call_and_its_latency_i
     [row] = await rows(db_session)
     assert (row.feature, row.user_ref, row.prompt, row.prompt_sha) == ("ingest", "u_1", None, None)
     assert row.latency_ms is not None
+
+
+# --- what moving onto the Meter changes on purpose -----------------------------------------------
+
+
+async def test_an_embedding_price_limit_applies_to_each_request(
+    embeddings: Callable[..., Any],
+) -> None:
+    limited = Price(
+        EMBED.rates,
+        checked="2026-11-06",
+        source="https://example.com/pricing",
+        max_prompt_tokens=1_030,
+    )
+    e, fake = embeddings(price=limited)
+    # "abcdefg": 7 bytes + 1,024 margin = 1,031 tokens, one over the limit of 1,030.
+    with pytest.raises(PromptTooLong) as raised:
+        await e.aembed_query("abcdefg")
+    assert raised.value.status == 422
+    assert fake.requests == []
+
+
+async def test_an_unknown_error_is_raised_as_it_was_and_not_chained_to_itself(
+    db_session: AsyncSession, embeddings: Callable[..., Any]
+) -> None:
+    error = RuntimeError("boom")
+    e, _ = embeddings()
+    e._client = SimpleNamespace(embeddings=FakeEmbeddingsApi(error))
+    with pytest.raises(RuntimeError) as raised:
+        await e.aembed_query("a")
+    assert raised.value is error
+    assert raised.value.__cause__ is None
+
+
+async def test_a_reply_without_usage_fails_the_call_and_keeps_its_reservation(
+    db_session: AsyncSession, embeddings: Callable[..., Any]
+) -> None:
+    async def create(**kwargs: Any) -> Any:
+        return SimpleNamespace(data=[], usage=None)
+
+    e, _ = embeddings(client=SimpleNamespace(embeddings=SimpleNamespace(create=create)))
+    with pytest.raises(AttributeError):
+        await e.aembed_query("a")
+    [row] = await rows(db_session)
+    # Reserved (1 + 1,024) = 1,025 tokens x 0.02 = 20.5 -> 21, and kept: an unreadable reply may
+    # have been billed.
+    assert (row.status, row.reserved_micro_usd, row.cost_micro_usd) == ("failed", 21, 21)
+
+
+async def test_a_provider_error_from_the_core_becomes_the_langchain_error_with_it_as_the_cause(
+    embeddings: Callable[..., Any],
+) -> None:
+    failure = ProviderError(FailureKind.RATE_LIMITED, source="X")
+
+    class Failing(GatewayEmbeddings):
+        async def _create(self, batch: list[str]) -> Any:
+            raise failure
+
+    e, _ = embeddings(Failing)
+    with pytest.raises(ModelRateLimitError) as raised:
+        await e.aembed_query("a")
+    assert str(raised.value) == "OpenAI embeddings: X"
+    assert raised.value.__cause__ is failure
+
+
+async def test_the_settings_are_the_meters(embeddings: Callable[..., Any]) -> None:
+    e, _ = embeddings()
+    assert (e.model, e.price, e.cap, e.user_cap) == (MODEL, EMBED, 10**9, None)
+    e.cap, e.user_cap, e.model = 5, 3, "openai:other"
+    assert (e.meter.cap, e.meter.user_cap, e.meter.model) == (5, 3, "openai:other")
+    marker = lambda: DAY  # noqa: E731
+    e.today = marker
+    assert e.meter.today is marker

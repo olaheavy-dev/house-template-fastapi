@@ -34,9 +34,10 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 from app.db import Base
-from app.llm import embeddings, prices, report
+from app.llm import prices, report
 from app.llm.core import metrics as core_metrics
 from app.llm.core.errors import DEFAULT_RETRY_AFTER, Outcome
+from app.llm.embeddings import GatewayEmbeddings
 from app.llm.langchain.errors import OUTCOMES, outcome_for
 from app.llm.langchain.usage import from_langchain
 from app.llm.prompts import PROMPTS, Prompt, load_prompt
@@ -253,6 +254,21 @@ def moved_names(old: str) -> SimpleNamespace:
 # Aliases (#33 T3): the old app.llm.budget names, from their new modules, so the checks below read
 # as before. Only these lines changed.
 budget = moved_names("app.llm.budget")
+# (#33 T4) What app.llm.embeddings used to hold: the class, and the budget names it imported, from
+# where they are now.
+embeddings = SimpleNamespace(
+    GatewayEmbeddings=GatewayEmbeddings,
+    **{
+        name: getattr(budget, name)
+        for name in (
+            "BudgetExhausted",
+            "UserBudgetExhausted",
+            "reserve_for",
+            "settle",
+            "INPUT_MARGIN_TOKENS",
+        )
+    },
+)
 
 
 @pytest.mark.parametrize("module", sorted(PUBLIC_NAMES))

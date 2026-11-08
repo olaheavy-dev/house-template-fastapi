@@ -129,14 +129,10 @@ source_modules = ["app"]
 # `langchain` too: init_chat_model would build a model that skips the budget. langchain_core
 # (messages, prompts, runnables) is fine anywhere.
 forbidden_modules = ["openai", "anthropic", "langchain", "langchain_openai", "langchain_anthropic"]
-# The embeddings modules call OpenAI's SDK themselves: LangChain's embeddings drop the usage the
-# budget settles from. (app.llm.embeddings goes in the next step, when its call moves to the core.)
-ignore_imports = [
-    "app.llm.** -> langchain",
-    "app.llm.embeddings -> openai",
-    "app.llm.core.openai_embeddings -> openai",
-]
+# OpenAI's embeddings call imports its SDK itself (app/llm/core/openai_embeddings.py): LangChain's
+# embeddings drop the usage the budget settles from.
+ignore_imports = ["app.llm.** -> langchain", "app.llm.core.openai_embeddings -> openai"]
 # The gateway is optional (#29): without the database it is not there, and the ignores match
-# nothing. "none" also hides a stale ignore in a project with the database (if app.llm.embeddings
+# nothing. "none" also hides a stale ignore in a project with the database (if app.llm.core.openai_embeddings
 # is renamed, say): update the ignores whenever the gateway's modules move.
 unmatched_ignore_imports_alerting = "none"
