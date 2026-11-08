@@ -40,7 +40,8 @@ class Price:
     long_prompt_tokens: int | None = None
     long_rates: Rates | None = None
     # Longest prompt these rates cover, when longer ones cost more and aren't priced here: the
-    # budget refuses them instead of under-recording their cost.
+    # budget refuses them instead of under-recording their cost. For an embedding price it bounds
+    # each request: texts are batched under it.
     max_prompt_tokens: int | None = None
 
     def __post_init__(self) -> None:
