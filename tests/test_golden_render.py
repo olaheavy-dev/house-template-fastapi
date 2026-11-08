@@ -48,12 +48,12 @@ def require_ref(ref: str) -> None:
                            capture_output=True)
     if found.returncode != 0:
         pytest.fail(f"Commit {ref} is not in this clone. Fetch the full history "
-                    "(`git fetch --unshallow`, or `fetch-depth: 0` in actions/checkout).")
+                    "(`git fetch --unshallow --tags`, or `fetch-depth: 0` in actions/checkout).")
 
 
 def render_at(dst: Path, vcs_ref: str) -> Path:
     """Render with defaults. vcs_ref="HEAD" uses the working tree, uncommitted changes included
-    (Copier copies a dirty local template as it is); a SHA renders that commit."""
+    (Copier copies a dirty local template as it is); a tag or SHA renders that commit."""
     dst.mkdir(parents=True)
     (dst / ".copier-answers.base.yml").write_text(yaml.safe_dump(BASE_ANSWERS))
     copier.run_copy(str(ROOT), dst, defaults=True, unsafe=True, quiet=True, vcs_ref=vcs_ref)
@@ -195,8 +195,9 @@ def test_updating_a_baseline_project_with_storage_off_deletes_only_the_storage_f
     tmp_path
 ):
     # A baseline project turns `storage` off. The `storage is defined` guard in copier.yml (#29) is
-    # what let a project from before the question existed (v0.6.1 and earlier, which now recopy)
-    # update; v0.7.0 records the answer.
+    # for projects made from main after #53 and before this question (#54); v0.6.1 and earlier
+    # recopy instead. That range is tested with PRE_OPTIONS in test_update.py; v0.7.0 records the
+    # answer.
     dst = committed_baseline_project(tmp_path / "project")
     assert yaml.safe_load((dst / ANSWERS_FILE).read_text())["storage"] is True
     before = tracked(dst)
