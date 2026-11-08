@@ -14,11 +14,11 @@ At the step limit: tools stop being offered, the model writes one final answer, 
 - **Exactly N model calls in total, the last one being the final answer** (not N+1), so the cap is predictable and the budget reservation can be worked out in advance.
 - **The count lives in our own middleware or callback in the neutral core**, not in each framework's own limit, so both frameworks count the same.
 
-`step_limit_reached` is a new log event (today's is `agent_step_limit`). The #33 plan promised unchanged log names, so this is a deliberate change for 0.8.0 and goes in its migration notes. A second 0.8.0 migration-note item, to be added on [#34](https://github.com/olaheavy-dev/house-template-fastapi/issues/34): a project that set `AGENT_MAX_STEPS=25` itself would get 25 model calls after the unit change, roughly doubling its worst case, and should review the value.
+`step_limit_reached` is a new log event (today's is `agent_step_limit`). The #33 plan promised unchanged log names, so this is a deliberate change for 0.8.0 and goes in its migration notes.
 
 Verified in the spike ([#32](https://github.com/olaheavy-dev/house-template-fastapi/issues/32), item 8): a `wrap_model_call` middleware that calls `handler(request.override(tools=[]))` on the last allowed call gives a real model answer. LangChain's built-in `ModelCallLimitMiddleware(exit_behavior="end")` returns a fixed message instead, so it is not used. `recursion_limit` stays as a backstop at 2N+1 or more. The docs do not name this as the step-limit recipe; it is built from documented parts.
 
-Still to verify (not an open decision): how MAF's `max_iterations` (default 40 in 1.24.0, per spike [#32](https://github.com/olaheavy-dev/house-template-fastapi/issues/32) items 3 and 8) maps to model calls. It is set explicitly as a backstop once the mapping is checked.
+MAF's `max_iterations` is set explicitly as a backstop, never left at its default (40 in agent-framework 1.24.0, spike [#32](https://github.com/olaheavy-dev/house-template-fastapi/issues/32) item 3; item 8 gives the advice to set it). How one iteration maps to model calls is unverified and is checked in [#35](https://github.com/olaheavy-dev/house-template-fastapi/issues/35) sub-task 5b.
 
 ## Where the work stands
 
@@ -26,6 +26,7 @@ Progress goes stale quickly, so it is not recorded here. Follow it on [#34](http
 
 ## Consequences
 
+- Projects that set `AGENT_MAX_STEPS` themselves keep the number but not its meaning (25 would allow 25 model calls instead of 13); covered in the 0.8.0 migration notes ([#34](https://github.com/olaheavy-dev/house-template-fastapi/issues/34)).
 - Breaking for projects that relied on the 422; goes in the 0.8.0 migration notes.
 - One shared test, run against both frameworks, with the expected call count worked out by hand.
 
