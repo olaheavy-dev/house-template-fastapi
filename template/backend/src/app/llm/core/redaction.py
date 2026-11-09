@@ -28,7 +28,7 @@ Redactor on the outgoing messages before the budget reservation (app/llm/langcha
 from __future__ import annotations
 
 import re
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 from collections import Counter
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -59,11 +59,37 @@ __all__ = [
 
 log = structlog.get_logger()
 
-# [KIND_n]: capital letters, digits and underscores, ending in _digits.
-_PLACEHOLDER = re.compile(r"\[[A-Z][A-Z0-9_]*_\d+\]")
+# A placeholder is [KIND_n]: capital letters, digits and underscores, ending in _digits. KIND is
+# validated against _KIND wherever it comes in, so what we write is always matched on the way back.
+_KIND = re.compile(r"[A-Z][A-Z0-9_]{0,48}")
+# What is counted as placeholder-shaped in an answer: ours, and the ways a model mangles one (any
+# case, a space or hyphen for the underscore, a space inside the brackets). A shape that is not in
+# the mapping is not restored and is counted. Bounded, so it runs in linear time.
+_PLACEHOLDER = re.compile(r"\[ ?[A-Za-z][A-Za-z0-9_]{0,48}[ _-]\d{1,9} ?\]")
+# Every prefix of _PLACEHOLDER (and a few more), to hold back the start of one in a stream.
+_PLACEHOLDER_PREFIX = re.compile(r" ?(?:[A-Za-z][A-Za-z0-9_]{0,48}(?:[ _-]\d{0,9} ?)?)?")
+# The longest text _PLACEHOLDER can match is 64 characters.
+_HOLD_MAX = 70
+# A placeholder already written in the input, in exactly our form.
 _LITERAL = re.compile(r"\[([A-Z][A-Z0-9_]*)_(\d+)\]")
-# What a placeholder is made of, for holding back the start of one in a stream.
-_PLACEHOLDER_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
+
+
+def _check_kind(kind: object) -> str:
+    if not isinstance(kind, str) or _KIND.fullmatch(kind) is None:
+        raise ValueError(
+            "a kind must be capital letters, digits and underscores, starting with a letter"
+        )
+    return kind
+
+
+def _check_strings(values: object, what: str) -> list[str]:
+    """`values` as a list of str: a single str is refused, not read one character at a time."""
+    if isinstance(values, str) or not isinstance(values, Iterable):
+        raise TypeError(f"{what} must be a list of str, not {type(values).__name__}")
+    items = list(values)
+    if not all(isinstance(item, str) for item in items):
+        raise TypeError(f"{what} must hold only str")
+    return items
 
 
 class RedactionFailed(Problem):
@@ -94,8 +120,18 @@ class Detector(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class Scope:
+    """What the app tells us for one request. `known` maps a kind to exact values to remove; `allow`
+    lists values that must stay. Both are checked when the scope is made: a kind must be capital
+    letters, digits and underscores, and a value list must be a list of str (not one str)."""
+
     known: Mapping[str, Sequence[str]] = field(default_factory=dict)
     allow: Sequence[str] = ()
+
+    def __post_init__(self) -> None:
+        for kind, values in self.known.items():
+            _check_kind(kind)
+            _check_strings(values, f"known values for {kind}")
+        _check_strings(self.allow, "allow")
 
 
 _EMPTY = Scope()
@@ -111,7 +147,11 @@ async def redaction_scope(
     *, known: Mapping[str, Sequence[str]] | None = None, allow: Sequence[str] = ()
 ) -> AsyncIterator[Scope]:
     """Sets what the app knows for the calls made inside the block (not for other requests)."""
-    scope = Scope(known=dict(known or {}), allow=list(allow))
+    copied = {
+        kind: _check_strings(values, f"known values for {kind}")
+        for kind, values in (known or {}).items()
+    }
+    scope = Scope(known=copied, allow=_check_strings(allow, "allow"))
     token = _scope.set(scope)
     try:
         yield scope
@@ -223,6 +263,12 @@ def _union(spans: list[tuple[int, int]]) -> tuple[list[int], list[int]]:
     return starts, ends
 
 
+def _contains(starts: list[int], ends: list[int], start: int, end: int) -> bool:
+    """True when one merged span covers all of start..end."""
+    at = bisect_right(starts, start) - 1
+    return at >= 0 and ends[at] >= end
+
+
 def _touches(starts: list[int], ends: list[int], start: int, end: int) -> bool:
     at = bisect_left(starts, start)
     return (at > 0 and ends[at - 1] > start) or (at < len(starts) and starts[at] < end)
@@ -231,28 +277,40 @@ def _touches(starts: list[int], ends: list[int], start: int, end: int) -> bool:
 @dataclass(frozen=True, slots=True)
 class _Found:
     span: Span
-    known: bool  # a value the app named (wins over a detector)
-    original: str  # what to put back
-    key: str  # the same key, the same placeholder
+    known: bool  # a value the app named
+    original: str  # for a known value: what to put back, as the app gave it
+    key: str  # for a known value: the same key, the same placeholder
 
 
 class Redactor:
+    """Replaces personal data with placeholders.
+
+    Spans that overlap are replaced as one: the union of all of them, so a known value that covers
+    only part of a detected number never leaves the rest of it behind. The union takes the kind of
+    its longest member (a known value on a tie), and when one known value covers all of it, that
+    value's own placeholder and form. An allowed value only keeps a detected span that it contains
+    whole; it never splits one. A known value beats an allowed one."""
+
     def __init__(self, detectors: Sequence[Detector]) -> None:
         self._detectors = tuple(detectors)
+        for detector in self._detectors:
+            _check_kind(detector.kind)
 
     def redact(self, texts: Sequence[str], scope: Scope | None = None) -> Redacted:
         """Replaces the values in every text. The scope defaults to the current one. Raises
-        RedactionFailed on any error, so the caller sends nothing."""
+        TypeError for a single str (pass a list), and RedactionFailed on any error while
+        redacting, so the caller sends nothing."""
+        items = _check_strings(texts, "texts")
         failure: str | None = None
         try:
-            return self._redact(texts, scope if scope is not None else current_scope())
+            return self._redact(items, scope if scope is not None else current_scope())
         except Exception as exc:  # fail closed: a bug here must not let the text through
             failure = type(exc).__name__
         # Outside the except block, so the error (which may hold the text) is not chained.
         log.error("llm_redaction_failed", error_type=failure)
         raise RedactionFailed
 
-    def _redact(self, texts: Sequence[str], scope: Scope) -> Redacted:
+    def _redact(self, texts: list[str], scope: Scope) -> Redacted:
         allowed = [p for value in scope.allow if (p := _value_pattern(value)) is not None]
         named = [
             (kind, value, pattern)
@@ -266,6 +324,7 @@ class Redactor:
         mapping: dict[str, str] = {}
         counts: Counter[str] = Counter()
         conflicts: set[str] = set()
+        checked_kinds: set[str] = set()
         out: list[str] = []
 
         def placeholder(kind: str, key: str, original: str) -> str:
@@ -290,52 +349,65 @@ class Redactor:
                 for kind, value, pattern in named
                 for m in pattern.finditer(text)
             ]
+            for item in found:  # a known value beats the allow-list
+                if _touches(allow_starts, allow_ends, item.span.start, item.span.end):
+                    conflicts.add(item.span.kind)
             for detector in self._detectors:
                 for span in detector.find(text):
-                    found.append(
-                        _Found(
-                            span, False, text[span.start : span.end], text[span.start : span.end]
-                        )
-                    )
-            # Known values first, then longer, then earlier; keep what does not overlap.
-            found.sort(key=lambda f: (not f.known, f.span.start - f.span.end, f.span.start))
-            kept: list[_Found] = []
-            starts: list[int] = []  # of `kept`, which never overlap, so only neighbours can clash
-            ends: list[int] = []
-            for item in found:
-                span = item.span
-                at = bisect_left(starts, span.start)
-                if (at > 0 and ends[at - 1] > span.start) or (
-                    at < len(starts) and starts[at] < span.end
-                ):
-                    continue
-                overlaps_allowed = _touches(allow_starts, allow_ends, span.start, span.end)
-                if overlaps_allowed:
-                    if not item.known:
-                        continue  # the allow-list beats a detector
-                    conflicts.add(span.kind)  # a known value beats the allow-list
-                kept.insert(at, item)
-                starts.insert(at, span.start)
-                ends.insert(at, span.end)
+                    if (
+                        not isinstance(span, Span)
+                        or not isinstance(span.start, int)
+                        or not isinstance(span.end, int)
+                        or not 0 <= span.start < span.end <= len(text)
+                    ):
+                        raise ValueError("a detector returned a span outside the text")
+                    if span.kind not in checked_kinds:
+                        checked_kinds.add(_check_kind(span.kind))
+                    if _contains(allow_starts, allow_ends, span.start, span.end):
+                        continue  # the allow-list keeps a value it contains whole
+                    found.append(_Found(span, False, "", ""))
+            found.sort(key=lambda f: (f.span.start, -f.span.end))
             pieces: list[str] = []
             position = 0
-            for item in kept:
-                span = item.span
-                pieces.append(text[position : span.start])
-                pieces.append(placeholder(span.kind, item.key, item.original))
-                counts[span.kind] += 1
-                position = span.end
+            index = 0
+            while index < len(found):
+                group = [found[index]]
+                end = found[index].span.end
+                index += 1
+                while index < len(found) and found[index].span.start < end:
+                    group.append(found[index])
+                    end = max(end, found[index].span.end)
+                    index += 1
+                start = group[0].span.start
+                kind, key, original = self._merged(text, start, end, group)
+                pieces.append(text[position:start])
+                pieces.append(placeholder(kind, key, original))
+                counts[kind] += 1
+                position = end
             pieces.append(text[position:])
             out.append("".join(pieces))
         for kind in sorted(conflicts):
             log.warning("redaction_allow_conflict", kind=kind)
         return Redacted(tuple(out), mapping, dict(counts))
 
+    @staticmethod
+    def _merged(text: str, start: int, end: int, group: list[_Found]) -> tuple[str, str, str]:
+        """(kind, key, original) for the union of the overlapping spans in `group`."""
+        for item in group:
+            if item.known and item.span.start == start and item.span.end == end:
+                return item.span.kind, item.key, item.original  # one known value covers it all
+        longest = max(group, key=lambda f: (f.span.end - f.span.start, f.known))
+        covered = text[start:end]
+        return longest.span.kind, covered, covered
+
 
 def restore(text: str, mapping: Mapping[str, str]) -> tuple[str, int]:
     """Puts the originals back, in one pass. Returns the text and how many placeholder-shaped
-    strings were not in the mapping (invented or mangled by the model, or literal in the input);
-    those stay as they are."""
+    strings were not in the mapping (invented by the model, or mangled: another case, a space or
+    hyphen for the underscore, spaces inside the brackets, or literal in the input); those stay as
+    they are. Restore parsed values, not raw JSON: an original holding a quote or a backslash makes
+    invalid JSON when put into a tool call's argument string, so an adapter restores each parsed
+    argument value instead."""
     unrestored = 0
 
     def put_back(match: re.Match[str]) -> str:
@@ -350,14 +422,13 @@ def restore(text: str, mapping: Mapping[str, str]) -> tuple[str, int]:
 
 
 class StreamRestorer:
-    """Restores placeholders in streamed chunks. Text from an unclosed `[` is held back while it
-    could still become a placeholder (only placeholder characters follow, and it is no longer than
-    the longest placeholder), and released at the first character that rules that out or at
-    flush()."""
+    """Restores placeholders in streamed chunks, with the same result and the same `unrestored`
+    count as restore() on the joined text, whatever the chunking. Text from an unclosed `[` is held
+    back while it could still become a placeholder-shaped string, and released at the first
+    character that rules that out, when it is too long to be one, or at flush()."""
 
     def __init__(self, mapping: Mapping[str, str]) -> None:
         self._mapping = mapping
-        self._longest = max((len(name) for name in mapping), default=0)
         self._held = ""
         self.unrestored = 0
 
@@ -369,11 +440,13 @@ class StreamRestorer:
     def feed(self, delta: str) -> str:
         buffer = self._held + delta
         start = buffer.rfind("[")
-        if start != -1:
-            tail = buffer[start + 1 :]
-            if len(buffer) - start <= self._longest and all(c in _PLACEHOLDER_CHARS for c in tail):
-                self._held = buffer[start:]
-                return self._out(buffer[:start])
+        if (
+            start != -1
+            and len(buffer) - start <= _HOLD_MAX
+            and _PLACEHOLDER_PREFIX.fullmatch(buffer, start + 1) is not None
+        ):
+            self._held = buffer[start:]
+            return self._out(buffer[:start])
         self._held = ""
         return self._out(buffer)
 

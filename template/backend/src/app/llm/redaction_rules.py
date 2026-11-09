@@ -29,6 +29,11 @@ def _uk_phone(matched: str) -> bool:
     return len(digits) == 11 and digits[1] in "1237"
 
 
+def _card_valid(matched: str) -> bool:
+    digits = [c for c in matched if c.isdigit()]
+    return len(set(digits)) > 1 and luhn_valid(matched)
+
+
 _MONTH = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]{0,6}\.?"
 
 DETECTORS: tuple[Detector, ...] = (
@@ -40,34 +45,44 @@ DETECTORS: tuple[Detector, ...] = (
     # may be spaced, hyphenated or bracketed. The first digit after the prefix is checked below.
     RegexDetector(
         "PHONE",
-        r"(?<![\w+])(?:\+44[ -]?(?:\(0\)[ -]?)?|\(?0)\d(?:\)?[ -]?\d){9}(?!\d)",
+        r"(?<![\w+])(?<!\d[ -])(?:\+44[ -]?(?:\(0\)[ -]?)?|\(?0)\d(?:\)?[ -]?\d){9}(?![ -]?\d)",
         check=_uk_phone,
     ),
-    # Two letters, six digits, a final letter A to D. The prefix letters are not validated, so
-    # this errs towards removing. A number written without its last letter is not found.
+    # Two letters, six digits, a final letter A to D: upper case, or lower case straight after the
+    # digits (a lone "a" after a space is a word, as in "LN123456 a freehold title"). The prefix
+    # letters are not validated, so this errs towards removing. A number written without its last
+    # letter is not found.
     RegexDetector(
         "NINO",
-        r"(?<![A-Za-z0-9])[A-Za-z]{2}(?:[ \u00a0]?\d{2}){3}[ \u00a0]?[A-Da-d](?![A-Za-z0-9])",
+        r"(?<![A-Za-z0-9])[A-Za-z]{2}(?:[ \u00a0]?\d{2}){3}"
+        r"(?:[ \u00a0]?[A-D]|(?<=\d)[a-d])(?![A-Za-z0-9])",
     ),
     # GB IBAN layout; the mod-97 checksum is not required.
     RegexDetector(
         "IBAN",
         r"(?<![A-Za-z0-9])(?i:GB)\d{2}[ ]?[A-Za-z]{4}(?:[ ]?\d{4}){3}[ ]?\d{2}(?![A-Za-z0-9])",
     ),
+    # The digit lookarounds keep a match from starting or ending inside a longer run of digits that
+    # has spaces or hyphens in it (an energy certificate reference, a grouped amount).
     RegexDetector(
         "SORT_CODE",
-        r"(?<!\d)\d{2}-\d{2}-\d{2}(?!\d)",
+        r"(?<!\d)(?<!\d[ -])\d{2}[- ]?\d{2}[- ]?\d{2}(?![ -]?\d)",
         before=context(r"sort[ -]?code"),
     ),
     RegexDetector(
         "ACCOUNT",
-        r"(?<!\d)\d{8}(?!\d)",
+        r"(?<!\d)(?<!\d[ -])\d{4}[ ]?\d{4}(?![ -]?\d)",
         before=context(r"\bacc(?:ount)?\b"),
     ),
+    # 13 to 19 digits in one run, or the usual groupings (4-4-4-4, optionally a last group of up to
+    # three digits, and Amex 4-6-5), passing Luhn. Other groupings (3-3-3-3-3, 4-4-4-4-4) are not
+    # cards. A number of one repeated digit is refused: 19 zeros pass Luhn.
     RegexDetector(
         "CARD",
-        r"(?<!\d)\d(?:[ -]?\d){12,18}(?!\d)",
-        check=luhn_valid,
+        r"(?<!\d)(?<!\d[ -])"
+        r"(?:\d{13,19}|\d{4}(?:[ -]\d{4}){3}(?:[ -]\d{1,3})?|\d{4}[ -]\d{6}[ -]\d{5})"
+        r"(?![ -]?\d)",
+        check=_card_valid,
     ),
     RegexDetector(
         "NHS",

@@ -16,6 +16,7 @@ The tests use the default detectors in app/llm/redaction_rules.py, the project's
 
 from __future__ import annotations
 
+import random
 import time
 from collections.abc import Iterable
 
@@ -114,6 +115,24 @@ def test_a_sort_code_and_account_number_need_their_words_nearby() -> None:
     assert one("acc no 87654321").texts == ("acc no [ACCOUNT_1]",)
 
 
+def test_sort_codes_and_account_numbers_may_be_spaced() -> None:
+    assert one("Sort code 12 34 56").texts == ("Sort code [SORT_CODE_1]",)
+    assert one("sort code 123456").texts == ("sort code [SORT_CODE_1]",)
+    assert one("Sort code 12 34 56, account 1234 5678.").texts == (
+        "Sort code [SORT_CODE_1], account [ACCOUNT_1].",
+    )
+    # Not at the edge of a longer run of digits, even with spaces in it.
+    for text in ("account 1234 5678 9012", "sort code 12 34 56 78"):
+        assert one(text).texts == (text,), text
+
+
+def test_a_national_insurance_number_may_end_in_a_lower_case_letter_only_without_a_space() -> None:
+    assert one("ab123456c").texts == ("[NINO_1]",)
+    assert one("ab 12 34 56 C").texts == ("[NINO_1]",)
+    text = "Title number LN123456 a freehold title"
+    assert one(text).texts == (text,)  # also in the must-not-change test above
+
+
 def test_a_card_number_needs_a_right_luhn_check_digit() -> None:
     assert one("Card 4111 1111 1111 1111 expires").texts == ("Card [CARD_1] expires",)
     assert one("Card 4111-1111-1111-1111 expires").texts == ("Card [CARD_1] expires",)
@@ -126,6 +145,15 @@ def test_an_nhs_number_needs_its_word_and_a_right_check_digit() -> None:
     assert one("My nhs no. 9434765919").texts == ("My nhs no. [NHS_1]",)
     for text in ("Ref 943 476 5919", "NHS number 943 476 5918"):  # no word; wrong check digit
         assert one(text).texts == (text,)
+
+
+def test_an_nhs_number_whose_check_digit_would_be_ten_is_never_valid() -> None:
+    # 000 000 0060: the first nine digits are 0,0,0,0,0,0,0,0,6, weighted 10,9,...,2, so the sum is
+    # 6 * 2 = 12. 12 = 1 * 11 + 1, so the check is 11 - 1 = 10, and a check of 10 means the number
+    # is invalid (no NHS number is issued with it). The last digit is 0, so a check that reads 10 as
+    # 0 would wrongly accept it.
+    text = "NHS number 000 000 0060"
+    assert one(text).texts == (text,)
 
 
 def test_a_date_of_birth_needs_its_words_nearby() -> None:
@@ -148,6 +176,37 @@ def test_ordinary_property_text_is_left_exactly_as_it_was() -> None:
     assert result.texts == (text,)
     assert result.mapping == {}
     assert result.counts == {}
+
+
+def test_reference_numbers_and_words_that_look_like_identifiers_are_left_alone() -> None:
+    # An energy certificate reference is five groups of four digits; its first sixteen digits must
+    # not be tested as a card, nor any later group as a phone or account number.
+    for text in (
+        "Energy certificate 1648-7059-6402-3592-5634 valid",
+        "EPC RRN 0120-2834-7690-2399-4415 dated 01/03/2027",
+        "Rent £968 157 655 500 575 in total",  # a grouped amount, fifteen digits
+        "Total 1 234 567 890 123 456 over the term",
+        "Order number 0000000000000000000",  # one repeated digit passes Luhn, but is not a card
+        "Title number LN123456 a freehold title",  # a lone "a" is a word, not a NINO suffix
+        "Unit AB 12 34 56 a and b",
+        "Call 020 7946 0321 5 times",  # more digits after a phone: not found, a known miss
+    ):
+        assert one(text).texts == (text,), text
+
+
+def test_no_generated_reference_or_grouped_amount_is_changed() -> None:
+    rng = random.Random(78)  # noqa: S311
+
+    def digits(count: int) -> str:
+        return "".join(rng.choice("0123456789") for _ in range(count))
+
+    for _ in range(3000):
+        epc = "-".join(digits(4) for _ in range(5))
+        amount = f"£{rng.choice('123456789')}{digits(rng.randint(0, 2))}" + "".join(
+            f" {digits(3)}" for _ in range(rng.randint(1, 6))
+        )
+        for text in (f"Energy certificate {epc} valid", f"Rent {amount} in total"):
+            assert one(text).texts == (text,), text
 
 
 # --- 11 to 13: what the app says (known and allow) -----------------------------------------
@@ -188,6 +247,71 @@ async def test_a_known_value_beats_the_allow_list_and_the_conflict_is_logged() -
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("text", "known", "expected", "original"),
+    [
+        # A known value that covers only part of a detected value must not leave the rest behind:
+        # the whole detected value is replaced (the union), and it keeps the detector's kind
+        # because it is the longer member.
+        (
+            "Email priya.shah.1987@example.com",
+            {"NAME": ["Priya"]},
+            "Email [EMAIL_1]",
+            "priya.shah.1987@example.com",
+        ),
+        (
+            "Email priya.shah@example.com",
+            {"NAME": ["Priya", "Shah"]},
+            "Email [EMAIL_1]",
+            "priya.shah@example.com",
+        ),
+        ("Ref AB 12 34 56 C", {"ADDRESS": ["12 34"]}, "Ref [NINO_1]", "AB 12 34 56 C"),
+        # A known value that covers the whole detected value, and more, keeps its own kind.
+        (
+            "Flat 3, 07700 900123 is mine",
+            {"ADDRESS": ["Flat 3, 07700 900123"]},
+            "[ADDRESS_1] is mine",
+            "Flat 3, 07700 900123",
+        ),
+        # The same extent: the known value wins the tie, and is restored as the app gave it.
+        (
+            "Mail PRIYA.SHAH@EXAMPLE.COM",
+            {"ACCOUNT_EMAIL": ["priya.shah@example.com"]},
+            "Mail [ACCOUNT_EMAIL_1]",
+            "priya.shah@example.com",
+        ),
+    ],
+)
+async def test_a_known_value_that_overlaps_a_detected_one_replaces_their_union(
+    text: str, known: dict[str, list[str]], expected: str, original: str
+) -> None:
+    async with redaction_scope(known=known):
+        result = one(text)
+    assert result.texts == (expected,)
+    assert list(result.mapping.values()) == [original]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("text", "allow", "expected"),
+    [
+        # An allowed value that covers only part of a detected value does not keep it.
+        ("Email priya@leeds.ac.uk", ["Leeds"], "Email [EMAIL_1]"),
+        ("Reach me at priya.example@gmail.com", ["Example"], "Reach me at [EMAIL_1]"),
+        ("Call 07700 900123", ["900123"], "Call [PHONE_1]"),
+        # One that contains the whole detected value keeps it.
+        ("Email priya@leeds.ac.uk", ["priya@leeds.ac.uk"], "Email priya@leeds.ac.uk"),
+        ("Call 07700 900123", ["Call 07700 900123"], "Call 07700 900123"),
+    ],
+)
+async def test_an_allowed_value_keeps_a_detected_one_only_if_it_contains_all_of_it(
+    text: str, allow: list[str], expected: str
+) -> None:
+    async with redaction_scope(allow=allow):
+        assert one(text).texts == (expected,)
+
+
+@pytest.mark.anyio
 async def test_the_scope_lasts_for_the_block_only() -> None:
     assert current_scope().known == {}
     async with redaction_scope(known={"NAME": ["Priya Shah"]}):
@@ -208,6 +332,16 @@ def test_restoring_puts_the_originals_back_and_counts_placeholders_it_does_not_k
 
 def test_restoring_is_one_pass_so_an_original_that_looks_like_a_placeholder_stays() -> None:
     assert restore("[NAME_1]", {"[NAME_1]": "[NAME_2]", "[NAME_2]": "x"}) == ("[NAME_2]", 0)
+
+
+def test_mangled_placeholders_are_counted_not_restored() -> None:
+    mapping = {"[EMAIL_1]": "a@example.com"}
+    text = "[EMAIL 1] [email_1] [EMAIL_1 ] [ EMAIL_1] [EMAIL-1] [EMAIL_2] [EMAIL_1]"
+    # Six placeholder-shaped strings are not in the mapping; the last is, and is restored.
+    assert restore(text, mapping) == (
+        "[EMAIL 1] [email_1] [EMAIL_1 ] [ EMAIL_1] [EMAIL-1] [EMAIL_2] a@example.com",
+        6,
+    )
 
 
 def feed_all(restorer: StreamRestorer, deltas: Iterable[str]) -> list[str]:
@@ -233,9 +367,12 @@ def test_a_stream_gives_back_held_text_when_it_ends() -> None:
     assert restorer.flush() == ""
 
 
-def test_a_stream_with_nothing_to_restore_holds_nothing_back() -> None:
+def test_a_stream_with_an_empty_mapping_still_holds_a_possible_placeholder_and_counts_it() -> None:
+    # The count must match restore() whatever the chunking, so the rule does not depend on the
+    # mapping: "[C" could still become a placeholder-shaped string, so it waits.
     restorer = StreamRestorer({})
-    assert restorer.feed("Band [C") == "Band [C"
+    assert restorer.feed("Band [C") == "Band "
+    assert restorer.flush() == "[C"
 
 
 def test_a_stream_counts_the_placeholders_it_could_not_restore() -> None:
@@ -243,6 +380,48 @@ def test_a_stream_counts_the_placeholders_it_could_not_restore() -> None:
     out = feed_all(restorer, ["[EMAIL_7] and [EM", "AIL_1]"])
     assert "".join(out) + restorer.flush() == "[EMAIL_7] and a@example.com"
     assert restorer.unrestored == 1
+
+
+def test_a_stream_gives_the_same_text_and_count_as_restore_for_any_chunking() -> None:
+    mapping = {"[EMAIL_1]": "a@example.com", "[PHONE_12]": "07700 900123", "[A_1]": "z"}
+    pieces = [
+        "[",
+        "]",
+        "E",
+        "M",
+        "A",
+        "I",
+        "L",
+        "_",
+        "1",
+        "2",
+        "x",
+        " ",
+        "-",
+        "[EMAIL_1]",
+        "e",
+        "[PHONE_12]",
+        "[A_1]",
+        "[EMAIL_7]",
+        "[[",
+        "_1]",
+        "[A_",
+        "PHONE_1",
+        "[LONGKIND_",
+        "[AVERYLONGKINDNAMEBEYONDTHELONGESTMAPPING_12]",
+        "[EMAIL 1]",
+        "\n",
+    ]
+    rng = random.Random(9)  # noqa: S311
+    for _ in range(6000):
+        text = "".join(rng.choice(pieces) for _ in range(rng.randint(0, 30)))
+        cuts = sorted(rng.sample(range(len(text) + 1), k=rng.randint(0, min(8, len(text) + 1))))
+        chunks = [text[a:b] for a, b in zip([0, *cuts], [*cuts, len(text)], strict=True)]
+        restorer = StreamRestorer(mapping)
+        streamed = "".join(restorer.feed(chunk) for chunk in chunks) + restorer.flush()
+        expected, unrestored = restore(text, mapping)
+        assert streamed == expected, (text, chunks)
+        assert restorer.unrestored == unrestored, (text, chunks)
 
 
 def test_a_placeholder_already_in_the_input_is_skipped_and_never_restored() -> None:
@@ -314,6 +493,90 @@ def test_the_failure_is_a_503_problem_with_no_value_in_it() -> None:
     assert "nothing was sent" in response.json()["detail"]
 
 
+# --- what a caller or a detector may hand in ----------------------------------------------
+
+
+class Fixed:
+    def __init__(self, kind: str, spans: list[object]) -> None:
+        self.kind = kind
+        self._spans = spans
+
+    def find(self, text: str) -> Iterable[Span]:
+        return self._spans  # type: ignore[return-value]
+
+
+@pytest.mark.parametrize("kind", ["name", "FULL-NAME", "e mail", "", "1NAME", "NAME]", "X" * 60])
+def test_a_kind_that_would_not_be_restored_is_refused(kind: str) -> None:
+    with pytest.raises(ValueError, match="kind"):
+        Redactor([Fixed(kind, [])])
+    with pytest.raises(ValueError, match="kind"):
+        Scope(known={kind: ["Priya"]})
+
+
+@pytest.mark.anyio
+async def test_a_scope_refuses_a_bad_kind_and_a_detector_span_with_one_fails_closed() -> None:
+    with pytest.raises(ValueError, match="kind"):
+        async with redaction_scope(known={"name": ["Priya"]}):
+            pass  # pragma: no cover
+    with capture_logs(), pytest.raises(RedactionFailed):
+        Redactor([Fixed("EMAIL", [Span(0, 3, "e mail")])]).redact(["hello world"])
+
+
+@pytest.mark.parametrize(
+    "span",
+    [
+        Span(-5, 3, "EMAIL"),
+        Span(3, 1, "EMAIL"),
+        Span(2, 99, "EMAIL"),
+        Span(2, 2, "EMAIL"),
+        (0, 3, "EMAIL"),
+        Span(0.5, 3, "EMAIL"),  # type: ignore[arg-type]
+    ],
+)
+def test_a_detector_span_outside_the_text_or_empty_fails_closed(span: object) -> None:
+    with capture_logs() as logs, pytest.raises(RedactionFailed):
+        Redactor([Fixed("EMAIL", [span])]).redact(["hello world"])
+    assert [entry["event"] for entry in logs] == ["llm_redaction_failed"]
+    assert "hello" not in str(logs)
+
+
+def test_a_single_string_where_a_list_is_expected_is_refused() -> None:
+    with pytest.raises(TypeError, match="texts"):
+        REDACTOR.redact("priya.shah@example.com")
+    with pytest.raises(TypeError, match="texts"):
+        REDACTOR.redact(["fine", 3])  # type: ignore[list-item]
+    with pytest.raises(TypeError, match="known values"):
+        Scope(known={"NAME": "Priya Shah"})
+    with pytest.raises(TypeError, match="allow"):
+        Scope(allow="7")
+
+
+@pytest.mark.anyio
+async def test_redaction_scope_refuses_a_single_string_too() -> None:
+    with pytest.raises(TypeError, match="known values"):
+        async with redaction_scope(known={"NAME": "Priya Shah"}):
+            pass  # pragma: no cover
+    with pytest.raises(TypeError, match="allow"):
+        async with redaction_scope(allow="7"):
+            pass  # pragma: no cover
+
+
+def test_nothing_to_redact_gives_nothing_back() -> None:
+    empty = REDACTOR.redact([])
+    assert (empty.texts, empty.mapping, empty.counts) == ((), {}, {})
+    blank = REDACTOR.redact([""])
+    assert (blank.texts, blank.mapping, blank.counts) == (("",), {}, {})
+
+
+def test_a_detected_value_has_its_own_placeholder_for_each_exact_spelling() -> None:
+    # The original is put back exactly, so a different case is a different value: A@X.COM comes
+    # back as A@X.COM, never as a@x.com. (Known values are the other way round: matched ignoring
+    # case, restored as the app gave them.)
+    result = one("a@example.com, A@EXAMPLE.COM, a@example.com")
+    assert result.texts == ("[EMAIL_1], [EMAIL_2], [EMAIL_1]",)
+    assert result.mapping == {"[EMAIL_1]": "a@example.com", "[EMAIL_2]": "A@EXAMPLE.COM"}
+
+
 # --- 27: linear time -----------------------------------------------------------------------
 
 
@@ -327,6 +590,18 @@ def test_the_default_patterns_run_in_linear_time(unit: str) -> None:
     started = time.perf_counter()
     one(text)
     assert time.perf_counter() - started < 2.0, unit
+
+
+def test_many_spans_of_two_lengths_run_in_linear_time() -> None:
+    # 11-character phones, then 12-character ones, comma separated (a digit after a space ends a
+    # match). Each later span is longer, which once made the overlap step insert at the front of
+    # a list for every span: about 12 s at 4 MiB.
+    size = 4 << 20
+    text = "07700900123, " * (size // 2 // 13) + "07700 900123, " * (size // 2 // 14)
+    started = time.perf_counter()
+    result = one(text)
+    assert time.perf_counter() - started < 4.0
+    assert result.counts == {"PHONE": size // 2 // 13 + size // 2 // 14}
 
 
 def test_known_values_run_in_linear_time_too() -> None:
