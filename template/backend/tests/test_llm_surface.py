@@ -6,7 +6,6 @@ and the prompt version hash. The framework-neutral split must keep every one of 
 from __future__ import annotations
 
 import importlib
-import warnings
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -35,11 +34,12 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 from app.db import Base
-from app.llm import embeddings, prices
+from app.llm import prices
+from app.llm.core import bounds, budget, report
 from app.llm.core import metrics as core_metrics
-from app.llm.core import report
 from app.llm.core.errors import DEFAULT_RETRY_AFTER, Outcome
 from app.llm.core.prompts import PROMPTS
+from app.llm.langchain.embeddings import GatewayEmbeddings
 from app.llm.langchain.errors import OUTCOMES, outcome_for
 from app.llm.langchain.prompts import Prompt, load_prompt
 from app.llm.langchain.usage import from_langchain
@@ -133,61 +133,11 @@ PUBLIC_NAMES: dict[str, tuple[str, ...]] = {
         "Price",
         "PRICES",
         "EMBEDDING_PRICES",
-        "cost",
-        "ceiling",
-        "token_details",
-    ),
-    "app.llm.errors": (
-        "Outcome",
-        "OUTCOMES",
-        "outcome_for",
-        "install_model_error_handlers",
-        "DEFAULT_RETRY_AFTER",
-    ),
-    "app.llm.budget": (
-        "LlmSpendDay",
-        "LlmSpendUserDay",
-        "LlmCall",
-        "BudgetExhausted",
-        "UserBudgetExhausted",
-        "PromptTooLong",
-        "UnboundedMedia",
-        "UnpricedRequest",
-        "BudgetGuard",
-        "reserve",
-        "reserve_for",
-        "settle",
-        "expire_stale",
-        "utc_today",
-        "input_bound",
-        "check_priced",
-        "INPUT_MARGIN_TOKENS",
-        "WARN_SHARE",
-        "IMAGE_TOKENS",
-    ),
-    "app.llm.metrics": (
-        "calls",
-        "tokens",
-        "cost",
-        "latency",
-        "labels",
-        "record_refusal",
-        "record_call",
     ),
     "app.llm.core.prompts": ("PROMPTS", "Prompt", "prompt_text"),
     "app.llm.langchain.prompts": ("Prompt", "prompt_config", "load_prompt"),
-    "app.llm.prompts": ("PROMPTS", "Prompt", "load_prompt"),
-    "app.llm.embeddings": ("GatewayEmbeddings", "openai_client"),
-    "app.llm.gateway": ("Gateway", "GatewayDep", "get_gateway", "key_setting", "KEY_SETTINGS"),
     "app.llm.langchain.gateway": ("Gateway", "GatewayDep", "get_gateway"),
     "app.llm": ("GatewayDep",),
-    "app.llm.checkpoints": (
-        "MIGRATIONS",
-        "TABLES",
-        "apply_migrations",
-        "migration_sql",
-        "open_checkpointer",
-    ),
     "app.llm.langchain.checkpoints": (
         "MIGRATIONS",
         "TABLES",
@@ -207,140 +157,36 @@ PUBLIC_NAMES: dict[str, tuple[str, ...]] = {
         "STALE_AFTER",
         "cli",
     ),
-    "app.llm.report": (
-        "GROUPS",
-        "SpendRow",
-        "spend",
-        "render",
-        "stale",
-        "collect",
-        "main",
-        "STALE_AFTER",
-    ),
 }
-
-
-# Names that moved to the framework-neutral core (#33 T1) or, for the errors, to the core and the
-# LangChain adapter (T2). Their old path still answers, with a DeprecationWarning, until 0.8.0:
-# test_llm_shims.py checks it gives the same object.
-MOVED: dict[tuple[str, str], str] = {
-    ("app.llm.prices", "cost"): "app.llm.core.prices",
-    ("app.llm.prices", "ceiling"): "app.llm.core.prices",
-    ("app.llm.prices", "token_details"): "app.llm.core.prices",
-    ("app.llm.gateway", "KEY_SETTINGS"): "app.llm.core.registry",
-    ("app.llm.gateway", "key_setting"): "app.llm.core.registry",
-    # #33 T2
-    ("app.llm.errors", "Outcome"): "app.llm.core.errors",
-    ("app.llm.errors", "DEFAULT_RETRY_AFTER"): "app.llm.core.errors",
-    ("app.llm.errors", "OUTCOMES"): "app.llm.langchain.errors",
-    ("app.llm.errors", "outcome_for"): "app.llm.langchain.errors",
-    ("app.llm.errors", "install_model_error_handlers"): "app.llm.langchain.errors",
-    # #33 T3
-    **{
-        ("app.llm.budget", name): "app.llm.core.budget"
-        for name in (
-            "LlmSpendDay",
-            "LlmSpendUserDay",
-            "LlmCall",
-            "BudgetExhausted",
-            "UserBudgetExhausted",
-            "reserve",
-            "reserve_for",
-            "settle",
-            "expire_stale",
-            "utc_today",
-            "WARN_SHARE",
-        )
-    },
-    **{
-        ("app.llm.budget", name): "app.llm.core.bounds"
-        for name in (
-            "PromptTooLong",
-            "UnboundedMedia",
-            "UnpricedRequest",
-            "check_priced",
-            "INPUT_MARGIN_TOKENS",
-            "IMAGE_TOKENS",
-        )
-    },
-    ("app.llm.budget", "BudgetGuard"): "app.llm.langchain.callbacks",
-    ("app.llm.budget", "input_bound"): "app.llm.langchain.callbacks",
-    **{
-        ("app.llm.metrics", name): "app.llm.core.metrics"
-        for name in PUBLIC_NAMES["app.llm.metrics"]
-    },
-    # #33 T4
-    ("app.llm.embeddings", "GatewayEmbeddings"): "app.llm.langchain.embeddings",
-    ("app.llm.embeddings", "openai_client"): "app.llm.core.openai_embeddings",
-    **{
-        ("app.llm.embeddings", name): "app.llm.core.budget"
-        for name in ("BudgetExhausted", "UserBudgetExhausted", "reserve_for", "settle")
-    },
-    ("app.llm.embeddings", "INPUT_MARGIN_TOKENS"): "app.llm.core.bounds",
-    # #33 T5a
-    ("app.llm.prompts", "PROMPTS"): "app.llm.core.prompts",
-    ("app.llm.prompts", "Prompt"): "app.llm.langchain.prompts",
-    ("app.llm.prompts", "load_prompt"): "app.llm.langchain.prompts",
-    # #33 T5a
-    **{("app.llm.report", name): "app.llm.core.report" for name in PUBLIC_NAMES["app.llm.report"]},
-    # #33 T5b
-    ("app.llm.gateway", "Gateway"): "app.llm.langchain.gateway",
-    ("app.llm.gateway", "get_gateway"): "app.llm.langchain.gateway",
-    ("app.llm.gateway", "GatewayDep"): "app.llm",
-    **{
-        ("app.llm.checkpoints", name): "app.llm.langchain.checkpoints"
-        for name in PUBLIC_NAMES["app.llm.checkpoints"]
-    },
-}
-
-
-def moved_names(old: str) -> SimpleNamespace:
-    """What the old module `old` held, each name taken from the module it moved to (no warning)."""
-    return SimpleNamespace(
-        **{
-            name: getattr(importlib.import_module(new), name)
-            for (module, name), new in MOVED.items()
-            if module == old
-        }
-    )
-
-
-# Aliases (#33 T3): the old app.llm.budget names, from their new modules, so the checks below read
-# as before. Only these lines changed.
-budget = moved_names("app.llm.budget")
 
 
 @pytest.mark.parametrize("module", sorted(PUBLIC_NAMES))
 def test_every_public_name_is_importable_from_its_module(module: str) -> None:
     loaded = importlib.import_module(module)
     for name in PUBLIC_NAMES[module]:
-        if (module, name) in MOVED:
-            continue
         assert hasattr(loaded, name), f"{module}.{name}"
-        # Resolving the name twice gives the same object (a shim must not rebuild it).
+        # Resolving the name twice gives the same object.
         assert getattr(loaded, name) is getattr(importlib.import_module(module), name)
-
-
-def attr(module: object, name: str) -> Any:
-    # A moved name on a shim module (app.llm.embeddings) warns; test_llm_shims.py checks that.
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        return getattr(module, name)
 
 
 def test_names_imported_from_one_module_into_another_are_the_same_object() -> None:
     # Mapped SQLAlchemy classes in particular must exist once.
-    assert attr(report, "LlmCall") is budget.LlmCall
-    assert attr(report, "expire_stale") is budget.expire_stale
-    assert attr(report, "MICRO_USD") is prices.MICRO_USD
-    for name in (
-        "BudgetExhausted",
-        "UserBudgetExhausted",
-        "reserve_for",
-        "settle",
-        "INPUT_MARGIN_TOKENS",
-    ):
-        assert attr(embeddings, name) is getattr(budget, name)
+    # report imports them without re-exporting, so read its namespace (mypy strict).
+    assert report.__dict__["LlmCall"] is budget.LlmCall
+    assert report.__dict__["expire_stale"] is budget.expire_stale
+    assert report.__dict__["MICRO_USD"] is prices.MICRO_USD
+
+
+@pytest.mark.parametrize(
+    "old",
+    ["budget", "checkpoints", "embeddings", "errors", "gateway", "metrics", "prompts", "report"],
+)
+def test_the_old_import_paths_are_gone(old: str) -> None:
+    # 0.8.0 removed them (#33): no module, and no forwarding of the moved names from prices.
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module(f"app.llm.{old}")
+    for name in ("cost", "ceiling", "token_details"):
+        assert not hasattr(prices, name)
 
 
 def test_the_mapped_table_and_column_names_are_unchanged() -> None:
@@ -379,8 +225,8 @@ def test_the_mapped_table_and_column_names_are_unchanged() -> None:
 
 
 def test_the_budget_constants() -> None:
-    assert budget.INPUT_MARGIN_TOKENS == 1024
-    assert budget.IMAGE_TOKENS == 6_000
+    assert bounds.INPUT_MARGIN_TOKENS == 1024
+    assert bounds.IMAGE_TOKENS == 6_000
     assert budget.WARN_SHARE == 0.8
 
 
@@ -547,19 +393,19 @@ def test_budget_refusals_carry_their_status_detail_and_retry_after() -> None:
     last = datetime(2026, 1, 2, 23, 59, 59, 500_000, tzinfo=UTC)
     assert budget.BudgetExhausted(now=last).headers == {"Retry-After": "1"}
     assert budget.UserBudgetExhausted(now=last).headers == {"Retry-After": "1"}
-    too_long = budget.PromptTooLong()
+    too_long = bounds.PromptTooLong()
     assert (too_long.status, too_long.detail) == (
         422,
         "The input is too long for the language model.",
     )
-    media = budget.UnboundedMedia("audio")
+    media = bounds.UnboundedMedia("audio")
     assert (media.status, media.kind) == (422, "audio")
     assert media.detail == "This kind of attachment can't be sent to the language model."
 
 
 def test_embedding_batches_are_bounded_by_count_and_bytes() -> None:
-    assert attr(embeddings, "GatewayEmbeddings").MAX_INPUTS == 2048
-    assert attr(embeddings, "GatewayEmbeddings").MAX_BYTES == 300_000 - 1024
+    assert GatewayEmbeddings.MAX_INPUTS == 2048
+    assert GatewayEmbeddings.MAX_BYTES == 300_000 - 1024
 
 
 # --- metrics --------------------------------------------------------------------------------------
@@ -601,7 +447,7 @@ def local_metrics(monkeypatch: pytest.MonkeyPatch) -> Iterator[InMemoryMetricRea
     """The llm instruments created again on a private meter provider, so these tests read their
     own data and never touch the process-wide provider (it can be set once, and test_observability
     sets it). The instruments are restored afterwards. It must reload the module that creates the
-    instruments (METRICS_MODULE), not a shim that re-exports them."""
+    instruments (METRICS_MODULE), not a module that re-exports them."""
     reader = InMemoryMetricReader()
     provider = MeterProvider(metric_readers=[reader])
     monkeypatch.setattr(otel_metrics, "get_meter", provider.get_meter)

@@ -65,7 +65,6 @@ LLM_PATTERNS = [
 ]
 # One file from each pattern that must be absent without the gateway.
 LLM_FILES = [
-    "backend/src/app/llm/gateway.py",
     "backend/src/app/prompts/README.md",
     "backend/llm-contracts.toml",
     "backend/tests/models.py",
@@ -387,14 +386,6 @@ def test_no_rendered_python_file_has_an_unused_import(render, database, storage,
 # twins without the gateway, and still the template's.
 LLM_OWNED = [
     "backend/src/app/llm/__init__.py",
-    "backend/src/app/llm/budget.py",
-    "backend/src/app/llm/checkpoints.py",
-    "backend/src/app/llm/gateway.py",
-    "backend/src/app/llm/embeddings.py",
-    "backend/src/app/llm/errors.py",
-    "backend/src/app/llm/metrics.py",
-    "backend/src/app/llm/prompts.py",
-    "backend/src/app/llm/report.py",
     "backend/src/app/llm/core/*.py",
     "backend/src/app/llm/langchain/*.py",
     "backend/llm-contracts.toml",
@@ -899,3 +890,47 @@ def test_llm_none_autogenerate_ignores_every_table_the_gateway_made(render, tmp_
     assert _string_set(env, "LEFTOVER_TABLES") == created | checkpoint_tables
     # And the version with the gateway has no such list (it imports the library's own).
     assert "LEFTOVER_TABLES" not in (langchain / "backend/migrations/env.py").read_text()
+
+
+# The old import paths of the model gateway (#33) were removed in 0.8.0. The module names, and the
+# names that stayed behind in prices.py only as warning forwards.
+OLD_LLM_MODULES = ("budget", "checkpoints", "embeddings", "errors", "gateway", "metrics",
+                   "prompts", "report")
+OLD_PATH = re.compile(
+    rf"app\.llm\.(?:{'|'.join(OLD_LLM_MODULES)})\b"
+    rf"|app/llm/(?:{'|'.join(OLD_LLM_MODULES)})\.py"
+    r"|app\.llm\.prices\.(?:cost|ceiling|token_details)\b"
+    r"|from app\.llm\.prices import [\w, ]*\b(?:cost|ceiling|token_details)\b"
+    rf"|from app\.llm import [\w, ]*\b(?:{'|'.join(OLD_LLM_MODULES)})\b")
+
+
+@pytest.mark.parametrize(("database", "llm"), SHAPES,
+                         ids=["database-on-llm-langchain", "database-on-llm-none", "database-off"])
+def test_a_rendered_project_has_no_old_llm_import_path_and_no_shim_module(render, database, llm):
+    project = render(database=database, llm=llm)
+    rendered = files(project)
+    for name in OLD_LLM_MODULES:
+        assert f"backend/src/app/llm/{name}.py" not in rendered, name
+    assert "backend/tests/test_llm_shims.py" not in rendered
+    hits = {}
+    for rel, path in rendered.items():
+        if path.suffix not in {".py", ".md", ".toml", ".txt", ".yaml", ".yml", ".mk"}:
+            continue
+        found = OLD_PATH.findall(path.read_text())
+        if found:
+            hits[rel] = found
+    assert hits == {}
+    # The new homes are there when the gateway is.
+    assert (("backend/src/app/llm/core/budget.py" in rendered) is (llm == "langchain"))
+
+
+def test_the_old_path_pattern_finds_each_old_path():
+    for text in ("import app.llm.gateway", "from app.llm.errors import Outcome",
+                 "python -m app.llm.report", "backend/src/app/llm/budget.py",
+                 "app.llm.prices.cost", "from app.llm.prices import cost, PRICES",
+                 "from app.llm import prompts"):
+        assert OLD_PATH.search(text), text
+    for text in ("from app.llm.core.budget import settle", "from app.llm import GatewayDep",
+                 "from app.llm.langchain.gateway import Gateway", "from app.llm.prices import PRICES",
+                 "python -m app.llm.core.report"):
+        assert OLD_PATH.search(text) is None, text

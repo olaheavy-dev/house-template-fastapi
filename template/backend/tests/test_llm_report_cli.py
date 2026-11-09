@@ -1,11 +1,9 @@
 """The spend report's command line (`make llm-report`, a cron's `--expire-stale`): what it prints
-and returns for a bad or a help request, on the new module and on the old one that still runs until
-0.8.0 (#33). None of it needs a database."""
+and returns for a bad or a help request. None of it needs a database."""
 
 from __future__ import annotations
 
 import os
-import runpy
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -15,9 +13,7 @@ import pytest
 from app.llm.core import report
 from tests.test_llm_core_embeddings import loaded_by
 
-OLD = "app.llm.report"
-NEW = "app.llm.core.report"
-MOVED = "DeprecationWarning: python -m app.llm.report moved to python -m app.llm.core.report"
+MODULE = "app.llm.core.report"
 
 
 def run(module: str, *args: str) -> subprocess.CompletedProcess[str]:
@@ -28,29 +24,17 @@ def run(module: str, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-@pytest.mark.parametrize("module", [OLD, NEW])
-def test_an_unknown_group_exits_2_and_names_the_groups(module: str) -> None:
-    result = run(module, "--by", "nope")
+def test_an_unknown_group_exits_2_and_names_the_groups() -> None:
+    result = run(MODULE, "--by", "nope")
     assert result.returncode == 2
     assert result.stderr.endswith("error: --by takes day, model, prompt, feature\n")
     assert result.stdout == ""
-    assert (MOVED in result.stderr) is (module == OLD)
 
 
-@pytest.mark.parametrize("module", [OLD, NEW])
-def test_help_exits_0_and_describes_the_report(module: str) -> None:
-    result = run(module, "--help")
+def test_help_exits_0_and_describes_the_report() -> None:
+    result = run(MODULE, "--help")
     assert result.returncode == 0
     assert "Model spend from the llm_call table." in result.stdout
-    assert (MOVED in result.stderr) is (module == OLD)
-
-
-def test_the_old_command_warns_once_and_points_at_the_new_one() -> None:
-    result = run(OLD, "--by", "nope")
-    assert result.stderr.count("DeprecationWarning") == 1
-    assert "python -m app.llm.core.report: run that instead (the old one goes in 0.8.0)" in (
-        result.stderr
-    )
 
 
 # --- the arguments reach main() ---------------------------------------------------------------
@@ -94,14 +78,3 @@ def test_a_bad_by_is_refused_before_main_runs(
 
 def test_importing_the_report_loads_no_model_framework() -> None:
     assert loaded_by("app.llm.core.report") == "[]"
-
-
-def test_the_old_module_run_as_main_passes_a_crons_arguments_to_main(
-    seen: list[tuple[int, list[str], bool]], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        sys, "argv", ["report.py", "--expire-stale", "--days", "3", "--by", "feature"]
-    )
-    with pytest.warns(DeprecationWarning, match="python -m app.llm.report moved"):
-        runpy.run_module("app.llm.report", run_name="__main__")
-    assert seen == [(3, ["feature"], True)]

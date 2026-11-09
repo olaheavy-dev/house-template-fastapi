@@ -36,23 +36,39 @@ from conftest import BASE_ANSWERS, ROOT
 # The v0.7.0 release (tag; commit 5a3fffe), the state the default render may only leave on purpose.
 BASELINE_REF = "v0.7.0"
 
+# 0.8.0 removes the old import paths (#33): the shim modules and the tests that exist only for them,
+# and the warning forwards in prices.py and the tests that named the old paths. Shared with
+# INTENDED_SINCE_AF53775 below, because af53775 has them too.
+# The files a project made from v0.7.x loses on `copier update` to this version.
+REMOVED_FILES = {
+    *(f"backend/src/app/llm/{name}.py" for name in (
+        "budget", "checkpoints", "embeddings", "errors", "gateway", "metrics", "prompts", "report")),
+    "backend/tests/test_llm_shims.py",
+}
+REMOVED_OLD_PATHS: dict[str, str] = {
+    **{path: "removed: the old import paths and their tests (#33, 0.8.0)" for path in REMOVED_FILES},
+    ".github/template-owned/fastapi.txt": "the removed old modules are no longer listed (#33, 0.8.0)",
+    "backend/src/app/llm/prices.py": "cost, ceiling and token_details no longer answer here (#33, 0.8.0)",
+    "backend/src/app/llm/core/report.py": "docstring no longer names the old module (#33, 0.8.0)",
+    "backend/tests/test_llm_report_cli.py": "no tests of the old `python -m app.llm.report` (#33, 0.8.0)",
+}
+
 # {rendered path: "reason (#NN)"}. Starts empty. The test fails for a path that differs without an
 # entry here, and for an entry whose path no longer differs. A path-level entry hides a second,
 # accidental change to the same file until the next baseline move.
 # Not compared: file modes, symlinks and empty directories (the template has no tracked
 # executables today).
 INTENDED: dict[str, str] = {
-    "backend/src/app/llm/prices.py": "the cost warning no longer says to pass None, cost takes a Usage only (#85)",
-    "backend/tests/test_llm_shims.py": "expects the new cost warning wording (#85)",
+    **REMOVED_OLD_PATHS,
     "backend/tests/test_llm_checkpoints.py": "new: what the checkpointer can read back (#36)",
     "backend/src/app/llm/langchain/checkpoints.py": "saved threads load strictly: serializer() (#36)",
     "backend/src/app/llm/checkpoint_types.py": "new: the project's list of its own saved classes (#36)",
-    ".claude/rules/fastapi.md": "checkpoints load strictly, and where to list your classes (#36); the limit is model calls and users are told of a cut-short answer (#34); the extras sentence and switch commands name the llm answer (#30); the list of files turning the gateway off deletes names redaction_rules.py (#78)",
+    ".claude/rules/fastapi.md": "checkpoints load strictly, and where to list your classes (#36); the limit is model calls and users are told of a cut-short answer (#34); the extras sentence and switch commands name the llm answer (#30); the list of files turning the gateway off deletes names redaction_rules.py (#78); no old import paths (#33, 0.8.0)",
     ".copier-answers.fastapi.yml": "records the new llm answer, langchain with the database (#30)",
     "backend/pyproject.toml": "the extras comment names the llm answer (#30)",
     "backend/tests/test_llm_migrations.py": "new: the gateway's tables can be added to a database that ran without them (#30)",
     "backend/migrations/versions/20261026_app_project_root.py": "the example names no gateway table (#30)",
-    "backend/tests/test_llm_surface.py": "expects the new serializer name (#36); the step limit has no 422 and steps.py is public (#34)",
+    "backend/tests/test_llm_surface.py": "expects the new serializer name (#36); the step limit has no 422 and steps.py is public (#34); no old import paths (#33, 0.8.0)",
     "backend/.env.example": "AGENT_MAX_MODEL_CALLS=13 replaces AGENT_MAX_STEPS=25 (#34)",
     "backend/src/app/settings.py": "agent_max_model_calls replaces agent_max_steps; the app refuses to start while AGENT_MAX_STEPS is set (#34)",
     "backend/src/app/llm/core/steps.py": "new: the step-limit rule, the same for every framework (#34)",
@@ -191,8 +207,10 @@ def test_default_render_matches_baseline(tmp_path):
 # apart from these files. Remove it, and the two tests below, when BASELINE_REF moves past #30.
 AF53775 = "af53775"
 INTENDED_SINCE_AF53775 = {
+    **REMOVED_OLD_PATHS,
+    "backend/tests/test_llm_surface.py": "no old import paths (#33, 0.8.0)",
     ".copier-answers.fastapi.yml": "records the new llm answer (#30)",
-    ".claude/rules/fastapi.md": "the extras sentence and switch commands name the llm answer (#30); the list of files turning the gateway off deletes names redaction_rules.py (#78)",
+    ".claude/rules/fastapi.md": "the extras sentence and switch commands name the llm answer (#30); the list of files turning the gateway off deletes names redaction_rules.py (#78); no old import paths (#33, 0.8.0)",
     "backend/pyproject.toml": "the extras comment names the llm answer (#30)",
     "backend/tests/test_llm_migrations.py": "new: adding the gateway's tables later (#30)",
     "backend/migrations/versions/20261026_app_project_root.py": "the example names no gateway table (#30)",
@@ -217,7 +235,8 @@ def test_database_off_render_matches_main_before_the_llm_answer(tmp_path):
     before = files_of(render_at(tmp_path / "before", AF53775, database=False))
     head = files_of(render_at(tmp_path / "head", "HEAD", database=False))
     # The redaction files are part of the gateway, so they are absent here (#78).
-    absent = {"backend/tests/test_llm_migrations.py",
+    absent = {*REMOVED_OLD_PATHS, "backend/tests/test_llm_surface.py",
+              "backend/tests/test_llm_migrations.py",
               "backend/migrations/versions/20261026_app_project_root.py",
               "backend/src/app/llm/core/__init__.py",
               "backend/src/app/llm/core/redaction.py",
@@ -345,7 +364,8 @@ def test_updating_a_baseline_project_with_defaults_deletes_nothing(tmp_path):
     update_to_head(dst)
 
     after = files_of(dst)
-    assert before - after.keys() == set(), "update deleted files"
+    # Only what 0.8.0 removes on purpose: the old import paths and the test that exists for them.
+    assert before - after.keys() == REMOVED_FILES, "update deleted other files than the old paths"
     assert (dst / "backend" / "user_added.txt").read_text() == "mine\n"
     assert not list(dst.rglob("*.rej"))
     assert [p for p, data in after.items() if b"<<<<<<<" in data] == []
@@ -375,7 +395,8 @@ def test_updating_a_baseline_project_with_storage_off_deletes_only_the_storage_f
     copier.run_update(dst, answers_file=ANSWERS_FILE, data={"storage": False}, defaults=True,
                       unsafe=True, overwrite=True, quiet=True, vcs_ref="HEAD")
 
-    removed = before - set(files_of(dst))
+    # The update also removes the old import paths (0.8.0); the storage answer removes only these.
+    removed = before - set(files_of(dst)) - REMOVED_FILES
     assert removed == {"backend/src/app/storage.py", "backend/tests/storage.py",
                        "backend/tests/test_storage.py", "backend/compose/storage/compose.yaml"}
     assert (dst / "backend" / "user_added.txt").read_text() == "mine\n"
@@ -412,11 +433,11 @@ def test_updating_a_baseline_project_with_database_off_deletes_only_the_database
 @pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
 @pytest.mark.parametrize(("database", "llm"), [(True, "langchain"), (False, "none")],
                          ids=["database-on", "database-off"])
-def test_updating_a_v0_7_1_project_with_defaults_records_the_llm_answer_and_deletes_nothing(
+def test_updating_a_v0_7_1_project_with_defaults_records_the_llm_answer_and_deletes_only_the_old_paths(
     tmp_path, database, llm
 ):
     # v0.7.1 has no `llm` answer. `copier update --defaults` gives such a project the default,
-    # langchain with the database and none without it, and deletes nothing: the `llm is defined`
+    # langchain with the database and none without it, and deletes only the old import paths: the `llm is defined`
     # guards in copier.yml's _exclude are for the old copy's answers, which have no `llm`. Remove
     # this test when BASELINE_REF moves to a release that records `llm`.
     dst = committed_baseline_project(tmp_path / "project", "v0.7.1", database=database)
@@ -427,7 +448,8 @@ def test_updating_a_v0_7_1_project_with_defaults_records_the_llm_answer_and_dele
     update_to_head(dst)
 
     after = files_of(dst)
-    assert before - after.keys() == set(), "update deleted files"
+    # Only what 0.8.0 removes on purpose, and only where the gateway exists.
+    assert before - after.keys() == (REMOVED_FILES if database else set()), "unexpected deletions"
     assert yaml.safe_load((dst / ANSWERS_FILE).read_text())["llm"] == llm
     assert not list(dst.rglob("*.rej"))
     assert [p for p, data in after.items() if b"<<<<<<<" in data] == []

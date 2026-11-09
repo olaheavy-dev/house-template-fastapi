@@ -6,9 +6,6 @@
 It reads DATABASE_URL like the app (the local database by default). Run it against production
 with that database's URL, or from the API image: `docker compose run --rm api python -m
 app.llm.core.report`.
-
-Moved from app/llm/report.py (#33): that module still runs as `python -m app.llm.report`, with a
-DeprecationWarning, until 0.8.0.
 """
 
 from __future__ import annotations
