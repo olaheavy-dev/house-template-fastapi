@@ -166,6 +166,8 @@ def test_the_llm_import_contracts_exist_only_with_a_gateway(render, database, st
     project = render(database=database, storage=storage, llm=llm)
     contracts = project / "backend/llm-contracts.toml"
     assert contracts.exists() is gateway
+    mk = (project / "mk/fastapi.mk").read_text()
+    assert ("lint-imports --config llm-contracts.toml" in mk) is gateway
     pyproject = read_toml(project / "backend/pyproject.toml")
     assert len(pyproject["tool"]["importlinter"]["contracts"]) == 1
     if gateway:
@@ -509,27 +511,32 @@ def test_no_part_left_behind_check_catches_a_leftover(render, part):
     assert {".claude/rules/fastapi.md", "backend/compose.yaml"} <= hits
 
 
-def extras_flags(database: bool, storage: bool) -> str:
+def extras_flags(database: bool, storage: bool, llm: str) -> str:
+    # `langchain` always comes with `db` (the gateway keeps its budget and checkpoints in PostgreSQL).
     return " ".join(
-        (["--extra db", "--extra langchain"] if database else []) + (["--extra storage"] if storage else []))
+        (["--extra db"] if database else []) + (["--extra langchain"] if llm == "langchain" else [])
+        + (["--extra storage"] if storage else []))
 
 
-@ANSWERS
-def test_the_image_installs_the_answered_extras(render, database, storage):
-    project = render(database=database, storage=storage)
-    flags = extras_flags(database, storage)
+@ANSWERS3
+def test_the_image_installs_the_answered_extras(render, database, storage, llm):
+    project = render(database=database, storage=storage, llm=llm)
+    flags = extras_flags(database, storage, llm)
+    gateway = llm == "langchain"
     dockerfile = (project / "backend/Dockerfile").read_text()
     syncs = [ln for ln in dockerfile.splitlines() if "uv sync" in ln]
     assert len(syncs) == 2
     for ln in syncs:
         assert ln.endswith(" ".join(["--no-editable", flags]).strip()), ln
+    # The shutdown comment names the model timeout only where there is a model timeout.
+    assert ("LLM_TIMEOUT_SECONDS" in dockerfile) is gateway
     mk = (project / "mk/fastapi.mk").read_text()
     runs = [ln for ln in mk.splitlines() if "uv --directory backend" in ln and " sync " in ln
             or ln.startswith(("BACKEND :=", "LIVE :="))]
     # Every uv call that installs or runs the project goes through EXTRAS, set from the answers.
-    # LIVE (recording and evals) exists only with the database.
-    assert len(runs) == (3 if database else 2) and all("$(EXTRAS)" in ln for ln in runs), runs
-    assert ("LIVE :=" in mk) is database
+    # LIVE (recording and evals) exists only with the gateway.
+    assert len(runs) == (3 if gateway else 2) and all("$(EXTRAS)" in ln for ln in runs), runs
+    assert ("LIVE :=" in mk) is gateway
     extras = re.search(r"^EXTRAS :=(.*)$", mk, flags=re.MULTILINE)
     assert extras and extras.group(1).strip() == flags
     if shutil.which("make"):
@@ -541,20 +548,25 @@ def test_the_image_installs_the_answered_extras(render, database, storage):
         lines = [ln for ln in dry.stdout.splitlines() if ln.startswith("uv ")]
         assert len(lines) == 2 and all(want in ln for ln in lines), lines
         assert all(("--extra" in ln) is bool(flags) for ln in lines), lines
+        # Worked out from the plan: the database without the gateway installs db (and storage) only.
+        if (database, llm) == (True, "none"):
+            assert all("--locked --extra db" in ln and "langchain" not in ln for ln in lines)
     # `make lock` locks every extra whatever the answers (the lockfile is not per answer).
     assert "uv --directory backend lock\n" in mk
 
 
 ALWAYS_TARGETS = {"install-fastapi", "check-fastapi", "check-fast-fastapi", "lock", "dev", "test",
                   "image", "up"}
-DATABASE_TARGETS = {"db-up", "migrate", "migration", "llm-report", "record-llm", "eval"}
+DATABASE_TARGETS = {"db-up", "migrate", "migration"}
+LLM_TARGETS = {"llm-report", "record-llm", "eval"}
 
 
-@ANSWERS
-def test_make_targets_follow_the_answers(render, database, storage):
-    mk = (render(database=database, storage=storage) / "mk/fastapi.mk").read_text()
+@ANSWERS3
+def test_make_targets_follow_the_answers(render, database, storage, llm):
+    gateway = llm == "langchain"
+    mk = (render(database=database, storage=storage, llm=llm) / "mk/fastapi.mk").read_text()
     want = (ALWAYS_TARGETS | (DATABASE_TARGETS if database else set())
-            | ({"storage-up"} if storage else set()))
+            | (LLM_TARGETS if gateway else set()) | ({"storage-up"} if storage else set()))
     defined = set(re.findall(r"^([a-z][a-z0-9-]*):", mk, flags=re.MULTILINE))
     phony = set(re.search(r"^\.PHONY: (.*)$", mk, flags=re.MULTILINE).group(1).split())
     assert defined == want
@@ -566,10 +578,13 @@ def test_make_targets_follow_the_answers(render, database, storage):
             or ln.strip().endswith(" mypy src tests migrations")]
     assert len(mypy) == 2
     assert all(ln.endswith("migrations") is database for ln in mypy), mypy
-    if database:
-        assert "comma := ," in mk
-    else:
-        assert not any(word in mk for word in ("comma", "record-llm", "LLM_", "alembic"))
+    # The model test run unsets LLM_EVAL, which only the gateway's evals read.
+    assert ("env -u LLM_EVAL" in mk) is gateway
+    assert ("comma := ," in mk) is gateway
+    if not gateway:
+        assert not any(word in mk for word in ("comma", "record-llm", "LLM_", "llm-contracts"))
+    if not database:
+        assert "alembic" not in mk
 
 
 @ANSWERS
@@ -668,13 +683,14 @@ def test_env_example_template_is_tracked_by_git_and_not_excluded():
     assert ".env.*" in config["_exclude"] and "!.env.example" in config["_exclude"]
 
 
-@ANSWERS
-def test_make_targets_are_separated_by_one_blank_line(render, database, storage):
+@ANSWERS3
+def test_make_targets_are_separated_by_one_blank_line(render, database, storage, llm):
     # `{%- if %}` once ate the blank line before storage-up; the default output must read as before.
-    mk = (render(database=database, storage=storage) / "mk/fastapi.mk").read_text()
+    mk = (render(database=database, storage=storage, llm=llm) / "mk/fastapi.mk").read_text()
     assert "\n\n\n" not in mk
     assert mk.endswith("\n") and not mk.endswith("\n\n")
-    assert ("\n\nllm-report:" in mk) is database
+    assert ("\n\nllm-report:" in mk) is (llm == "langchain")
+    assert ("\n\ndb-up:" in mk) is database
     assert ("\n\nstorage-up:" in mk) is storage
     assert ("\n\nimage:" in mk)
 
