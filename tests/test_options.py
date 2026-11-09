@@ -446,8 +446,8 @@ def test_every_llm_module_but_prices_and_checkpoint_types_and_every_template_mig
     # The warning shims (errors, embeddings, ...) and the template's own migrations are the
     # template's (an edit to one would conflict on the next `copier update`); listing them makes
     # the project's CI warn when a pull request edits one. prices.py is the project's price
-    # table and checkpoint_types.py the project's list of its own saved classes (#36), so both stay
-    # off the list.
+    # table, checkpoint_types.py the project's list of its own saved classes (#36) and
+    # redaction_rules.py its list of personal-data detectors (#78), so all three stay off the list.
     project = render(database=True, storage=True)
     patterns = _owned_patterns(project)
     llm = sorted(f for f in files(project)
@@ -458,14 +458,18 @@ def test_every_llm_module_but_prices_and_checkpoint_types_and_every_template_mig
     # Five numbered migrations and the project-root one; `>=` still proves the glob found them.
     # Update the owned list together with any new template migration.
     assert len(versions) >= 6
-    yours = {"backend/src/app/llm/prices.py", "backend/src/app/llm/checkpoint_types.py"}
+    yours = {
+        "backend/src/app/llm/prices.py",
+        "backend/src/app/llm/checkpoint_types.py",
+        "backend/src/app/llm/redaction_rules.py",
+    }
     not_owned = [f for f in llm if f not in yours and not _is_owned(patterns, f)]
     not_owned += [v for v in versions if v not in patterns]  # by exact path
     assert not_owned == []
     # Spelled out in full: a `versions/*` glob would also capture the project's own migrations.
     for mine in ("backend/migrations/versions/20270101_abcd1234_mine.py",
                  "backend/src/app/llm/prices.py", "backend/src/app/llm/checkpoint_types.py",
-                 "backend/src/app/api/mine.py"):
+                 "backend/src/app/llm/redaction_rules.py", "backend/src/app/api/mine.py"):
         assert not _is_owned(patterns, mine), mine
 
 
