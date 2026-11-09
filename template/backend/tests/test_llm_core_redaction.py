@@ -17,6 +17,7 @@ The tests use the default detectors in app/llm/redaction_rules.py, the project's
 from __future__ import annotations
 
 import random
+import re
 import time
 from collections.abc import Iterable
 
@@ -569,6 +570,100 @@ def test_the_failure_is_a_503_problem_with_no_value_in_it() -> None:
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("text", "known", "allow", "expected", "original"),
+    [
+        # The exact case from review: the allowed email contains the whole detected value, and the
+        # known name overlaps it, so the union is replaced (a known value beats the allow-list).
+        (
+            "Write to priya.shah@example.com",
+            {"NAME": ["Priya"]},
+            ["priya.shah@example.com"],
+            "Write to [EMAIL_1]",
+            "priya.shah@example.com",
+        ),
+        # A known value inside the allowed email, in its domain.
+        (
+            "Email priya.shah.1987@leeds.ac.uk now",
+            {"PLACE": ["Leeds"]},
+            ["priya.shah.1987@leeds.ac.uk"],
+            "Email [EMAIL_1] now",
+            "priya.shah.1987@leeds.ac.uk",
+        ),
+        # A known value overlapping the edge of the allowed value and reaching past it.
+        (
+            "Mail priya@leeds.ac.uk today",
+            {"NOTE": ["uk today"]},
+            ["priya@leeds.ac.uk"],
+            "Mail [EMAIL_1]",
+            "priya@leeds.ac.uk today",
+        ),
+        # No known value touches it: the allow-list still keeps it.
+        (
+            "Mail priya@leeds.ac.uk, Sam Patel",
+            {"NAME": ["Sam Patel"]},
+            ["priya@leeds.ac.uk"],
+            "Mail priya@leeds.ac.uk, [NAME_1]",
+            "Sam Patel",
+        ),
+    ],
+)
+async def test_a_known_value_beats_the_allow_list_even_when_it_only_overlaps_a_detected_value(
+    text: str,
+    known: dict[str, list[str]],
+    allow: list[str],
+    expected: str,
+    original: str,
+) -> None:
+    async with redaction_scope(known=known, allow=allow):
+        result = one(text)
+    assert result.texts == (expected,)
+    assert list(result.mapping.values()) == [original]
+
+
+@pytest.mark.anyio
+async def test_a_known_value_and_a_detected_one_that_differ_never_share_a_placeholder() -> None:
+    # straße@example.com is known; strasse@example.com is a different address (the case folding of
+    # ß is not applied), found by the detector. Each is restored as itself.
+    text = "straße@example.com strasse@example.com"
+    async with redaction_scope(known={"EMAIL": ["straße@example.com"]}):
+        result = one(text)
+    assert result.texts == ("[EMAIL_1] [EMAIL_2]",)
+    assert result.mapping == {
+        "[EMAIL_1]": "straße@example.com",
+        "[EMAIL_2]": "strasse@example.com",
+    }
+    assert restore(result.texts[0], result.mapping) == (text, 0)
+
+
+@pytest.mark.anyio
+async def test_a_known_value_s_normal_form_is_not_a_detected_value_s_key() -> None:
+    # "Strasse" is known, with "\u00df": its normal form is "strasse". A detector of the same kind
+    # finds the different text "strasse" (the known pattern does not fold \u00df to ss). The two
+    # must not share a placeholder, or the second would be restored as the first.
+    class Plain:
+        kind = "NAME"
+
+        def find(self, text: str) -> Iterable[Span]:
+            at = text.find("strasse")
+            return [Span(at, at + 7, "NAME")] if at != -1 else []
+
+    async with redaction_scope(known={"NAME": ["Stra\u00dfe"]}):
+        result = Redactor([Plain()]).redact(["Stra\u00dfe strasse"])
+    assert result.texts == ("[NAME_1] [NAME_2]",)
+    assert restore(result.texts[0], result.mapping)[0] == "Stra\u00dfe strasse"
+
+
+@pytest.mark.anyio
+async def test_known_values_that_normalise_equal_share_one_placeholder() -> None:
+    known = {"NAME": ["Priya Shah", "priya  shah"]}
+    async with redaction_scope(known=known):
+        result = one("Priya Shah and PRIYA SHAH")
+    assert result.texts == ("[NAME_1] and [NAME_1]",)
+    assert len(result.mapping) == 1
+
+
+@pytest.mark.anyio
 async def test_a_value_that_starts_later_and_reaches_further_extends_the_union() -> None:
     # known "Flat 3, 07700" is 0-13 and the phone is 8-20: the phone reaches further, so the union
     # must run to 20 and not stop at 13 (which would leave " 900123" in the clear).
@@ -697,6 +792,117 @@ def test_a_detected_value_has_its_own_placeholder_for_each_exact_spelling() -> N
     result = one("a@example.com, A@EXAMPLE.COM, a@example.com")
     assert result.texts == ("[EMAIL_1], [EMAIL_2], [EMAIL_1]",)
     assert result.mapping == {"[EMAIL_1]": "a@example.com", "[EMAIL_2]": "A@EXAMPLE.COM"}
+
+
+# --- more information passed in never leaks more -------------------------------------------
+
+_WORDS = [
+    *("Priya", "Shah", "Leeds", "office", "agency", "Flat", "2", "12", "Road", "call", "on", "at"),
+    *("co", "uk", "ac", "x", "com", "sam", "acc", "account", "sort code", "NHS", "born"),
+]
+_TOKENS = ["07700 900123", "020 7946 0321", "+44 7700 900456", "0113 496 0000", "AB123456C",
+           "4111 1111 1111 1111", "GB82 WEST 1234 5698 7654 32", "12-34-56", "12345678",
+           "943 476 5919", "01/02/1990"]  # fmt: skip
+
+
+def _random_token(rng: random.Random) -> str:
+    roll = rng.random()
+    if roll < 0.15:
+        local = rng.choice(["priya.shah", "sam", "office", "a.b"])
+        return local + "@" + rng.choice(["leeds.ac.uk", "agency.co.uk", "x.com"])
+    if roll < 0.30:
+        return rng.choice(_TOKENS)
+    if roll < 0.40:
+        return str(rng.randint(0, 99999))
+    return rng.choice(_WORDS)
+
+
+def _spans(text: str, patterns_of: list[str]) -> list[tuple[int, int]]:
+    found: list[tuple[int, int]] = []
+    for value in patterns_of:
+        words = value.split()
+        if words:
+            pattern = re.compile(r"(?<!\w)" + r"\s+".join(map(re.escape, words)) + r"(?!\w)", re.I)
+            found.extend(m.span() for m in pattern.finditer(text))
+    return found
+
+
+def _covered(text: str, out: str, mapping: dict[str, str]) -> list[bool] | None:
+    """Which characters of `text` ended up inside a placeholder; None if the output cannot be
+    lined up with the text (a known value matched in a different case or spacing)."""
+    covered = [False] * len(text)
+    names = sorted(mapping, key=len, reverse=True)
+    pattern = re.compile("|".join(map(re.escape, names))) if names else None
+    at = pos = 0
+    for match in pattern.finditer(out) if pattern else []:
+        literal = out[pos : match.start()]
+        if text[at : at + len(literal)] != literal:
+            return None
+        at += len(literal)
+        original = mapping[match.group()]
+        if text[at : at + len(original)] != original:
+            return None
+        for index in range(at, at + len(original)):
+            covered[index] = True
+        at += len(original)
+        pos = match.end()
+    return covered if text[at:] == out[pos:] else None
+
+
+def property_leaks(cases: int, seed: int) -> tuple[int, int]:
+    """Random texts with random known and allow values taken from the text (allow values often
+    hold a whole detected value, known values often overlap one). Returns (leaks, checked): every
+    known match must be replaced, and so must every detected value except one that an allowed
+    value contains whole and that no known match touches."""
+    rng = random.Random(seed)  # noqa: S311
+    leaks = checked = 0
+    for _ in range(cases):
+        text = rng.choice([" ", ", ", "  "]).join(
+            _random_token(rng) for _ in range(rng.randint(3, 12))
+        )
+        parts = text.split()
+
+        def pick(parts: list[str] = parts) -> str:
+            i = rng.randrange(len(parts))
+            value = " ".join(parts[i : i + rng.randint(1, 3)])
+            if rng.random() < 0.3 and "@" in value:
+                value = rng.choice(re.split(r"[@.]", value)) or value
+            return value
+
+        known = {"NAME": [v for v in (pick() for _ in range(rng.randint(0, 2))) if v in text]}
+        allow = [pick() for _ in range(rng.randint(0, 3))]
+        with capture_logs():
+            result = REDACTOR.redact([text], Scope(known=known, allow=allow))
+        covered = _covered(text, result.texts[0], dict(result.mapping))
+        if covered is None:
+            continue
+        known_spans = _spans(text, known["NAME"])
+        allow_spans: list[tuple[int, int]] = []
+        for span in sorted(_spans(text, allow)):  # allowed values that overlap act as one
+            if allow_spans and span[0] < allow_spans[-1][1]:
+                allow_spans[-1] = (allow_spans[-1][0], max(allow_spans[-1][1], span[1]))
+            else:
+                allow_spans.append(span)
+        for start, end, _kind in (
+            (s.start, s.end, s.kind) for d in DETECTORS for s in d.find(text)
+        ):
+            kept = any(a <= start and end <= b for a, b in allow_spans) and not any(
+                start < ke and ks < end for ks, ke in known_spans
+            )
+            if kept:
+                continue
+            checked += 1
+            leaks += not all(covered[start:end])
+        for start, end in known_spans:
+            checked += 1
+            leaks += not all(covered[start:end])
+    return leaks, checked
+
+
+def test_passing_in_known_and_allowed_values_never_leaks_a_detected_or_known_value() -> None:
+    leaks, checked = property_leaks(4000, seed=7)
+    assert checked > 5000  # the cases did exercise the rules
+    assert leaks == 0
 
 
 # --- 27: linear time -----------------------------------------------------------------------

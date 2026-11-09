@@ -285,7 +285,7 @@ class _Found:
     span: Span
     known: bool  # a value the app named
     original: str  # for a known value: what to put back, as the app gave it
-    key: str  # for a known value: the same key, the same placeholder
+    key: str  # known: "k" + its normal form; see _merged for the detected form
 
 
 class Redactor:
@@ -351,10 +351,11 @@ class Redactor:
                 [m.span() for pattern in allowed for m in pattern.finditer(text)]
             )
             found = [
-                _Found(Span(m.start(), m.end(), kind), True, value, _normal(value))
+                _Found(Span(m.start(), m.end(), kind), True, value, "k" + _normal(value))
                 for kind, value, pattern in named
                 for m in pattern.finditer(text)
             ]
+            known_starts, known_ends = _union([(i.span.start, i.span.end) for i in found])
             for item in found:  # a known value beats the allow-list
                 if _touches(allow_starts, allow_ends, item.span.start, item.span.end):
                     conflicts.add(item.span.kind)
@@ -369,8 +370,12 @@ class Redactor:
                         raise ValueError("a detector returned a span outside the text")
                     if span.kind not in checked_kinds:
                         checked_kinds.add(_check_kind(span.kind))
-                    if _contains(allow_starts, allow_ends, span.start, span.end):
-                        continue  # the allow-list keeps a value it contains whole
+                    if _contains(allow_starts, allow_ends, span.start, span.end) and not _touches(
+                        known_starts, known_ends, span.start, span.end
+                    ):
+                        # The allow-list keeps a value it contains whole, unless a known value
+                        # overlaps it: then it stays in, and is replaced with the known value.
+                        continue
                     found.append(_Found(span, False, "", ""))
             found.sort(key=lambda f: (f.span.start, -f.span.end))
             pieces: list[str] = []
@@ -404,7 +409,7 @@ class Redactor:
                 return item.span.kind, item.key, item.original  # one known value covers it all
         longest = max(group, key=lambda f: (f.span.end - f.span.start, f.known))
         covered = text[start:end]
-        return longest.span.kind, covered, covered
+        return longest.span.kind, "d" + covered, covered  # "d": detected, written exactly
 
 
 def restore(text: str, mapping: Mapping[str, str]) -> tuple[str, int]:
