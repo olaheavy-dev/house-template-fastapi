@@ -1,4 +1,4 @@
-"""The answers that switch parts of the backend on and off (#29): `database` and `storage`.
+"""The answers that switch parts of the backend on and off (#29, #30): `database`, `llm` and `storage`.
 
 Docs: Copier 9.19.1
 - `_exclude` (each pattern can be templated; defining it replaces Copier's defaults), the `.jinja`
@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import ast
 import fnmatch
-import itertools
 import json
 import re
 import shutil
@@ -34,16 +33,11 @@ import yaml
 
 from conftest import BASE_ANSWERS, TEMPLATE
 
-# Every combination of the two answers (the older four, with the `llm` each one gets by default).
-COMBINATIONS = list(itertools.product([True, False], [True, False]))
-ANSWERS = pytest.mark.parametrize(
-    ("database", "storage"), COMBINATIONS,
-    ids=[f"database-{'on' if d else 'off'}-storage-{'on' if s else 'off'}" for d, s in COMBINATIONS])
 # The valid triples (#30): `llm: langchain` needs the database, and `database: false` always means
 # `llm: none`. Three shapes, each with storage on or off.
 SHAPES = [(True, "langchain"), (True, "none"), (False, "none")]
 TRIPLES = [(d, s, llm) for d, llm in SHAPES for s in (True, False)]
-ANSWERS3 = pytest.mark.parametrize(
+ANSWERS = pytest.mark.parametrize(
     ("database", "storage", "llm"), TRIPLES,
     ids=[f"database-{'on' if d else 'off'}-llm-{llm}-storage-{'on' if s else 'off'}"
          for d, s, llm in TRIPLES])
@@ -132,7 +126,7 @@ def files(root: Path) -> dict[str, Path]:
     return {p.relative_to(root).as_posix(): p for p in root.rglob("*") if p.is_file()}
 
 
-@ANSWERS3
+@ANSWERS
 def test_render_matrix(render, database, storage, llm):
     project = render(database=database, storage=storage, llm=llm)
     for path in DATABASE_FILES:
@@ -157,7 +151,7 @@ def test_render_matrix(render, database, storage, llm):
     assert (answers["database"], answers["storage"], answers["llm"]) == (database, storage, llm)
 
 
-@ANSWERS3
+@ANSWERS
 def test_the_llm_import_contracts_exist_only_with_a_gateway(render, database, storage, llm):
     # The core's contract names app.llm.core, which import-linter refuses when the module is not
     # there, so it lives in its own file that exists only with the gateway (#33). The one
@@ -256,7 +250,7 @@ STORAGE_NOT_SETTINGS = {"STORAGE_PORT", "STORAGE_CONSOLE_PORT"}
 DATABASE_NOT_SETTINGS = {"DB_PORT", "TEST_DATABASE_URL"}
 
 
-@ANSWERS3
+@ANSWERS
 def test_env_example_matches_settings(render, database, storage, llm):
     project = render(database=database, storage=storage, llm=llm)
     fields = {f.upper() for f in SETTING.findall((project / "backend/src/app/settings.py").read_text())}
@@ -277,7 +271,7 @@ def test_env_example_matches_settings(render, database, storage, llm):
     assert ("TEST_DATABASE_URL" in listed) is database
 
 
-@ANSWERS3
+@ANSWERS
 def test_production_guard_names_only_rendered_parts(render, database, storage, llm):
     settings = (render(database=database, storage=storage, llm=llm)
                 / "backend/src/app/settings.py").read_text()
@@ -288,7 +282,7 @@ def test_production_guard_names_only_rendered_parts(render, database, storage, l
     assert ("model_validator" in settings) is (database or storage)
 
 
-@ANSWERS3
+@ANSWERS
 def test_conftest_fixtures_follow_the_answers(render, database, storage, llm):
     conftest = (render(database=database, storage=storage, llm=llm) / "backend/tests/conftest.py").read_text()
     tree = ast.parse(conftest)
@@ -357,7 +351,7 @@ def test_settings_demand_no_model_when_llm_is_none(render, database):
     assert 'extra="ignore"' in settings
 
 
-@ANSWERS3
+@ANSWERS
 def test_no_rendered_python_file_has_an_unused_import(render, database, storage, llm):
     project = render(database=database, storage=storage, llm=llm)
     for rel, path in files(project).items():
@@ -420,7 +414,7 @@ DATABASE_OWNED = [
 ]
 
 
-@ANSWERS3
+@ANSWERS
 def test_every_template_owned_entry_exists(render, database, storage, llm):
     project = render(database=database, storage=storage, llm=llm)
     owned = (project / ".github/template-owned/fastapi.txt").read_text().splitlines()
@@ -475,7 +469,7 @@ def test_every_llm_module_but_prices_and_checkpoint_types_and_every_template_mig
         assert not _is_owned(patterns, mine), mine
 
 
-@ANSWERS3
+@ANSWERS
 def test_rendered_project_has_no_leftover_template_syntax(render, database, storage, llm):
     for path in files(render(database=database, storage=storage, llm=llm)).values():
         if path.suffix in {".py", ".toml", ".md", ".mk", ".yml", ".yaml", ".txt", ".example"}:
@@ -483,7 +477,7 @@ def test_rendered_project_has_no_leftover_template_syntax(render, database, stor
             assert not re.search(r"(?<!\$)\{\{|\{%", path.read_text()), path
 
 
-@ANSWERS3
+@ANSWERS
 def test_rendered_text_files_end_in_exactly_one_newline(render, database, storage, llm):
     # The base project's pre-commit end-of-file fixer fails `make check` on a file that ends in a
     # blank line or has no final newline (a `{% endif %}` after the last line once did).
@@ -496,7 +490,7 @@ def test_rendered_text_files_end_in_exactly_one_newline(render, database, storag
         assert not text or (text.endswith("\n") and not text.endswith("\n\n")), rel
 
 
-@ANSWERS3
+@ANSWERS
 def test_every_rendered_python_file_parses(render, database, storage, llm):
     project = render(database=database, storage=storage, llm=llm)
     for rel, path in files(project).items():
@@ -555,7 +549,7 @@ def word_hits(project: Path, words: re.Pattern[str], part: str, allow: bool = Tr
     return found
 
 
-@ANSWERS3
+@ANSWERS
 def test_rules_switch_names_every_extra_and_the_flag_that_changes_each_part(
         render, database, storage, llm):
     rules = (render(database=database, storage=storage, llm=llm) / ".claude/rules/fastapi.md").read_text()
@@ -605,7 +599,7 @@ def extras_flags(database: bool, storage: bool, llm: str) -> str:
         + (["--extra storage"] if storage else []))
 
 
-@ANSWERS3
+@ANSWERS
 def test_the_image_installs_the_answered_extras(render, database, storage, llm):
     project = render(database=database, storage=storage, llm=llm)
     flags = extras_flags(database, storage, llm)
@@ -648,7 +642,7 @@ DATABASE_TARGETS = {"db-up", "migrate", "migration"}
 LLM_TARGETS = {"llm-report", "record-llm", "eval"}
 
 
-@ANSWERS3
+@ANSWERS
 def test_make_targets_follow_the_answers(render, database, storage, llm):
     gateway = llm == "langchain"
     mk = (render(database=database, storage=storage, llm=llm) / "mk/fastapi.mk").read_text()
@@ -675,10 +669,10 @@ def test_make_targets_follow_the_answers(render, database, storage, llm):
 
 
 @ANSWERS
-def test_plain_mypy_reads_only_paths_every_project_has(render, database, storage):
+def test_plain_mypy_reads_only_paths_every_project_has(render, database, storage, llm):
     # A plain `uv run mypy` reads `files` from pyproject.toml, which is not per answer: a path that
     # is missing is an error ("Cannot read file"), so only the make target adds migrations/.
-    project = render(database=database, storage=storage)
+    project = render(database=database, storage=storage, llm=llm)
     paths = read_toml(project / "backend/pyproject.toml")["tool"]["mypy"]["files"]
     missing = [p for p in paths if not (project / "backend" / p).exists()]
     assert missing == []
@@ -714,8 +708,8 @@ def compose_config(project: Path) -> dict:
 
 
 @ANSWERS
-def test_compose_services_follow_the_answers(render, database, storage):
-    project = render(database=database, storage=storage)
+def test_compose_services_follow_the_answers(render, database, storage, llm):
+    project = render(database=database, storage=storage, llm=llm)
     compose = yaml.safe_load((project / "backend/compose.yaml").read_text())
     includes = [i if isinstance(i, str) else i["path"] for i in compose.get("include", [])]
     assert includes == (["compose/db/compose.yaml"] if database else []) + (
@@ -770,7 +764,7 @@ def test_env_example_template_is_tracked_by_git_and_not_excluded():
     assert ".env.*" in config["_exclude"] and "!.env.example" in config["_exclude"]
 
 
-@ANSWERS3
+@ANSWERS
 def test_make_targets_are_separated_by_one_blank_line(render, database, storage, llm):
     # `{%- if %}` once ate the blank line before storage-up; the default output must read as before.
     mk = (render(database=database, storage=storage, llm=llm) / "mk/fastapi.mk").read_text()
@@ -838,7 +832,7 @@ def _migrations(project: Path) -> dict[str, dict]:
     return found
 
 
-@ANSWERS3
+@ANSWERS
 def test_migration_chain_is_linear_in_every_variant(render, database, storage, llm):
     project = render(database=database, storage=storage, llm=llm)
     if not database:
