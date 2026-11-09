@@ -106,7 +106,8 @@ DATABASE_FILES = [
     "backend/tests/db.py",
     "backend/tests/test_db.py",
 ]
-# Files that exist in both renders but change with the answer, each with an all-on plain twin.
+# Files that exist in both renders (or in every render with the database) but change with the
+# answer, each with an all-on plain twin: with the gateway, the rendered file equals the plain one.
 TWINS = [
     "backend/src/app/main.py",
     "backend/src/app/settings.py",
@@ -114,6 +115,12 @@ TWINS = [
     "backend/src/app/api/__init__.py",
     "backend/tests/conftest.py",
     "backend/.env.example",
+    "backend/src/app/models.py",
+    "backend/migrations/env.py",
+    "backend/migrations/versions/20261026_0002_llm_budget.py",
+    "backend/migrations/versions/20261026_0003_agent_checkpoints.py",
+    "backend/migrations/versions/20261026_0004_llm_call_details.py",
+    "backend/migrations/versions/20261026_0005_per_user_llm_budget.py",
 ]
 # Words that must not appear in a storage-off project, except in pyproject.toml and uv.lock
 # (the dependency stays declared: `boto3` in the extra, `types-boto3` in the dev group).
@@ -221,10 +228,10 @@ def test_database_is_on_by_default(render):
 
 
 def test_jinja_twins_render_to_their_plain_file(render):
-    # With storage on, the rendered .jinja file is byte-identical to the plain file the in-place
+    # With every part on, the rendered .jinja file is byte-identical to the plain file the in-place
     # loop runs. Also: every .jinja next to a plain file is listed here (no unguarded twin) and
     # every listed twin really has both files.
-    project = render(storage=True)
+    project = render(database=True, storage=True, llm="langchain")
     pairs = sorted(
         p.relative_to(TEMPLATE).as_posix()
         for p in TEMPLATE.rglob("*.jinja")
@@ -293,15 +300,21 @@ def test_conftest_fixtures_follow_the_answers(render, database, storage):
         assert "Settings(_env_file=None, app_env=\"test\")" in conftest
 
 
-@ANSWERS
-def test_no_rendered_python_file_has_an_unused_import(render, database, storage):
-    project = render(database=database, storage=storage)
+@ANSWERS3
+def test_no_rendered_python_file_has_an_unused_import(render, database, storage, llm):
+    project = render(database=database, storage=storage, llm=llm)
     for rel, path in files(project).items():
-        if path.suffix != ".py" or not rel.startswith(("backend/src/", "backend/tests/")):
+        if path.suffix != ".py" or not rel.startswith(
+                ("backend/src/", "backend/tests/", "backend/migrations/")):
             continue
-        tree = ast.parse(path.read_text())
+        text = path.read_text()
+        tree = ast.parse(text)
+        lines = text.splitlines()
         imported = {}
         for node in ast.walk(tree):
+            # An import kept on purpose says so (`# noqa: F401`, as the migrations' pgvector one).
+            if isinstance(node, (ast.Import, ast.ImportFrom)) and "noqa: F401" in lines[node.lineno - 1]:
+                continue
             if isinstance(node, ast.Import):
                 imported.update({(a.asname or a.name).split(".")[0]: node for a in node.names})
             elif isinstance(node, ast.ImportFrom) and node.module != "__future__":
@@ -693,3 +706,92 @@ def test_llm_refuses_an_unknown_framework(render, llm):
     # `maf` arrives with #35; answers are case-sensitive.
     with pytest.raises(ValueError, match="Invalid choice for 'llm'"):
         render(database=True, llm=llm)
+
+
+# The migration chain (#30). Worked out from the files the template ships (the template's revisions
+# 0001 to 0005 on the "template" branch, the project's root on the "app" branch), not from a run.
+CHAIN = {"0001": None, "0002": "0001", "0003": "0002", "0004": "0003", "0005": "0004",
+         "app_root": None}
+GATEWAY_REVISIONS = {"0002", "0003", "0004", "0005"}
+
+
+def _migrations(project: Path) -> dict[str, dict]:
+    """Each migration of a render, read with ast only (nothing is imported or run)."""
+    found = {}
+    for path in sorted((project / "backend/migrations/versions").glob("*.py")):
+        tree = ast.parse(path.read_text())
+        values = {}
+        for node in tree.body:
+            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                values[node.target.id] = ast.literal_eval(node.value)
+        functions = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+        imports = [n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)] + [
+            a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names]
+        found[values["revision"]] = {
+            "down": values["down_revision"], "labels": values["branch_labels"], "imports": imports,
+            "empty": all(len(functions[f].body) == 1 and isinstance(functions[f].body[0], ast.Pass)
+                         for f in ("upgrade", "downgrade")),
+        }
+    return found
+
+
+@ANSWERS3
+def test_migration_chain_is_linear_in_every_variant(render, database, storage, llm):
+    project = render(database=database, storage=storage, llm=llm)
+    if not database:
+        assert not (project / "backend/migrations").exists()
+        return
+    migrations = _migrations(project)
+    # The same revision ids and parents whatever the gateway answer: a project that ran the
+    # gateway's migrations keeps a chain Alembic can follow.
+    assert {rev: m["down"] for rev, m in migrations.items()} == CHAIN
+    assert migrations["0001"]["labels"] == ("template",)
+    assert migrations["app_root"]["labels"] == ("app",)
+    assert sorted(rev for rev, m in migrations.items() if m["down"] is None) == ["0001", "app_root"]
+    for rev in ("0002", "0003", "0004", "0005"):
+        assert migrations[rev]["labels"] is None, rev
+    gateway = llm == "langchain"
+    for rev in GATEWAY_REVISIONS:
+        # Without the gateway the revision stays and does nothing: no table, no app.llm import.
+        assert migrations[rev]["empty"] is not gateway, rev
+        if not gateway:
+            assert not [i for i in migrations[rev]["imports"] if i.startswith("app.")], rev
+    for rev in ("0001", "app_root"):
+        assert migrations[rev]["empty"] is (rev == "app_root"), rev
+
+
+def _string_set(tree: ast.AST, name: str) -> set[str]:
+    for node in ast.walk(tree):
+        value = None
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == name for t in node.targets):
+            value = node.value
+        elif isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") == name:
+            value = node.value
+        if value is not None:
+            if isinstance(value, ast.Call):  # frozenset({...})
+                value = value.args[0]
+            return {e.value for e in value.elts}
+    raise AssertionError(f"{name} not found")
+
+
+def test_llm_none_autogenerate_ignores_every_table_the_gateway_made(render, tmp_path):
+    # A project that ran the gateway and then turned it off keeps its tables; autogenerate must not
+    # propose dropping them. The set env.py ignores equals the tables the gateway's migrations
+    # create plus the library's own four.
+    langchain = render(database=True, storage=True, llm="langchain")
+    created = set()
+    for migration in (langchain / "backend/migrations/versions").glob("*.py"):
+        for node in ast.walk(ast.parse(migration.read_text())):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "create_table"):
+                created.add(node.args[0].value)
+    checkpoint_tables = _string_set(
+        ast.parse((langchain / "backend/src/app/llm/langchain/checkpoints.py").read_text()), "TABLES")
+    assert created == {"llm_call", "llm_spend_day", "llm_spend_user_day"}
+    assert checkpoint_tables == {"checkpoint_migrations", "checkpoints", "checkpoint_blobs",
+                                 "checkpoint_writes"}
+    none = render_other(render, tmp_path, database=True, storage=True, llm="none")
+    env = ast.parse((none / "backend/migrations/env.py").read_text())
+    assert _string_set(env, "LEFTOVER_TABLES") == created | checkpoint_tables
+    # And the version with the gateway has no such list (it imports the library's own).
+    assert "LEFTOVER_TABLES" not in (langchain / "backend/migrations/env.py").read_text()

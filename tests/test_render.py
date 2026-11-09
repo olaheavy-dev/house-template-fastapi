@@ -53,7 +53,9 @@ def test_backend_files_need_no_per_project_values():
     # The exceptions: the Dockerfile's Python image follows the python_version answer (each
     # generated project's Dependabot, which watches every Dockerfile, keeps its digests current),
     # and the files that change with an answer (tests/test_options.py): compose.yaml and the
-    # twinned files. The pinned compose images are plain files under compose/ for Dependabot.
+    # twinned files, among them models.py, migrations/env.py and the four migrations that belong to
+    # the gateway (#30: same revision, empty without it). The pinned compose images are plain files
+    # under compose/ for Dependabot.
     # .python-version holds the python_version answer (#59).
     expected = {Path("Dockerfile.jinja"), Path("compose.yaml.jinja"), Path(".python-version.jinja")} | {
         Path(t.removeprefix("backend/") + ".jinja") for t in TWINS}
