@@ -71,11 +71,15 @@ PUBLIC_NAMES: dict[str, tuple[str, ...]] = {
         "REJECTED",
         "DEFAULT_RETRY_AFTER",
         "ProviderError",
-        "StepLimitReached",
         "outcome",
         "failure_response",
-        "step_limit_response",
         "install_failure_handlers",
+    ),
+    "app.llm.core.steps": (
+        "STEP_LIMIT_REACHED",
+        "DEFAULT_MAX_MODEL_CALLS",
+        "StepLimit",
+        "log_reached",
     ),
     "app.llm.langchain.errors": (
         "KINDS",
@@ -508,7 +512,7 @@ async def test_an_unmapped_model_error_is_a_plain_500_problem_body(
     }
 
 
-async def test_the_agent_step_limit_is_a_422_problem(
+async def test_a_graph_recursion_error_is_a_plain_500_problem_body(
     app: FastAPI, client: httpx.AsyncClient
 ) -> None:
     @app.get("/loop")
@@ -516,12 +520,11 @@ async def test_the_agent_step_limit_is_a_422_problem(
         raise GraphRecursionError("recursion")
 
     response = await client.get("/loop")
-    assert response.status_code == 422
+    assert response.status_code == 500
     assert response.json() == {
         "type": "about:blank",
-        "title": response.json()["title"],
-        "status": 422,
-        "detail": "The assistant couldn't finish this within its step limit.",
+        "title": "Internal Server Error",
+        "status": 500,
         "instance": "/loop",
     }
 

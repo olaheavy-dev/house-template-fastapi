@@ -31,11 +31,9 @@ __all__ = [
     "FailureKind",
     "Outcome",
     "ProviderError",
-    "StepLimitReached",
     "failure_response",
     "install_failure_handlers",
     "outcome",
-    "step_limit_response",
 ]
 
 log = structlog.get_logger()
@@ -114,10 +112,6 @@ class ProviderError(Exception):
         self.retry_after = retry_after
 
 
-class StepLimitReached(Exception):
-    """An agent stopped at its step limit (AGENT_MAX_STEPS) before it finished."""
-
-
 def failure_response(
     request: Request,
     kind: FailureKind | None,
@@ -138,15 +132,6 @@ def failure_response(
     return problem_response(answer.status, detail=answer.detail, instance=path, headers=headers)
 
 
-def step_limit_response(request: Request) -> JSONResponse:
-    log.warning("agent_step_limit", path=request.url.path)
-    return problem_response(
-        422,
-        detail="The assistant couldn't finish this within its step limit.",
-        instance=request.url.path,
-    )
-
-
 async def _provider_error(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, ProviderError)  # noqa: S101 - registered for ProviderError only
     return failure_response(
@@ -154,12 +139,7 @@ async def _provider_error(request: Request, exc: Exception) -> JSONResponse:
     )
 
 
-async def _step_limit(request: Request, exc: Exception) -> JSONResponse:
-    return step_limit_response(request)
-
-
 def install_failure_handlers(app: FastAPI) -> None:
-    """Answers ProviderError and StepLimitReached, whichever adapter raised them. Each adapter adds
-    its own framework's exceptions (app.llm.langchain.errors.install_model_error_handlers)."""
+    """Answers ProviderError, whichever adapter raised it. Each adapter adds its own framework's
+    exceptions (app.llm.langchain.errors.install_model_error_handlers)."""
     app.add_exception_handler(ProviderError, _provider_error)
-    app.add_exception_handler(StepLimitReached, _step_limit)

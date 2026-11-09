@@ -21,7 +21,7 @@ from structlog.testing import capture_logs
 
 pytestmark = pytest.mark.anyio
 
-EVENTS = {"llm_error", "agent_step_limit"}
+EVENTS = {"llm_error", "agent_step_limit", "step_limit_reached"}
 
 
 async def logged(
@@ -85,9 +85,10 @@ async def test_an_unmapped_failure_logs_an_error_with_the_exception_and_no_statu
     ]
 
 
-async def test_the_agent_step_limit_logs_a_warning_with_the_path(
+async def test_a_recursion_error_logs_no_step_limit_event(
     app: FastAPI, client: httpx.AsyncClient
 ) -> None:
-    assert await logged(app, client, GraphRecursionError("recursion")) == [
-        {"event": "agent_step_limit", "log_level": "warning", "path": "/fail"}
-    ]
+    # A GraphRecursionError is a bug: a plain 500 with no llm_error or step-limit event. The old
+    # agent_step_limit event is gone; step_limit_reached is logged by the agent itself, at its
+    # last call (tests/test_llm_steps.py).
+    assert await logged(app, client, GraphRecursionError("recursion")) == []

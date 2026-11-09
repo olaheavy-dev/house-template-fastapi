@@ -39,7 +39,7 @@ from langchain_openai.chat_models.base import (
 )
 from langgraph.errors import GraphRecursionError
 
-from app.llm.core.errors import REJECTED, FailureKind, ProviderError, StepLimitReached
+from app.llm.core.errors import REJECTED, FailureKind, ProviderError
 from app.llm.langchain.errors import KINDS, kind_of, model_error, retry_after_of
 
 K = FailureKind
@@ -179,6 +179,6 @@ def test_retry_after_is_read_from_the_providers_response(
 
 
 def test_the_app_answers_the_neutral_and_langchains_failures(app: FastAPI) -> None:
-    assert {ProviderError, StepLimitReached, ModelError, GraphRecursionError} <= set(
-        app.exception_handlers
-    )
+    assert {ProviderError, ModelError} <= set(app.exception_handlers)
+    # A GraphRecursionError is a bug, not a limit: it has no handler and is a plain 500.
+    assert GraphRecursionError not in app.exception_handlers

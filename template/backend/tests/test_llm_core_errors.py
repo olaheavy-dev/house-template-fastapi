@@ -19,7 +19,6 @@ from app.llm.core.errors import (
     FailureKind,
     Outcome,
     ProviderError,
-    StepLimitReached,
     outcome,
 )
 from tests.test_llm_core import FRAMEWORKS
@@ -195,20 +194,12 @@ async def test_a_mapped_provider_error_logs_its_source_as_the_kind(
     ]
 
 
-async def test_the_step_limit_is_a_422_problem(app: FastAPI, client: httpx.AsyncClient) -> None:
-    @app.get("/loop")
-    async def loop() -> None:
-        raise StepLimitReached
+def test_the_step_limit_has_no_error_or_response_any_more() -> None:
+    # An agent now answers at its limit (app/llm/core/steps.py); nothing raises or answers a 422.
+    import app.llm.core.errors as errors
 
-    response = await client.get("/loop")
-    assert response.status_code == 422
-    assert response.json() == {
-        "type": "about:blank",
-        "title": response.json()["title"],
-        "status": 422,
-        "detail": "The assistant couldn't finish this within its step limit.",
-        "instance": "/loop",
-    }
+    assert not hasattr(errors, "StepLimitReached")
+    assert not hasattr(errors, "step_limit_response")
 
 
 def test_importing_the_core_errors_loads_no_framework() -> None:

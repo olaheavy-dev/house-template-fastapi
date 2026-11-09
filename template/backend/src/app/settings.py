@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 from decimal import Decimal
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -111,9 +111,10 @@ class Settings(BaseSettings):
     # means no per-user cap; set it whenever users can trigger model calls, so one caller can't
     # spend the whole day's budget.
     llm_user_daily_budget_usd: Decimal | None = Field(default=None, gt=0)
-    # Most steps (model calls and tool runs) an agent may take for one request. LangGraph's own
-    # default is 10,007.
-    agent_max_steps: int = Field(default=25, gt=0)
+    # Most model calls an agent may make in one run. The last one is made without tools, so the
+    # model writes a final answer (app/llm/core/steps.py). The old AGENT_MAX_STEPS counted
+    # LangGraph steps: its default of 25 allowed 13 calls.
+    agent_max_model_calls: int = Field(default=13, gt=0)
     # Connections for agent checkpoints (LangGraph), opened only while agents run.
     agent_pool_size: int = Field(default=4, gt=0)
 
@@ -127,6 +128,24 @@ class Settings(BaseSettings):
     # Leave prompts and answers out of traces when they may hold personal data.
     langsmith_hide_inputs: bool = False
     langsmith_hide_outputs: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def no_removed_agent_max_steps(cls, data: Any) -> Any:
+        """Refuse to start while the old AGENT_MAX_STEPS is set (environment or backend/.env):
+        keeping its number would silently change what it limits (steps became model calls)."""
+        # Environment names are matched as Settings matches them: without regard to case (this
+        # class sets no env_prefix and is not case_sensitive), so agent_max_steps=5 counts too.
+        if "agent_max_steps" in {name.casefold() for name in os.environ} or (
+            isinstance(data, dict) and "agent_max_steps" in {str(k).casefold() for k in data}
+        ):
+            raise ValueError(
+                "AGENT_MAX_STEPS was replaced by AGENT_MAX_MODEL_CALLS. Delete AGENT_MAX_STEPS "
+                "from backend/.env and from every environment the app runs in. The old value V "
+                "allowed ceil(V / 2) model calls (25 allowed 13); the new setting counts model "
+                "calls and defaults to 13, so set it only to change that."
+            )
+        return data
 
     @model_validator(mode="after")
     def no_local_defaults_in_production(self) -> Settings:
