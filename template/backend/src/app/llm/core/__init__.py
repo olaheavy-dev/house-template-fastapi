@@ -6,7 +6,7 @@ drives its Meter), the llm.* metrics (metrics.py), and embeddings batched and me
 (embeddings.py) with OpenAI's call behind them (openai_embeddings.py), the prompt and its version
 hash (prompts.py), personal-data redaction (redaction.py; the project's detector list is
 app/llm/redaction_rules.py) and the spend report on the llm_call table (report.py). Nothing here
-imports a model framework or a provider SDK except openai_embeddings.py, which imports openai (lint-imports
-enforces it, llm-contracts.toml); each framework's adapter converts its own data to these types at
-its edge (app/llm/langchain/ for LangChain).
+imports a model framework or a provider SDK except openai_embeddings.py, which imports openai
+(lint-imports enforces it, llm-contracts.toml); each framework's adapter converts its own data to
+these types at its edge (app/llm/langchain/ for LangChain).
 """
