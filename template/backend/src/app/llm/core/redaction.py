@@ -28,6 +28,7 @@ Redactor on the outgoing messages before the budget reservation (app/llm/langcha
 from __future__ import annotations
 
 import re
+import unicodedata
 from bisect import bisect_left, bisect_right
 from collections import Counter
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
@@ -147,10 +148,11 @@ async def redaction_scope(
     *, known: Mapping[str, Sequence[str]] | None = None, allow: Sequence[str] = ()
 ) -> AsyncIterator[Scope]:
     """Sets what the app knows for the calls made inside the block (not for other requests)."""
-    copied = {
-        kind: _check_strings(values, f"known values for {kind}")
-        for kind, values in (known or {}).items()
-    }
+    copied: dict[str, list[str]] = {}
+    for kind, values in (known or {}).items():
+        # The kind first: its name goes into the message below, and a bad one may be a value.
+        name = _check_kind(kind)
+        copied[name] = _check_strings(values, f"known values for {name}")
     scope = Scope(known=copied, allow=_check_strings(allow, "allow"))
     token = _scope.set(scope)
     try:
@@ -238,16 +240,20 @@ class RegexDetector:
 
 
 def _normal(value: str) -> str:
-    return " ".join(value.split()).casefold()
+    return " ".join(unicodedata.normalize("NFC", value).split()).casefold()
 
 
-def _value_pattern(value: str) -> re.Pattern[str] | None:
-    """Matches `value` ignoring case and any run of whitespace, not inside a longer word."""
-    words = value.split()
-    if not words:
-        return None
-    body = r"\s+".join(re.escape(word) for word in words)
-    return re.compile(rf"(?<!\w){body}(?!\w)", re.IGNORECASE)
+def _value_patterns(value: str) -> list[re.Pattern[str]]:
+    """Patterns matching `value` ignoring case and any run of whitespace, not inside a longer
+    word, written in either Unicode normal form (NFC, "é" as one character, or NFD, "e" and a
+    combining accent). None for a value of only whitespace."""
+    bodies: dict[str, None] = {}  # in order, without repeats (an ASCII value has one form)
+    for form in ("NFC", "NFD"):
+        words = unicodedata.normalize(form, value).split()
+        if not words:
+            return []
+        bodies[r"\s+".join(re.escape(word) for word in words)] = None
+    return [re.compile(rf"(?<!\w){body}(?!\w)", re.IGNORECASE) for body in bodies]
 
 
 def _union(spans: list[tuple[int, int]]) -> tuple[list[int], list[int]]:
@@ -311,12 +317,12 @@ class Redactor:
         raise RedactionFailed
 
     def _redact(self, texts: list[str], scope: Scope) -> Redacted:
-        allowed = [p for value in scope.allow if (p := _value_pattern(value)) is not None]
+        allowed = [p for value in scope.allow for p in _value_patterns(value)]
         named = [
             (kind, value, pattern)
             for kind, values in scope.known.items()
             for value in values
-            if (pattern := _value_pattern(value)) is not None
+            for pattern in _value_patterns(value)
         ]
         used = {(kind, int(number)) for text in texts for kind, number in _LITERAL.findall(text)}
         next_number: Counter[str] = Counter()

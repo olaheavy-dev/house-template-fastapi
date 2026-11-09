@@ -140,6 +140,50 @@ def test_a_card_number_needs_a_right_luhn_check_digit() -> None:
     assert one(wrong).texts == (wrong,)
 
 
+def _grouped(number: str) -> str:
+    if len(number) == 15:  # American Express: 4-6-5
+        return f"{number[:4]} {number[4:10]} {number[10:]}"
+    return " ".join(number[i : i + 4] for i in range(0, len(number), 4))
+
+
+# Test numbers that pass Luhn (checked by hand-running the algorithm on each; the Luhn check of
+# 4111 1111 1111 1111 is worked out at the top of this file).
+CARDS = {
+    "Visa": "4111111111111111",
+    "Mastercard": "5555555555554444",
+    "Mastercard 2-series": "2223003122003222",
+    "American Express": "378282246310005",
+    "Discover": "6011111111111117",
+    "Maestro": "6759649826438453",
+    "Maestro 5018": "5018123412341207",
+}
+
+
+@pytest.mark.parametrize("brand", list(CARDS))
+@pytest.mark.parametrize(
+    "after", [" 12/27", " 123", " exp 12/27", ", 12/27 cvv 123", " 1 payment", ""]
+)
+def test_a_card_is_found_in_every_layout_and_with_an_expiry_date_or_security_code(
+    brand: str, after: str
+) -> None:
+    number = CARDS[brand]
+    for written in (number, _grouped(number), _grouped(number).replace(" ", "-")):
+        assert one(f"Card {written}{after}").texts == (f"Card [CARD_1]{after}",), (brand, written)
+
+
+def test_a_number_that_does_not_start_like_a_card_is_not_one() -> None:
+    # 1234567890128 passes Luhn: from the right the digits 8,2,1,0,9,8,7,6,5,4,3,2,1 give
+    # 8, 2*2=4, 1, 0*2=0, 9, 8*2=16->7, 7, 6*2=12->3, 5, 4*2=8, 3, 2*2=4, 1 = 60, a multiple of 10.
+    # It starts 12, which no card issuer uses, so a meter number like it is left alone.
+    text = "MPAN 1234567890128"
+    assert one(text).texts == (text,)
+
+
+def test_a_sixteen_digit_reference_that_passes_luhn_and_is_followed_by_a_date_is_removed() -> None:
+    # The cost of finding "4111 1111 1111 1111 12/27": it errs towards removing.
+    assert one("Ref 4111111111111111 12/03/2027").texts == ("Ref [CARD_1] 12/03/2027",)
+
+
 def test_an_nhs_number_needs_its_word_and_a_right_check_digit() -> None:
     assert one("NHS number 943 476 5919").texts == ("NHS number [NHS_1]",)
     assert one("My nhs no. 9434765919").texts == ("My nhs no. [NHS_1]",)
@@ -187,11 +231,42 @@ def test_reference_numbers_and_words_that_look_like_identifiers_are_left_alone()
         "Rent £968 157 655 500 575 in total",  # a grouped amount, fifteen digits
         "Total 1 234 567 890 123 456 over the term",
         "Order number 0000000000000000000",  # one repeated digit passes Luhn, but is not a card
+        # Seventeen fours: 9 undoubled digits give 36 and 8 doubled ones 8 each, so 36 + 64 = 100
+        # passes Luhn, and 4 is Visa's prefix, so only the repeated-digit rule leaves it alone.
+        "Ref 44444444444444444",
         "Title number LN123456 a freehold title",  # a lone "a" is a word, not a NINO suffix
         "Unit AB 12 34 56 a and b",
-        "Call 020 7946 0321 5 times",  # more digits after a phone: not found, a known miss
     ):
         assert one(text).texts == (text,), text
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # A house or flat number before a phone number is ordinary text.
+        ("Flat 2 07700 900123", "Flat 2 [PHONE_1]"),
+        ("Unit 5 020 7946 0321", "Unit 5 [PHONE_1]"),
+        ("Call 2 07700 900123 now", "Call 2 [PHONE_1] now"),
+        ("Flat 10 +44 7700 900123", "Flat 10 [PHONE_1]"),
+        ("12 Example Road 0113 496 0000", "12 Example Road [PHONE_1]"),
+        # A count or a house number after one, and two phones separated only by a space.
+        ("Call 07700 900123 3 times", "Call [PHONE_1] 3 times"),
+        ("Ring 07700 900123 12 Example Road", "Ring [PHONE_1] 12 Example Road"),
+        ("020 7946 0321 5", "[PHONE_1] 5"),
+        ("07700 900123 07700 900456", "[PHONE_1] [PHONE_2]"),
+        # Any number of them in a row.
+        (
+            "07700 900123 07700 900456 07700 900789",
+            "[PHONE_1] [PHONE_2] [PHONE_3]",
+        ),
+        # Not after a digit and a hyphen: that is one longer number.
+        ("Flat 2-07700 900123", "Flat 2-07700 900123"),
+        # Number-like runs that are not phones stay (the 21-digit meter number written in groups).
+        ("S 10 123 456 12 3456 7890 123", "S 10 123 456 12 3456 7890 123"),
+    ],
+)
+def test_a_phone_number_after_or_before_other_numbers(text: str, expected: str) -> None:
+    assert one(text).texts == (expected,)
 
 
 def test_no_generated_reference_or_grouped_amount_is_changed() -> None:
@@ -491,6 +566,53 @@ def test_the_failure_is_a_503_problem_with_no_value_in_it() -> None:
     assert response.headers["content-type"] == "application/problem+json"
     assert "priya" not in response.text
     assert "nothing was sent" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_a_value_that_starts_later_and_reaches_further_extends_the_union() -> None:
+    # known "Flat 3, 07700" is 0-13 and the phone is 8-20: the phone reaches further, so the union
+    # must run to 20 and not stop at 13 (which would leave " 900123" in the clear).
+    async with redaction_scope(known={"ADDRESS": ["Flat 3, 07700"]}):
+        result = one("Flat 3, 07700 900123 ok")
+    assert result.texts == ("[ADDRESS_1] ok",)
+    assert result.mapping == {"[ADDRESS_1]": "Flat 3, 07700 900123"}
+
+
+@pytest.mark.anyio
+async def test_a_chain_of_three_overlapping_values_is_one_union() -> None:
+    # known 0-13, phone 8-20, known 14-23: the first and last do not overlap, only through the
+    # phone. The longest member (the first known value, 13 characters) gives the kind.
+    known = {"ADDRESS": ["Flat 3, 07700"], "NOTE": ["900123 ok"]}
+    async with redaction_scope(known=known):
+        result = one("Flat 3, 07700 900123 ok")
+    assert result.texts == ("[ADDRESS_1]",)
+    assert result.mapping == {"[ADDRESS_1]": "Flat 3, 07700 900123 ok"}
+    assert result.counts == {"ADDRESS": 1}
+
+
+@pytest.mark.anyio
+async def test_a_known_value_is_found_in_either_unicode_normal_form() -> None:
+    composed, decomposed = "Jos\u00e9 Silva", "Jose\u0301 Silva"
+    for known, text in ((composed, decomposed), (decomposed, composed), (composed, composed)):
+        async with redaction_scope(known={"NAME": [known]}, allow=[]):
+            result = one(f"Dear {text}, hello")
+        assert result.texts == ("Dear [NAME_1], hello",), (known, text)
+        assert result.mapping == {"[NAME_1]": known}  # restored in the caller's form
+    async with redaction_scope(allow=[decomposed]):
+        assert one(f"Agent {composed} on 07700 900123").texts[0].startswith(f"Agent {composed} on")
+
+
+@pytest.mark.anyio
+async def test_a_bad_kind_or_a_single_string_never_puts_a_value_in_the_error() -> None:
+    for known in (
+        {"Priya Shah": "Priya Shah"},
+        {"Priya Shah": ["Priya Shah"]},
+        {"NAME": "Priya Shah"},
+    ):
+        with pytest.raises((TypeError, ValueError)) as raised:
+            async with redaction_scope(known=known):
+                pass  # pragma: no cover
+        assert "Priya" not in str(raised.value), known
 
 
 # --- what a caller or a detector may hand in ----------------------------------------------

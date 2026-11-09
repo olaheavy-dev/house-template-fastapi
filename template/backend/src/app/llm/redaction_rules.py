@@ -29,9 +29,45 @@ def _uk_phone(matched: str) -> bool:
     return len(digits) == 11 and digits[1] in "1237"
 
 
+def _card_prefix_ok(digits: str) -> bool:
+    """Whether the number starts like a card issuer's range: Visa 4; Mastercard 51-55 and
+    2221-2720; American Express 34 and 37; Discover 6011, 644-649 and 65; Diners Club 30, 36, 38
+    and 39; JCB 3528-3589; UnionPay 62; Maestro 5018, 5020, 5038, 5893, 6304, 6759 and 6761-6763
+    (the UK ones among them). Taken from the Wikipedia summary of the issuers' ranges
+    (https://en.wikipedia.org/wiki/Payment_card_number, read 9 Nov 2026); not checked against the
+    schemes' own documents. A meter number or order number passes Luhn about 1 time in 10 and
+    starts like a card about half of those, so this halves the false positives; it does not remove
+    them. A number in a range not listed here is not found."""
+    two, three, four = int(digits[:2]), int(digits[:3]), int(digits[:4])
+    return (
+        digits[0] == "4"
+        or 51 <= two <= 55
+        or 2221 <= four <= 2720
+        or two in (34, 37, 30, 36, 38, 39, 62, 65)
+        or four == 6011
+        or 644 <= three <= 649
+        or 3528 <= four <= 3589
+        or four in (5018, 5020, 5038, 5893, 6304, 6759)
+        or 6761 <= four <= 6763
+    )
+
+
 def _card_valid(matched: str) -> bool:
-    digits = [c for c in matched if c.isdigit()]
-    return len(set(digits)) > 1 and luhn_valid(matched)
+    digits = "".join(c for c in matched if c.isdigit())
+    return len(set(digits)) > 1 and luhn_valid(digits) and _card_prefix_ok(digits)
+
+
+# A UK phone number as it is usually written (not with arbitrary spaces): 07700900123, 07700 900123,
+# 07700 900 123, 0113 496 0000, 020 7946 0321, and the +44 forms.
+_STD_PHONE = (
+    r"(?:0\d{10}|0\d{4} \d{6}|0\d{4} \d{3} \d{3}|0\d{3} \d{3} \d{4}|0\d{2} \d{4} \d{4}"
+    r"|\+44 ?\d{4} ?\d{6}|\+44 ?\d{2} ?\d{4} ?\d{4}|\+44 ?\d{3} ?\d{3} ?\d{4})"
+)
+_PHONE_CORE = r"(?:\+44[ -]?(?:\(0\)[ -]?)?|\(?0)\d(?:\)?[ -]?\d){9}"
+# After a phone number: no more digits, not even after a hyphen; and after a space no digit unless
+# what follows is a number of one to three digits (a count, a house number), or the start of
+# another standard phone number (so a row of phone numbers separated by spaces is found).
+_PHONE_AHEAD = r"(?!-?\d)(?! (?!\d{1,3}(?![ -]?\d))(?!" + _STD_PHONE + r")\d)"
 
 
 _MONTH = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]{0,6}\.?"
@@ -43,9 +79,18 @@ DETECTORS: tuple[Detector, ...] = (
     ),
     # UK numbers starting 01, 02, 03 or 07: 0 or +44 (with an optional (0)), then ten digits that
     # may be spaced, hyphenated or bracketed. The first digit after the prefix is checked below.
+    # Not straight after a digit and a space or hyphen (a longer run of digits, such as a reference
+    # or an amount), except that after a digit and a space a number written in a standard UK
+    # grouping still counts ("Flat 2 07700 900123"); and not before more digits (see
+    # _PHONE_AHEAD).
     RegexDetector(
         "PHONE",
-        r"(?<![\w+])(?<!\d[ -])(?:\+44[ -]?(?:\(0\)[ -]?)?|\(?0)\d(?:\)?[ -]?\d){9}(?![ -]?\d)",
+        r"(?<![\w+])(?<!\d[ -])"
+        + _PHONE_CORE
+        + _PHONE_AHEAD
+        + r"|(?<=\d )"
+        + _STD_PHONE
+        + _PHONE_AHEAD,
         check=_uk_phone,
     ),
     # Two letters, six digits, a final letter A to D: upper case, or lower case straight after the
@@ -74,14 +119,24 @@ DETECTORS: tuple[Detector, ...] = (
         r"(?<!\d)(?<!\d[ -])\d{4}[ ]?\d{4}(?![ -]?\d)",
         before=context(r"\bacc(?:ount)?\b"),
     ),
-    # 13 to 19 digits in one run, or the usual groupings (4-4-4-4, optionally a last group of up to
-    # three digits, and Amex 4-6-5), passing Luhn. Other groupings (3-3-3-3-3, 4-4-4-4-4) are not
-    # cards. A number of one repeated digit is refused: 19 zeros pass Luhn.
+    # 13 to 19 digits in one run, or the usual groupings (4-4-4-4, Amex 4-6-5), passing Luhn and
+    # starting like an issuer's range. Other groupings (3-3-3-3-3, 4-4-4-4-4) are not cards. A
+    # number of one repeated digit is refused. Two rules of one kind:
+    # - the number alone, which may be followed by an expiry date or a security code (a space and a
+    #   digit group is refused only when it is a fourth-and-later group of four, or the start of a
+    #   longer grouped number), so "4111 1111 1111 1111 12/27" and "... 123" are found, and so is
+    #   a 16-digit reference followed by a date (it errs towards removing);
+    # - the 4-4-4-4 grouping with a last group of one to three digits (a 17 to 19 digit card).
     RegexDetector(
         "CARD",
         r"(?<!\d)(?<!\d[ -])"
-        r"(?:\d{13,19}|\d{4}(?:[ -]\d{4}){3}(?:[ -]\d{1,3})?|\d{4}[ -]\d{6}[ -]\d{5})"
-        r"(?![ -]?\d)",
+        r"(?:\d{13,19}|\d{4}(?:[ -]\d{4}){3}|\d{4}[ -]\d{6}[ -]\d{5})"
+        r"(?!-?\d)(?! \d{4})(?! \d{1,3}[ -]\d)",
+        check=_card_valid,
+    ),
+    RegexDetector(
+        "CARD",
+        r"(?<!\d)(?<!\d[ -])\d{4}(?:[ -]\d{4}){3}[ -]\d{1,3}(?![ -]?\d)",
         check=_card_valid,
     ),
     RegexDetector(
