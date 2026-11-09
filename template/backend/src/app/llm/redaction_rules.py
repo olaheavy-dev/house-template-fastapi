@@ -79,7 +79,7 @@ DETECTORS: tuple[Detector, ...] = (
         "DOB",
         r"(?<!\d)(?:\d{1,2}([/.-])\d{1,2}\1(?:\d{4}|\d{2})"
         r"|\d{4}-\d{2}-\d{2}"
-        rf"|\d{{1,2}}(?:st|nd|rd|th)?[ ]+(?i:{_MONTH})[ ]+\d{{4}})(?!\d)",
+        r"|\d{1,2}(?:st|nd|rd|th)?[ ]+(?i:" + _MONTH + r")[ ]+\d{4})(?!\d)",
         before=context(r"date\s+of\s+birth|\bdob\b|\bborn\b"),
     ),
 )
