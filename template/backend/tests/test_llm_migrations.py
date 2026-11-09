@@ -63,18 +63,16 @@ def versions_in(url: str) -> set[str]:
 
 
 def test_downgrade_to_0001_removes_the_gateway_tables(database_url: str) -> None:
-    # The README says to drop the gateway's tables with `alembic downgrade 0001`. It removes the
-    # template's revisions above 0001. This test cannot know your own migrations: one that
-    # `depends_on` a gateway revision is downgraded too, and the project's other migrations stay.
+    # The README says to drop the gateway's tables with `alembic downgrade 0001`. What is
+    # guaranteed: 0001 stays stamped, no gateway revision stays stamped, and the tables are gone.
+    # Not guaranteed, so not asserted: that your own migrations stay stamped. One that declares
+    # `depends_on` a gateway revision counts as its child in Alembic's graph and is downgraded too.
     config = db.alembic_config(database_url)
-    before = versions_in(database_url)
     try:
         command.downgrade(config, "0001")
         after = versions_in(database_url)
         assert "0001" in after
-        # Versions that are not the template's (app_root and your own) are as they were.
-        template = {"0001", "0002", "0003", "0004", "0005"}
-        assert after - template == before - template
+        assert not after & {"0002", "0003", "0004", "0005"}
         assert not tables(database_url) & GATEWAY_TABLES
     finally:
         command.upgrade(config, "heads")
