@@ -1,8 +1,9 @@
 """The agent step limit for LangChain's create_agent (the rule is app/llm/core/steps.py).
 
 StepLimitMiddleware counts the model calls of one run. On every call before the last it changes
-nothing. On the last allowed call it offers the model no tools (`request.override(tools=[])`), so
-the model writes a final answer, removes any tool call the model still made, logs
+nothing. On the last allowed call it offers the model no tools (final_request: `tools=[]`, or
+tool_choice none for Anthropic with a ProviderStrategy), so the model writes a final answer,
+removes any tool call the model still made, logs
 `step_limit_reached` and sets the `step_limit_reached` flag on the result:
 
     state = await agent.ainvoke({"messages": [...]}, config=...)
@@ -31,13 +32,15 @@ from langchain.agents.middleware import (
     ModelResponse,
 )
 from langchain.agents.middleware.types import OmitFromSchema
+from langchain.agents.structured_output import ToolStrategy
+from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.channels.untracked_value import UntrackedValue
 from langgraph.types import Command
 
 from app.llm.core.steps import STEP_LIMIT_REACHED, StepLimit, log_reached
 
-__all__ = ["StepLimitMiddleware", "recursion_limit", "step_limit_reached"]
+__all__ = ["StepLimitMiddleware", "final_request", "recursion_limit", "step_limit_reached"]
 
 _RUN_MODEL_CALLS = "run_model_calls"
 _NOT_IN_INPUT = OmitFromSchema(input=True, output=False)
@@ -73,6 +76,26 @@ def _overrides(middleware: AgentMiddleware[Any, Any, Any], hook: str) -> int:
     changed = getattr(cls, hook) is not getattr(base, hook)
     changed_async = getattr(cls, f"a{hook}") is not getattr(base, f"a{hook}")
     return int(changed or changed_async)
+
+
+def final_request(request: ModelRequest[Any]) -> ModelRequest[Any]:
+    """The request for the last call: the model may not call a tool.
+
+    Offering no tools (`tools=[]`) was checked against the real APIs, after a history of tool
+    calls and results: OpenAI (a plain agent, a ToolStrategy and a ProviderStrategy) and Anthropic
+    (a plain agent and a ToolStrategy) answered. Anthropic with a ProviderStrategy refused it with
+    a 400 ("Invalid `signature` in `thinking` block"), so there the tools stay bound and
+    tool_choice {"type": "none"} (https://platform.claude.com/docs/en/agents-and-tools/tool-use/
+    define-tools) forbids calling them. create_agent passes only model_settings to bind_tools
+    when a ProviderStrategy is used, so the choice goes there."""
+    if (
+        isinstance(request.model, ChatAnthropic)
+        and request.response_format is not None
+        and not (isinstance(request.response_format, ToolStrategy))
+    ):
+        settings = {**request.model_settings, "tool_choice": {"type": "none"}}
+        return request.override(model_settings=settings)
+    return request.override(tools=[])
 
 
 def _calls_made(request: ModelRequest[Any]) -> int:
@@ -126,7 +149,7 @@ class StepLimitMiddleware(AgentMiddleware[StepLimitState, Any, Any]):
         self._check(made)
         if self.limit.offers_tools(made):
             return self._after(handler(request), made, final=False)
-        return self._after(handler(request.override(tools=[])), made, final=True)
+        return self._after(handler(final_request(request)), made, final=True)
 
     async def awrap_model_call(
         self,
@@ -137,7 +160,7 @@ class StepLimitMiddleware(AgentMiddleware[StepLimitState, Any, Any]):
         self._check(made)
         if self.limit.offers_tools(made):
             return self._after(await handler(request), made, final=False)
-        return self._after(await handler(request.override(tools=[])), made, final=True)
+        return self._after(await handler(final_request(request)), made, final=True)
 
     def _check(self, made: int) -> None:
         # The last call ends the run (see _after), so this is a bug if it ever happens.

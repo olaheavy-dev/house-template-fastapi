@@ -27,13 +27,15 @@ import pytest
 from fastapi import FastAPI
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
-from langchain.agents.structured_output import ToolStrategy
+from langchain.agents.structured_output import ProviderStrategy, ToolStrategy
+from langchain_anthropic import ChatAnthropic
 from langchain_core.exceptions import ModelRateLimitError, ModelTimeoutError
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool
+from langchain_openai import ChatOpenAI
 from langgraph.errors import GraphRecursionError
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from structlog.testing import capture_logs
@@ -669,3 +671,41 @@ async def test_the_model_is_never_called_once_the_limit_is_used_up() -> None:
     with pytest.raises(RuntimeError, match="limit"):
         await middleware.awrap_model_call(request, handler)
     assert called == []
+
+
+# --- the shape of the last request per provider (proved against the real APIs, #34) ------
+
+
+def last_request(model: Any, response_format: Any) -> Any:
+    tool = StructuredTool.from_function(lambda a: a, name="add", description="Add.")
+    request: ModelRequest = ModelRequest(
+        model=model, messages=[], tools=[tool], response_format=response_format
+    )
+    return steps.final_request(request)
+
+
+def test_the_last_request_offers_no_tools_for_a_plain_agent_and_a_tool_strategy() -> None:
+    # Real calls: OpenAI (gpt-6-luna) and Anthropic (claude-haiku-5-5) both answered a request
+    # with no tools after a tool_use/tool_result history, with no format and with ToolStrategy.
+    anthropic = ChatAnthropic(model="claude-haiku-5-5", api_key=SecretStr("k"))
+    for model in (anthropic, ChatOpenAI(model="gpt-6-luna", api_key=SecretStr("k"))):
+        for response_format in (None, ToolStrategy(schema=Answer)):
+            request = last_request(model, response_format)
+            assert request.tools == []
+            assert "tool_choice" not in request.model_settings
+
+
+def test_openai_with_a_provider_strategy_still_gets_no_tools() -> None:
+    # Real call: OpenAI answered a ProviderStrategy request with `tools: []`.
+    model = ChatOpenAI(model="gpt-6-luna", api_key=SecretStr("k"))
+    assert last_request(model, ProviderStrategy(schema=Answer)).tools == []
+
+
+def test_anthropic_with_a_provider_strategy_keeps_the_tools_and_forbids_calling_them() -> None:
+    # Real call: Anthropic answered a ProviderStrategy request that had `tools: []` after a
+    # tool_use history with 400 "Invalid `signature` in `thinking` block". Keeping the tools
+    # bound and setting tool_choice {"type": "none"} (Anthropic's documented value) avoids it.
+    model = ChatAnthropic(model="claude-haiku-5-5", api_key=SecretStr("k"))
+    request = last_request(model, ProviderStrategy(schema=Answer))
+    assert [t.name for t in request.tools] == ["add"]
+    assert request.model_settings["tool_choice"] == {"type": "none"}
