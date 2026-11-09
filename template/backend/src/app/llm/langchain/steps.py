@@ -24,6 +24,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Annotated, Any, NotRequired
 
+from langchain.agents.factory import _supports_provider_strategy
 from langchain.agents.middleware import (
     AgentMiddleware,
     AgentState,
@@ -32,8 +33,7 @@ from langchain.agents.middleware import (
     ModelResponse,
 )
 from langchain.agents.middleware.types import OmitFromSchema
-from langchain.agents.structured_output import ToolStrategy
-from langchain_anthropic import ChatAnthropic
+from langchain.agents.structured_output import ProviderStrategy, ToolStrategy
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.channels.untracked_value import UntrackedValue
 from langgraph.types import Command
@@ -81,21 +81,40 @@ def _overrides(middleware: AgentMiddleware[Any, Any, Any], hook: str) -> int:
 def final_request(request: ModelRequest[Any]) -> ModelRequest[Any]:
     """The request for the last call: the model may not call a tool.
 
-    Offering no tools (`tools=[]`) was checked against the real APIs, after a history of tool
-    calls and results: OpenAI (a plain agent, a ToolStrategy and a ProviderStrategy) and Anthropic
-    (a plain agent and a ToolStrategy) answered. Anthropic with a ProviderStrategy refused it with
-    a 400 ("Invalid `signature` in `thinking` block"), so there the tools stay bound and
-    tool_choice {"type": "none"} (https://platform.claude.com/docs/en/agents-and-tools/tool-use/
-    define-tools) forbids calling them. create_agent passes only model_settings to bind_tools
-    when a ProviderStrategy is used, so the choice goes there."""
-    if (
-        isinstance(request.model, ChatAnthropic)
-        and request.response_format is not None
-        and not (isinstance(request.response_format, ToolStrategy))
-    ):
+    Offering no tools (`tools=[]`) was run against the real APIs on 9 Nov 2026 (OpenAI gpt-6-luna,
+    Anthropic claude-haiku-5-5), in three cases each, a plain agent, a ToolStrategy and a
+    ProviderStrategy, with a second run on the saved thread: it was answered everywhere except
+    Anthropic with a ProviderStrategy, where the request got a 400 whose message was about a
+    thinking block's signature (the cause was not isolated). There the tools stay bound and
+    tool_choice {"type": "none"} (Anthropic's documented value) forbids calling them; that was
+    answered. AutoStrategy and other providers were not run against real APIs.
+
+    create_agent passes only model_settings to bind_tools when it uses a ProviderStrategy, and
+    passes tool_choice itself otherwise, so the choice goes in model_settings and only on that path.
+    An AutoStrategy (or a bare schema) is resolved here as create_agent resolves it."""
+    if _anthropic(request.model) and _uses_provider_strategy(request):
         settings = {**request.model_settings, "tool_choice": {"type": "none"}}
         return request.override(model_settings=settings)
     return request.override(tools=[])
+
+
+def _anthropic(model: Any) -> bool:
+    # Not an isinstance check: the provider SDK packages are imported only by the gateway
+    # (lint-imports). ChatAnthropic's _llm_type is "anthropic-chat".
+    return getattr(model, "_llm_type", None) == "anthropic-chat"
+
+
+def _uses_provider_strategy(request: ModelRequest[Any]) -> bool:
+    """Whether create_agent will bind the model for a ProviderStrategy (langchain.agents.factory,
+    _get_bound_model): an explicit one, or an AutoStrategy or bare schema on a model whose profile
+    says it has native structured output."""
+    response_format = request.response_format
+    if response_format is None or isinstance(response_format, ToolStrategy):
+        return False
+    if isinstance(response_format, ProviderStrategy):
+        return True
+    # AutoStrategy, or a raw schema create_agent turns into one.
+    return bool(_supports_provider_strategy(request.model, tools=request.tools))
 
 
 def _calls_made(request: ModelRequest[Any]) -> int:
@@ -118,19 +137,21 @@ def _plain(message: AIMessage) -> AIMessage:
 
 def _answer_without_tool_calls(response: ModelResponse[Any]) -> ModelResponse[Any]:
     """A model that ignores an empty tool list may still ask for a tool, which would send the run
-    round the loop again. Remove the request, so the message is a plain answer. A structured
-    answer (a ToolStrategy's own tool call) and its tool message are left as they are."""
-    if response.structured_response is not None or any(
-        isinstance(message, ToolMessage) for message in response.result
-    ):
+    round the loop again. Remove the request, so the message is a plain answer. A valid structured
+    answer (a ToolStrategy's own tool call and its tool message) is left as it is. A structured
+    answer that failed validation is not: create_agent would answer it with an error message and
+    ask the model again, past the limit, so the error message is dropped and the answer is the
+    text alone, and the run ends whatever caller hooks run after the model."""
+    if response.structured_response is not None:
         return response
     result = [
         _plain(message)
         if isinstance(message, AIMessage) and (message.tool_calls or message.invalid_tool_calls)
         else message
         for message in response.result
+        if not isinstance(message, ToolMessage)
     ]
-    return ModelResponse(result=result, structured_response=response.structured_response)
+    return ModelResponse(result=result, structured_response=None)
 
 
 class StepLimitMiddleware(AgentMiddleware[StepLimitState, Any, Any]):

@@ -27,7 +27,7 @@ import pytest
 from fastapi import FastAPI
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
-from langchain.agents.structured_output import ProviderStrategy, ToolStrategy
+from langchain.agents.structured_output import AutoStrategy, ProviderStrategy, ToolStrategy
 from langchain_anthropic import ChatAnthropic
 from langchain_core.exceptions import ModelRateLimitError, ModelTimeoutError
 from langchain_core.messages import AIMessage, HumanMessage
@@ -685,8 +685,8 @@ def last_request(model: Any, response_format: Any) -> Any:
 
 
 def test_the_last_request_offers_no_tools_for_a_plain_agent_and_a_tool_strategy() -> None:
-    # Real calls: OpenAI (gpt-6-luna) and Anthropic (claude-haiku-5-5) both answered a request
-    # with no tools after a tool_use/tool_result history, with no format and with ToolStrategy.
+    # Real calls: OpenAI (gpt-6-luna) and Anthropic (claude-haiku-5-5) answered a request with no
+    # tools after a tool_use/tool_result history, with no format and with ToolStrategy.
     anthropic = ChatAnthropic(model="claude-haiku-5-5", api_key=SecretStr("k"))
     for model in (anthropic, ChatOpenAI(model="gpt-6-luna", api_key=SecretStr("k"))):
         for response_format in (None, ToolStrategy(schema=Answer)):
@@ -702,10 +702,98 @@ def test_openai_with_a_provider_strategy_still_gets_no_tools() -> None:
 
 
 def test_anthropic_with_a_provider_strategy_keeps_the_tools_and_forbids_calling_them() -> None:
-    # Real call: Anthropic answered a ProviderStrategy request that had `tools: []` after a
-    # tool_use history with 400 "Invalid `signature` in `thinking` block". Keeping the tools
-    # bound and setting tool_choice {"type": "none"} (Anthropic's documented value) avoids it.
+    # Real calls: with `tools: []` this request got a 400 whose message was about a thinking
+    # block's signature (the cause was not isolated); with the tools kept and tool_choice
+    # {"type": "none"} (Anthropic's documented value) it was answered.
     model = ChatAnthropic(model="claude-haiku-5-5", api_key=SecretStr("k"))
     request = last_request(model, ProviderStrategy(schema=Answer))
     assert [t.name for t in request.tools] == ["add"]
     assert request.model_settings["tool_choice"] == {"type": "none"}
+
+
+def test_an_auto_strategy_on_a_model_without_native_structured_output_gets_no_tools() -> None:
+    # claude-haiku-5-5's profile has structured_output false, so create_agent turns a bare schema
+    # (an AutoStrategy) into a ToolStrategy and passes tool_choice itself: adding another
+    # tool_choice raised "multiple values for keyword argument 'tool_choice'" on the last call.
+    haiku = ChatAnthropic(model="claude-haiku-5-5", api_key=SecretStr("k"))
+    for response_format in (AutoStrategy(schema=Answer), Answer):
+        request = last_request(haiku, response_format)
+        assert request.tools == []
+        assert "tool_choice" not in request.model_settings
+
+
+def test_an_auto_strategy_on_a_model_with_native_structured_output_keeps_the_tools() -> None:
+    # claude-sonnet-5-5's profile has structured_output true, so create_agent uses a
+    # ProviderStrategy: the same path as the explicit one.
+    sonnet = ChatAnthropic(model="claude-sonnet-5-5", api_key=SecretStr("k"))
+    for response_format in (AutoStrategy(schema=Answer), Answer):
+        request = last_request(sonnet, response_format)
+        assert [t.name for t in request.tools] == ["add"]
+        assert request.model_settings["tool_choice"] == {"type": "none"}
+
+
+CLAUDE_SEEN: list[dict[str, Any]] = []
+
+
+class ScriptedClaude(ChatAnthropic):
+    """A real ChatAnthropic (so its bind_tools runs) whose network call is replaced."""
+
+    def _generate(self, messages: Any, stop: Any = None, run_manager: Any = None, **kw: Any) -> Any:
+        from langchain_core.outputs import ChatGeneration, ChatResult
+
+        names = [t["name"] for t in kw.get("tools", [])]
+        CLAUDE_SEEN.append({"tools": names, "tool_choice": kw.get("tool_choice")})
+        if "add" in names:
+            call = {"name": "add", "args": {"a": 1, "b": 1}, "id": "c1"}
+        else:
+            call = {"name": "Answer", "args": {"total": 2}, "id": "c2"}
+        return ChatResult(generations=[ChatGeneration(message=AIMessage("", tool_calls=[call]))])
+
+
+def test_a_bare_schema_on_claude_without_native_structured_output_runs_to_its_limit() -> None:
+    # No network: the old code raised TypeError on call 2 of every limited run like this one.
+    CLAUDE_SEEN.clear()
+    model = ScriptedClaude(model="claude-haiku-5-5", api_key=SecretStr("k"))
+
+    def add(a: int, b: int) -> int:
+        """Add two numbers."""
+        return a + b
+
+    agent = create_agent(
+        model, [add], response_format=Answer, middleware=[steps.StepLimitMiddleware(StepLimit(2))]
+    )
+    state = agent.invoke({"messages": [HumanMessage("Add")]})
+    assert len(CLAUDE_SEEN) == 2
+    assert CLAUDE_SEEN[1]["tools"] == ["Answer"]  # no tool of ours on the last call
+    assert state["structured_response"] == Answer(total=2)
+    assert steps.step_limit_reached(state) is True
+
+
+class AfterModel(AgentMiddleware):
+    """A caller's after_model hook: LangGraph then routes the model's exit through its node and
+    clears jump_to, so the run must end on its messages alone."""
+
+    def after_model(self, state: Any, runtime: Any) -> None:
+        return None
+
+
+async def test_an_invalid_structured_answer_on_the_last_call_ends_the_run_with_an_after_model_hook(
+    framework: str, gateway: Gateway, thread_id: str, db_session: AsyncSession
+) -> None:
+    setup = Setup(gateway, 2, structured="Answer", structured_args={"total": "not a number"})
+    agent = build_agent(
+        framework,
+        gateway,
+        [setup.add],
+        response_format=ToolStrategy(schema=Answer),
+        middleware=[AfterModel()],
+    )
+    with capture_logs() as logs:
+        state = await agent.ainvoke({"messages": [HumanMessage("Add")]}, config(thread_id))
+    assert len(setup.fake.offered) == 2
+    assert state.get("structured_response") is None
+    assert flag_of(framework, state) is True
+    assert len(reached(logs)) == 1
+    last = state["messages"][-1]
+    assert (last.type, last.tool_calls) == ("ai", [])  # the error message was dropped
+    assert len(await llm_calls(db_session)) == 2
