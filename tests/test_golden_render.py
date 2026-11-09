@@ -47,7 +47,7 @@ INTENDED: dict[str, str] = {
     "backend/tests/test_llm_checkpoints.py": "new: what the checkpointer can read back (#36)",
     "backend/src/app/llm/langchain/checkpoints.py": "saved threads load strictly: serializer() (#36)",
     "backend/src/app/llm/checkpoint_types.py": "new: the project's list of its own saved classes (#36)",
-    ".claude/rules/fastapi.md": "checkpoints load strictly, and where to list your classes (#36); the limit is model calls and users are told of a cut-short answer (#34); the extras sentence and switch commands name the llm answer (#30)",
+    ".claude/rules/fastapi.md": "checkpoints load strictly, and where to list your classes (#36); the limit is model calls and users are told of a cut-short answer (#34); the extras sentence and switch commands name the llm answer (#30); the list of files turning the gateway off deletes names redaction_rules.py (#78)",
     ".copier-answers.fastapi.yml": "records the new llm answer, langchain with the database (#30)",
     "backend/pyproject.toml": "the extras comment names the llm answer (#30)",
     "backend/tests/test_llm_migrations.py": "new: the gateway's tables can be added to a database that ran without them (#30)",
@@ -187,12 +187,12 @@ def test_default_render_matches_baseline(tmp_path):
 
 # main at af53775 (the commit before #30). INTENDED hides a second change to a file that is already
 # listed for #34 or #36, so this comparison is what proves that the default output (the model
-# gateway on, with the database) did not change for #30 apart from these files. Remove it, and the
-# two tests below, when BASELINE_REF moves past #30.
+# gateway on, with the database) did not change for #30 or #78 (the redaction core, not wired yet)
+# apart from these files. Remove it, and the two tests below, when BASELINE_REF moves past #30.
 AF53775 = "af53775"
 INTENDED_SINCE_AF53775 = {
     ".copier-answers.fastapi.yml": "records the new llm answer (#30)",
-    ".claude/rules/fastapi.md": "the extras sentence and switch commands name the llm answer (#30)",
+    ".claude/rules/fastapi.md": "the extras sentence and switch commands name the llm answer (#30); the list of files turning the gateway off deletes names redaction_rules.py (#78)",
     "backend/pyproject.toml": "the extras comment names the llm answer (#30)",
     "backend/tests/test_llm_migrations.py": "new: adding the gateway's tables later (#30)",
     "backend/migrations/versions/20261026_app_project_root.py": "the example names no gateway table (#30)",
@@ -208,7 +208,7 @@ def test_default_render_matches_main_before_the_llm_answer(tmp_path):
     before = files_of(render_at(tmp_path / "before", AF53775))
     head = files_of(render_at(tmp_path / "head", "HEAD"))
     problems = compare(before, head, INTENDED_SINCE_AF53775)
-    assert not problems, "The default render changed beyond #30:\n" + "\n".join(problems)
+    assert not problems, "The default render changed beyond #30 and #78:\n" + "\n".join(problems)
 
 
 def test_database_off_render_matches_main_before_the_llm_answer(tmp_path):
@@ -225,7 +225,7 @@ def test_database_off_render_matches_main_before_the_llm_answer(tmp_path):
               "backend/tests/test_llm_core_redaction.py"}
     intended = {p: why for p, why in INTENDED_SINCE_AF53775.items() if p not in absent}
     problems = compare(before, head, intended)
-    assert not problems, "The database-off render changed beyond #30:\n" + "\n".join(problems)
+    assert not problems, "The database-off render changed beyond #30 and #78:\n" + "\n".join(problems)
     assert b"llm: none\n" in head[ANSWERS_FILE]
 
 
