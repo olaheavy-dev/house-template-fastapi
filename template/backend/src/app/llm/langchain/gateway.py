@@ -48,9 +48,11 @@ from app.llm.core import registry
 from app.llm.core.openai_embeddings import openai_client
 from app.llm.core.prices import MICRO_USD
 from app.llm.core.prompts import Prompt
+from app.llm.core.steps import StepLimit
 from app.llm.langchain.callbacks import BudgetGuard
 from app.llm.langchain.embeddings import GatewayEmbeddings
 from app.llm.langchain.prompts import prompt_config
+from app.llm.langchain.steps import StepLimitMiddleware, recursion_limit
 from app.problems import Problem
 from app.settings import Settings
 
@@ -76,7 +78,7 @@ class Gateway:
             )
         price = registry.chat_price(llm_model, prices.PRICES)
         self.name = llm_model
-        self.max_steps = settings.agent_max_steps
+        self.step_limit = StepLimit(settings.agent_max_model_calls)
         # Set in the lifespan once the checkpoint pool is open (app/llm/langchain/checkpoints.py).
         self.checkpointer: BaseCheckpointSaver[Any] | None = None
         self.guard = BudgetGuard(
@@ -158,18 +160,29 @@ class Gateway:
                 config={**prompt.config(), "configurable": {"thread_id": thread_id}},
             )
 
+        A run makes at most AGENT_MAX_MODEL_CALLS model calls (default 13). The last one is made
+        without tools, so the model writes a final answer, and the result has `step_limit_reached`
+        set (app.llm.langchain.steps.step_limit_reached(state)): tell users the answer was cut
+        short. The count restarts on every run, also on a saved thread. Middleware you pass runs
+        outside this limit and cannot offer tools again on the last call.
+
         For anything beyond a plain tool loop, build a LangGraph StateGraph whose nodes call
         gateway.model(), and compile it with checkpointer=gateway.checkpointer.
         """
+        # Ours is last, so it runs closest to the model: a caller's middleware cannot offer tools
+        # again on the last call.
+        middleware = list(options.pop("middleware", ()))
         agent = create_agent(
             self.model(),
             list(tools),
             system_prompt=system_prompt,
+            middleware=[*middleware, StepLimitMiddleware(self.step_limit)],
             checkpointer=self.checkpointer,
             **options,
         )
-        # A loop that never settles stops here (AGENT_MAX_STEPS) instead of at LangGraph's 10,007.
-        return agent.with_config(recursion_limit=self.max_steps)
+        # LangGraph's own limit is only a backstop (10,007 by default): the run ends by itself at
+        # the model-call limit, so this stops a graph that loops without calling the model.
+        return agent.with_config(recursion_limit=recursion_limit(self.step_limit, middleware))
 
     def call_config(
         self, user: User | None, feature: str, prompt: Prompt | None = None, **config: Any

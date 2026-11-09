@@ -25,7 +25,6 @@ from langchain_core.exceptions import (
     ModelRateLimitError,
     ModelTimeoutError,
 )
-from langgraph.errors import GraphRecursionError
 
 from app.llm.core import errors as core
 from app.llm.core.errors import FailureKind, Outcome
@@ -94,12 +93,8 @@ async def _model_error(request: Request, exc: Exception) -> JSONResponse:
     )
 
 
-async def _step_limit(request: Request, exc: Exception) -> JSONResponse:
-    return core.step_limit_response(request)
-
-
 def install_model_error_handlers(app: FastAPI) -> None:
-    """Answers LangChain's model errors and LangGraph's recursion limit (an agent's step limit).
+    """Answers LangChain's model errors. A GraphRecursionError has no handler: an agent ends at
+    its model-call limit by itself (app/llm/langchain/steps.py), so one is a bug and a plain 500.
     The core's own handlers are installed apart (app.llm.core.errors.install_failure_handlers)."""
     app.add_exception_handler(ModelError, _model_error)
-    app.add_exception_handler(GraphRecursionError, _step_limit)
