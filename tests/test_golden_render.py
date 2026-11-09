@@ -47,7 +47,11 @@ INTENDED: dict[str, str] = {
     "backend/tests/test_llm_checkpoints.py": "new: what the checkpointer can read back (#36)",
     "backend/src/app/llm/langchain/checkpoints.py": "saved threads load strictly: serializer() (#36)",
     "backend/src/app/llm/checkpoint_types.py": "new: the project's list of its own saved classes (#36)",
-    ".claude/rules/fastapi.md": "checkpoints load strictly, and where to list your classes (#36); the limit is model calls and users are told of a cut-short answer (#34)",
+    ".claude/rules/fastapi.md": "checkpoints load strictly, and where to list your classes (#36); the limit is model calls and users are told of a cut-short answer (#34); the extras sentence and switch commands name the llm answer (#30)",
+    ".copier-answers.fastapi.yml": "records the new llm answer, langchain with the database (#30)",
+    "backend/pyproject.toml": "the extras comment names the llm answer (#30)",
+    "backend/tests/test_llm_migrations.py": "new: the gateway's tables can be added to a database that ran without them (#30)",
+    "backend/migrations/versions/20261026_app_project_root.py": "the example names no gateway table (#30)",
     "backend/tests/test_llm_surface.py": "expects the new serializer name (#36); the step limit has no 422 and steps.py is public (#34)",
     "backend/.env.example": "AGENT_MAX_MODEL_CALLS=13 replaces AGENT_MAX_STEPS=25 (#34)",
     "backend/src/app/settings.py": "agent_max_model_calls replaces agent_max_steps; the app refuses to start while AGENT_MAX_STEPS is set (#34)",
@@ -96,12 +100,14 @@ def require_ref(ref: str) -> None:
                     "(`git fetch --unshallow --tags`, or `fetch-depth: 0` in actions/checkout).")
 
 
-def render_at(dst: Path, vcs_ref: str) -> Path:
-    """Render with defaults. vcs_ref="HEAD" uses the working tree, uncommitted changes included
-    (Copier copies a dirty local template as it is); a tag or SHA renders that commit."""
+def render_at(dst: Path, vcs_ref: str, **data: object) -> Path:
+    """Render with defaults and any answers given. vcs_ref="HEAD" uses the working tree, uncommitted
+    changes included (Copier copies a dirty local template as it is); a tag or SHA renders that
+    commit."""
     dst.mkdir(parents=True)
     (dst / ".copier-answers.base.yml").write_text(yaml.safe_dump(BASE_ANSWERS))
-    copier.run_copy(str(ROOT), dst, defaults=True, unsafe=True, quiet=True, vcs_ref=vcs_ref)
+    copier.run_copy(str(ROOT), dst, data=data, defaults=True, unsafe=True, quiet=True,
+                    vcs_ref=vcs_ref)
     return dst
 
 
@@ -174,6 +180,41 @@ def test_default_render_matches_baseline(tmp_path):
     assert not problems, (f"The default render differs from BASELINE_REF {BASELINE_REF[:7]}. "
                           "Add each path to INTENDED with a reason, or fix the change:\n"
                           + "\n".join(problems))
+
+
+# main at af53775 (the commit before #30). INTENDED hides a second change to a file that is already
+# listed for #34 or #36, so this comparison is what proves that the default output (the model
+# gateway on, with the database) did not change for #30 apart from these files. Remove it, and the
+# two tests below, when BASELINE_REF moves past #30.
+AF53775 = "af53775"
+INTENDED_SINCE_AF53775 = {
+    ".copier-answers.fastapi.yml": "records the new llm answer (#30)",
+    ".claude/rules/fastapi.md": "the extras sentence and switch commands name the llm answer (#30)",
+    "backend/pyproject.toml": "the extras comment names the llm answer (#30)",
+    "backend/tests/test_llm_migrations.py": "new: adding the gateway's tables later (#30)",
+    "backend/migrations/versions/20261026_app_project_root.py": "the example names no gateway table (#30)",
+}
+
+
+def test_default_render_matches_main_before_the_llm_answer(tmp_path):
+    require_ref(AF53775)
+    before = files_of(render_at(tmp_path / "before", AF53775))
+    head = files_of(render_at(tmp_path / "head", "HEAD"))
+    problems = compare(before, head, INTENDED_SINCE_AF53775)
+    assert not problems, "The default render changed beyond #30:\n" + "\n".join(problems)
+
+
+def test_database_off_render_matches_main_before_the_llm_answer(tmp_path):
+    # No database means no gateway: the same files as before, and `llm: none` recorded.
+    require_ref(AF53775)
+    before = files_of(render_at(tmp_path / "before", AF53775, database=False))
+    head = files_of(render_at(tmp_path / "head", "HEAD", database=False))
+    absent = {"backend/tests/test_llm_migrations.py",
+              "backend/migrations/versions/20261026_app_project_root.py"}
+    intended = {p: why for p, why in INTENDED_SINCE_AF53775.items() if p not in absent}
+    problems = compare(before, head, intended)
+    assert not problems, "The database-off render changed beyond #30:\n" + "\n".join(problems)
+    assert b"llm: none\n" in head[ANSWERS_FILE]
 
 
 def test_compare_reports_every_unlisted_difference_and_every_stale_entry():
@@ -258,10 +299,11 @@ def tracked(dst: Path) -> set[str]:
     return set(git(dst, "ls-files").splitlines())
 
 
-def committed_baseline_project(path: Path) -> Path:
-    """A project rendered at BASELINE_REF, plus one file of the user's, committed in git."""
-    require_ref(BASELINE_REF)
-    dst = render_at(path, BASELINE_REF)
+def committed_baseline_project(path: Path, ref: str = BASELINE_REF, **data: object) -> Path:
+    """A project rendered at BASELINE_REF (or another ref), plus one file of the user's, committed
+    in git."""
+    require_ref(ref)
+    dst = render_at(path, ref, **data)
     git(dst, "init", "-q", "-b", "main")
     (dst / "backend" / "user_added.txt").write_text("mine\n")
     git(dst, "add", "-A")
@@ -353,3 +395,32 @@ def test_updating_a_baseline_project_with_database_off_deletes_only_the_database
     assert "backend/src/app/main.py" not in removed
     assert (dst / "backend" / "user_added.txt").read_text() == "mine\n"
     assert yaml.safe_load((dst / ANSWERS_FILE).read_text())["database"] is False
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+@pytest.mark.parametrize(("database", "llm"), [(True, "langchain"), (False, "none")],
+                         ids=["database-on", "database-off"])
+def test_updating_a_v0_7_1_project_with_defaults_records_the_llm_answer_and_deletes_nothing(
+    tmp_path, database, llm
+):
+    # v0.7.1 has no `llm` answer. `copier update --defaults` gives such a project the default,
+    # langchain with the database and none without it, and deletes nothing: the `llm is defined`
+    # guards in copier.yml's _exclude are for the old copy's answers, which have no `llm`. Remove
+    # this test when BASELINE_REF moves to a release that records `llm`.
+    dst = committed_baseline_project(tmp_path / "project", "v0.7.1", database=database)
+    assert "llm" not in yaml.safe_load((dst / ANSWERS_FILE).read_text())
+    before = tracked(dst)
+    lock = (dst / "backend" / "uv.lock").read_bytes()
+
+    update_to_head(dst)
+
+    after = files_of(dst)
+    assert before - after.keys() == set(), "update deleted files"
+    assert yaml.safe_load((dst / ANSWERS_FILE).read_text())["llm"] == llm
+    assert not list(dst.rglob("*.rej"))
+    assert [p for p, data in after.items() if b"<<<<<<<" in data] == []
+    fresh = files_of(render_at(tmp_path / "fresh", "HEAD", database=database))
+    after.pop("backend/user_added.txt")
+    assert after.pop("backend/uv.lock") == lock
+    fresh.pop("backend/uv.lock")
+    assert after == fresh

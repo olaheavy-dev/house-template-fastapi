@@ -2,7 +2,7 @@
 
 Every request gets a request id (from the X-Request-ID header when a proxy sets one, otherwise
 new), bound to all log lines for that request and echoed in the response header, and one access
-line when it ends. Logs from the standard library (uvicorn, {% if database %}SQLAlchemy, {% endif %}httpx{% if database %}, LangChain{% endif %}) go
+line when it ends. Logs from the standard library (uvicorn, {% if database %}SQLAlchemy, {% endif %}httpx{% if llm == 'langchain' %}, LangChain{% endif %}) go
 through the same renderer, so production output is JSON throughout.
 """
 
@@ -87,7 +87,7 @@ def _route_stdlib_logging(
         logger.propagate = True
     logging.getLogger("uvicorn.access").disabled = True
     # A line per outgoing HTTP request is noise at INFO.
-    for name in ("httpx", "httpx2", "httpcore", {% if database %}"openai", "anthropic", {% endif %}{% if storage %}"botocore", {% endif %}"urllib3"):
+    for name in ("httpx", "httpx2", "httpcore", {% if llm == 'langchain' %}"openai", "anthropic", {% endif %}{% if storage %}"botocore", {% endif %}"urllib3"):
         logging.getLogger(name).setLevel(max(level, logging.WARNING))
 
 

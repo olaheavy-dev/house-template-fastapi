@@ -39,25 +39,29 @@ _exclude:
   # it is proven by tests/test_options.py; the docs do not state it. Files whose content changes
   # with an answer are `x.jinja` instead, not listed here.
   # Docs: https://copier.readthedocs.io/en/v9.19.1/configuring/ (`_exclude`).
-  # database: false removes PostgreSQL, the migrations and the model gateway, which needs the
-  # database for its budget and checkpoints. Same `is defined` guard as below: a project made before
-  # this question existed has no `database` answer and had the database.
+  # database: false removes PostgreSQL and the migrations. Same `is defined` guard as below: a
+  # project made before this question existed has no `database` answer and had the database.
   - "{% if database is defined and not database %}backend/src/app/db.py{% endif %}"
   - "{% if database is defined and not database %}backend/src/app/models.py{% endif %}"
-  - "{% if database is defined and not database %}backend/src/app/llm{% endif %}"
-  - "{% if database is defined and not database %}backend/src/app/prompts{% endif %}"
   - "{% if database is defined and not database %}backend/migrations{% endif %}"
-  - "{% if database is defined and not database %}backend/llm-contracts.toml{% endif %}"
   - "{% if database is defined and not database %}backend/compose/db{% endif %}"
   - "{% if database is defined and not database %}backend/tests/db.py{% endif %}"
-  - "{% if database is defined and not database %}backend/tests/models.py{% endif %}"
-  - "{% if database is defined and not database %}backend/tests/recording.py{% endif %}"
   - "{% if database is defined and not database %}backend/tests/test_db.py{% endif %}"
-  - "{% if database is defined and not database %}backend/tests/test_llm_*.py{% endif %}"
-  - "{% if database is defined and not database %}backend/tests/test_recording_keys.py{% endif %}"
-  - "{% if database is defined and not database %}backend/tests/test_observability.py{% endif %}"
-  - "{% if database is defined and not database %}backend/tests/evals{% endif %}"
-  - "{% if database is defined and not database %}backend/tests/cassettes{% endif %}"
+  # llm: none removes the model gateway (#30), and so does database: false, because the gateway
+  # keeps its budget and agent checkpoints in PostgreSQL (the `llm` question refuses langchain
+  # without the database; `copier update` can still render these patterns before that answer is
+  # settled, so both are tested here). `llm` is guarded like `database`: a project made before the
+  # question existed has no `llm` answer and had the gateway if it had the database.
+  - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/src/app/llm{% endif %}"
+  - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/src/app/prompts{% endif %}"
+  - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/llm-contracts.toml{% endif %}"
+  - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/tests/models.py{% endif %}"
+  - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/tests/recording.py{% endif %}"
+  - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/tests/test_llm_*.py{% endif %}"
+  - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/tests/test_recording_keys.py{% endif %}"
+  - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/tests/test_observability.py{% endif %}"
+  - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/tests/evals{% endif %}"
+  - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/tests/cassettes{% endif %}"
   # storage: false removes the S3-compatible object storage. `is defined`: `copier update` also
   # renders these patterns for the OLD copy of a project made before the question existed, whose
   # answers have no `storage` (StrictUndefined would fail there); such a project had storage.
@@ -120,6 +124,20 @@ database:
   type: bool
   help: PostgreSQL with pgvector, SQLAlchemy and Alembic migrations (the model gateway needs it, so false removes the gateway too)
   default: true
+
+llm:
+  type: str
+  help: >-
+    The model gateway. none leaves it out; langchain is LangChain and LangGraph with the daily
+    budget, prompts and agent checkpoints in PostgreSQL (needs database: true)
+  choices:
+    "none (no model gateway)": "none"
+    "langchain (LangChain and LangGraph; needs the database)":
+      value: langchain
+      validator: >-
+        {% if not database %}langchain needs database: true (the gateway keeps its budget and
+        agent checkpoints in PostgreSQL). Answer database=true, or llm=none{% endif %}
+  default: "{{ 'langchain' if database else 'none' }}"
 
 storage:
   type: bool

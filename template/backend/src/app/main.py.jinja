@@ -1,7 +1,7 @@
 """The FastAPI app; `fastapi dev` and `fastapi run` find it through [tool.fastapi].
 
 create_app builds a fresh app (tests build one per test); resources that live as long as the
-process{% if database %} (the database engine, model clients){% elif storage %} (the storage client){% endif %} are opened and closed in lifespan.
+process{% if llm == 'langchain' %} (the database engine, model clients){% elif database %} (the database engine){% elif storage %} (the storage client){% endif %} are opened and closed in lifespan.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from fastapi.telemetry import TelemetryConfig
 
 from app import api, {% if database %}db, {% endif %}health
 from app.limits import BodyLimit, SecurityHeaders
-{%- if database %}
+{%- if llm == 'langchain' %}
 from app.llm.core.errors import install_failure_handlers
 from app.llm.langchain import checkpoints
 from app.llm.langchain.errors import install_model_error_handlers
@@ -33,7 +33,7 @@ from app.storage import Storage
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-{%- if database %}
+{%- if llm == 'langchain' %}
     engine = db.create_engine(app.state.settings)
     app.state.engine = engine
     app.state.sessionmaker = db.create_sessionmaker(engine)
@@ -60,6 +60,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.storage.close()
 {%- endif %}
         await budget_engine.dispose()
+        await engine.dispose()
+{%- elif database %}
+    engine = db.create_engine(app.state.settings)
+    app.state.engine = engine
+    app.state.sessionmaker = db.create_sessionmaker(engine)
+{%- if storage %}
+    settings: Settings = app.state.settings
+    app.state.storage = Storage(settings) if settings.storage_bucket else None
+{%- endif %}
+    try:
+        yield
+    finally:
+{%- if storage %}
+        if app.state.storage:
+            app.state.storage.close()
+{%- endif %}
         await engine.dispose()
 {%- elif storage %}
     settings: Settings = app.state.settings
@@ -115,7 +131,7 @@ def create_app(
     install_problem_handlers(app)
     # Registered before request_context, which therefore wraps it: a 413 still gets an access line.
     app.add_middleware(BodyLimit, max_bytes=settings.max_request_bytes)
-{%- if database %}
+{%- if llm == 'langchain' %}
     # Model-call failures: the core's neutral errors, then LangChain's own exceptions.
     install_failure_handlers(app)
     install_model_error_handlers(app)

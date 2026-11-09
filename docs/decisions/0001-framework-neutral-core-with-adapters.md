@@ -1,6 +1,6 @@
 # 0001. A framework-neutral core with framework adapters, chosen by the `llm` answer
 
-Status: Accepted, for the split into a core and adapters only (founder decisions on [#33](https://github.com/olaheavy-dev/house-template-fastapi/issues/33)). **Not covered by this status:** the `llm` answer's details, which are still open on [#30](https://github.com/olaheavy-dev/house-template-fastapi/issues/30): the final extra name, and how `llm` is tied to `database`.
+Status: Accepted, for the split into a core and adapters only (founder decisions on [#33](https://github.com/olaheavy-dev/house-template-fastapi/issues/33)). **Not covered by this status:** the `llm` answer's details, which [0005](0005-llm-answer-and-its-migrations.md) settles (extra names `db`, `langchain`, `storage`; `llm: langchain` needs `database: true`).
 
 ## Context
 
@@ -15,13 +15,13 @@ The model gateway was written around LangChain. The founder's projects will also
 
 ## Where the work stands
 
-Progress goes stale quickly, so it is not recorded here. Follow it on [#33](https://github.com/olaheavy-dev/house-template-fastapi/issues/33) (the core and the LangChain adapter), [#30](https://github.com/olaheavy-dev/house-template-fastapi/issues/30) (the `llm` answer, which does not exist yet: `copier.yml` has only `database` and `storage`, so the answer part of this record is the target design) and [#35](https://github.com/olaheavy-dev/house-template-fastapi/issues/35) (the MAF adapter, which does not exist yet).
+Progress goes stale quickly, so it is not recorded here. Follow it on [#33](https://github.com/olaheavy-dev/house-template-fastapi/issues/33) (the core and the LangChain adapter), [#30](https://github.com/olaheavy-dev/house-template-fastapi/issues/30) (the `llm` answer, built; see [0005](0005-llm-answer-and-its-migrations.md)) and [#35](https://github.com/olaheavy-dev/house-template-fastapi/issues/35) (the MAF adapter, which does not exist yet).
 
 ## Consequences
 
 - A second framework reuses the same budget, prices and error rules, so cost behaviour is the same whichever one a project picks.
 - Old import paths (`app.llm.budget`, `app.llm.errors` and others) are shims that warn with `DeprecationWarning`; the plan removes them in 0.8.0 ([#33](https://github.com/olaheavy-dev/house-template-fastapi/issues/33)). Several of the PRs are breaking (`refactor!`).
-- The #30 comments say `llm` must refuse `database: false`, because the budget tables and checkpoints are in PostgreSQL; the final coupling is still open there.
+- The #30 comments say `llm` must refuse `database: false`, because the budget tables and checkpoints are in PostgreSQL; the coupling is settled in [0005](0005-llm-answer-and-its-migrations.md): `database: false` means `llm: none`, and `langchain` is refused without the database.
 
 ## Alternatives considered
 

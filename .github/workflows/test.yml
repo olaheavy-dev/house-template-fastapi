@@ -106,7 +106,8 @@ jobs:
 
   generated-project-variants:
     # The default-answers job above stays as it is. Each option's "off" answer gets its own
-    # project here (#29), and so does the smallest one, with neither part. Making these checks
+    # project here (#29, #30), and so does the smallest one, with neither part. Every entry names
+    # its `llm` answer (database=false is always llm=none). Making these checks
     # required is a repository-ruleset change for the owner (.github/rulesets/main.json).
     name: Generated project variants (${{ matrix.name }})
     runs-on: ubuntu-24.04
@@ -122,22 +123,33 @@ jobs:
             name: storage=false
             database: "true"
             storage: "false"
+            llm: langchain
             absent: boto3
+          # The database without the model gateway (#30): none of its packages in the image.
+          - id: llm-none
+            name: llm=none
+            database: "true"
+            storage: "true"
+            llm: none
+            absent: langchain langgraph langsmith openai anthropic
           - id: no-database
             name: database=false
             database: "false"
             storage: "true"
+            llm: none
             absent: sqlalchemy alembic langchain
           - id: minimal
             name: database=false storage=false
             database: "false"
             storage: "false"
+            llm: none
             absent: boto3 sqlalchemy alembic langchain
           # The oldest supported Python; the other variants run the default (3.14).
           - id: python-312
             name: python_version=3.12
             database: "true"
             storage: "true"
+            llm: langchain
             python: "3.12"
             absent: ""
     steps:
@@ -157,6 +169,7 @@ jobs:
           DEMO: ${{ runner.temp }}/demo-${{ matrix.id }}
           DATABASE: ${{ matrix.database }}
           STORAGE: ${{ matrix.storage }}
+          LLM: ${{ matrix.llm }}
           # The fallback follows the python_version default in copier.yml.
           PYTHON: ${{ matrix.python || '3.14' }}
         run: |
@@ -167,7 +180,7 @@ jobs:
           git -C "$DEMO" add -A
           git -C "$DEMO" -c user.email=ci@example.com -c user.name=ci commit -q -m "chore: start from house-template-base"
           uv run --frozen copier copy --trust --defaults --vcs-ref HEAD \
-            -d database="$DATABASE" -d storage="$STORAGE" -d python_version="$PYTHON" . "$DEMO"
+            -d database="$DATABASE" -d storage="$STORAGE" -d llm="$LLM" -d python_version="$PYTHON" . "$DEMO"
           git -C "$DEMO" add -A
           git -C "$DEMO" -c user.email=ci@example.com -c user.name=ci commit -q -m "chore: add the fastapi layer"
 
@@ -213,10 +226,11 @@ jobs:
             "${absent[@]}"
 
       - name: Run the backend from its image and call the readiness probe
-        if: matrix.database == 'false'
+        if: matrix.llm == 'none'
         working-directory: ${{ runner.temp }}/demo-${{ matrix.id }}
         run: |
-          # No backend/.env and no model settings: a project without the database needs none.
+          # No backend/.env and no model settings: a project without the model gateway needs none.
+          # With the database, `make up` also starts it and runs the migrations once.
           make up
           test "$(curl -fsS http://127.0.0.1:8000/health/ready)" = '{"status":"ok"}'
           docker compose down -v

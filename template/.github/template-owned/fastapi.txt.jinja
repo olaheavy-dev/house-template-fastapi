@@ -11,7 +11,7 @@ mk/fastapi.mk
 backend/src/app/log.py
 backend/src/app/problems.py
 backend/src/app/health.py
-{% if database %}backend/src/app/llm/__init__.py
+{% if llm == 'langchain' %}backend/src/app/llm/__init__.py
 backend/src/app/llm/budget.py
 backend/src/app/llm/checkpoints.py
 backend/src/app/llm/embeddings.py
@@ -39,6 +39,6 @@ backend/migrations/versions/20261026_app_project_root.py
 backend/tests/db.py
 {% endif %}{% if storage %}backend/tests/storage.py
 backend/src/app/storage.py
-{% endif %}{% if database %}backend/tests/evals/conftest.py
+{% endif %}{% if llm == 'langchain' %}backend/tests/evals/conftest.py
 backend/tests/evals/test_gateway_evals.py
 {% endif %}

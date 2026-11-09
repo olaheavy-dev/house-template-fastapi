@@ -21,7 +21,7 @@ from copier.errors import TaskError, UnsafeTemplateError
 import yaml
 
 from conftest import BASE_ANSWERS, ROOT
-from test_golden_render import ANSWERS_FILE, files_of, git, require_ref, tracked
+from test_golden_render import ANSWERS_FILE, committed_baseline_project, files_of, git, require_ref, tracked
 
 PUBLISH = ".github/workflows/publish-api.yml"
 _CACHES = shutil.ignore_patterns(".git", ".venv", "__pycache__", ".mypy_cache", ".ruff_cache",
@@ -547,7 +547,10 @@ def test_turning_the_database_off_on_update_deletes_its_files_and_keeps_user_fil
 
     update(dst, "v100.0.1", database=False)
 
-    assert answers(dst)["database"] is False
+    # Only the database was answered: the gateway, which needs it, goes with it (#30). A last
+    # answer that fails validation is dropped and recomputed from the default (undocumented in
+    # Copier 9.19.1, so this assertion guards it).
+    assert (answers(dst)["database"], answers(dst)["llm"]) == (False, "none")
     assert [p for p in DATABASE_PATHS if (dst / p).exists()] == []
     assert (dst / USER_MIGRATION).read_text() == "# my migration\n"
     assert (dst / "backend/src/app/product.py").read_text() == "# the product\n"
@@ -600,9 +603,16 @@ def test_turning_the_database_back_on_restores_the_template_versions_not_the_edi
     git(dst, "add", "-A")
     git(dst, "commit", "-q", "-m", "chore: database off")
 
+    # database=true alone no longer brings the gateway back (#30): `llm` stays none.
     update(dst, "v100.0.1", database=True)
+    assert (answers(dst)["database"], answers(dst)["llm"]) == (True, "none")
+    assert not (dst / "backend/src/app/llm").exists()
+    git(dst, "add", "-A")
+    git(dst, "commit", "-q", "-m", "chore: database on")
 
-    assert answers(dst)["database"] is True
+    update(dst, "v100.0.1", llm="langchain")
+
+    assert (answers(dst)["database"], answers(dst)["llm"]) == (True, "langchain")
     assert all((dst / p).is_file() for p in DATABASE_PATHS)
     assert db_py.read_bytes() == original
     assert (dst / "backend/user_added.txt").read_text() == "mine\n"
@@ -624,7 +634,7 @@ def test_a_project_that_already_has_the_database_off_does_not_get_it_back_on_upd
 
     update(dst, "v100.0.1")
 
-    assert answers(dst)["database"] is False
+    assert (answers(dst)["database"], answers(dst)["llm"]) == (False, "none")
     assert not any((dst / p).exists() for p in DATABASE_PATHS)
     assert (dst / "backend/user_added.txt").read_text() == "mine\n"
     assert "A rule added by the second version." in (dst / ".claude/rules/fastapi.md").read_text()
@@ -651,3 +661,129 @@ def test_turning_both_parts_off_in_one_update_matches_a_fresh_minimal_render(
     assert after.pop("backend/uv.lock") == lock
     expected.pop("backend/uv.lock")
     assert after == expected
+
+
+GATEWAY_PATHS = [
+    "backend/src/app/llm/gateway.py", "backend/src/app/llm/prices.py",
+    "backend/src/app/llm/checkpoint_types.py", "backend/src/app/prompts/README.md",
+    "backend/llm-contracts.toml", "backend/tests/models.py", "backend/tests/recording.py",
+    "backend/tests/test_llm_gateway.py", "backend/tests/evals/conftest.py",
+]
+# What stays when only the gateway goes: the database and its migrations, models.py among them.
+KEPT_WITHOUT_GATEWAY = [
+    "backend/src/app/db.py", "backend/src/app/models.py", "backend/migrations/env.py",
+    "backend/migrations/versions/20261026_0003_agent_checkpoints.py",
+    "backend/compose/db/compose.yaml", "backend/tests/db.py", "backend/tests/test_db.py",
+]
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+def test_turning_the_gateway_off_on_update_deletes_its_files_and_keeps_the_database(
+    tmp_path, tagged_repo
+):
+    dst = committed_project(tagged_repo, tmp_path / "project", "v100.0.0")
+    assert all((dst / p).is_file() for p in GATEWAY_PATHS)
+    (dst / USER_MIGRATION).write_text("# my migration\n")
+    (dst / "backend/src/app/product.py").write_text("# the product\n")
+    git(dst, "add", "-A")
+    git(dst, "commit", "-q", "-m", "feat: product")
+    lock = (dst / "backend/uv.lock").read_bytes()
+
+    update(dst, "v100.0.1", llm="none")
+
+    assert (answers(dst)["database"], answers(dst)["llm"]) == (True, "none")
+    assert [p for p in GATEWAY_PATHS if (dst / p).exists()] == []
+    assert all((dst / p).is_file() for p in KEPT_WITHOUT_GATEWAY)
+    assert (dst / USER_MIGRATION).read_text() == "# my migration\n"
+    assert (dst / "backend/src/app/product.py").read_text() == "# the product\n"
+    assert (dst / "backend/user_added.txt").read_text() == "mine\n"
+    assert (dst / "backend/uv.lock").read_bytes() == lock
+    assert_clean_tree(dst)
+    after = files_of(dst)
+    fresh = tmp_path / "fresh"
+    write_base(fresh)
+    copy_layer(tagged_repo, fresh, "v100.0.1", llm="none")
+    expected = files_of(fresh)
+    for own in ("backend/user_added.txt", "backend/src/app/product.py", "backend/uv.lock",
+                USER_MIGRATION):
+        after.pop(own)
+    expected.pop("backend/uv.lock")
+    # The whole tree equals a fresh llm=none render, apart from the user's files.
+    assert after == expected
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+def test_turning_the_gateway_off_deletes_its_files_even_if_the_user_edited_them(
+    tmp_path, tagged_repo
+):
+    dst = committed_project(tagged_repo, tmp_path / "project", "v100.0.0")
+    for rel in ("backend/src/app/llm/prices.py", "backend/src/app/llm/checkpoint_types.py",
+                "backend/src/app/llm/core/budget.py"):
+        path = dst / rel
+        path.write_text(path.read_text() + "\n# my own change\n")
+    git(dst, "add", "-A")
+    git(dst, "commit", "-q", "-m", "feat: edit the gateway files")
+
+    update(dst, "v100.0.1", llm="none")
+
+    for rel in ("backend/src/app/llm/prices.py", "backend/src/app/llm/checkpoint_types.py",
+                "backend/src/app/llm/core/budget.py"):
+        assert not (dst / rel).exists(), rel
+        assert "my own change" in git(dst, "show", f"HEAD:{rel}")  # recoverable
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+def test_turning_the_gateway_back_on_restores_it(tmp_path, tagged_repo):
+    dst = committed_project(tagged_repo, tmp_path / "project", "v100.0.0")
+    lock = (dst / "backend/uv.lock").read_bytes()
+    update(dst, "v100.0.1", llm="none")
+    git(dst, "add", "-A")
+    git(dst, "commit", "-q", "-m", "chore: gateway off")
+    assert not (dst / "backend/src/app/llm").exists()
+
+    update(dst, "v100.0.1", llm="langchain")
+
+    assert (answers(dst)["database"], answers(dst)["llm"]) == (True, "langchain")
+    assert all((dst / p).is_file() for p in GATEWAY_PATHS)
+    assert (dst / "backend/user_added.txt").read_text() == "mine\n"
+    assert_clean_tree(dst)
+    after = files_of(dst)
+    fresh = tmp_path / "fresh"
+    write_base(fresh)
+    copy_layer(tagged_repo, fresh, "v100.0.1")
+    after.pop("backend/user_added.txt")
+    assert after.pop("backend/uv.lock") == lock
+    expected = files_of(fresh)
+    expected.pop("backend/uv.lock")
+    assert after == expected
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+def test_the_gateway_cannot_be_turned_on_without_the_database(tmp_path, tagged_repo):
+    dst = tmp_path / "project"
+    write_base(dst)
+    copy_layer(tagged_repo, dst, "v100.0.0", database=False)
+    git(dst, "init", "-q", "-b", "main")
+    git(dst, "add", "-A")
+    git(dst, "commit", "-q", "-m", "chore: start")
+
+    with pytest.raises(ValueError, match="langchain needs database: true"):
+        update(dst, "v100.0.1", llm="langchain")
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+@pytest.mark.parametrize(("data", "gateway"), [({"database": True}, True),
+                                                ({"database": True, "llm": "none"}, False)],
+                         ids=["database-true-only", "with-llm-none"])
+def test_a_v0_7_1_project_without_the_database_has_no_llm_answer_yet(tmp_path, data, gateway):
+    # v0.7.1 recorded no `llm`, so the first update falls back to the default and
+    # `-d database=true` alone brings the gateway back (the README and decision 0005 say so; pass
+    # `-d llm=none` to keep it off). Once `llm` is recorded, database=true alone leaves it none.
+    dst = committed_baseline_project(tmp_path / "project", "v0.7.1", database=False)
+    assert "llm" not in answers(dst)
+
+    copier.run_update(dst, answers_file=ANSWERS_FILE, data=data, defaults=True, unsafe=True,
+                      overwrite=True, quiet=True, vcs_ref="HEAD")
+
+    assert answers(dst)["llm"] == ("langchain" if gateway else "none")
+    assert (dst / "backend/src/app/llm").exists() is gateway
