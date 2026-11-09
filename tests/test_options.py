@@ -34,11 +34,19 @@ import yaml
 
 from conftest import BASE_ANSWERS, TEMPLATE
 
-# Every combination of the two answers.
+# Every combination of the two answers (the older four, with the `llm` each one gets by default).
 COMBINATIONS = list(itertools.product([True, False], [True, False]))
 ANSWERS = pytest.mark.parametrize(
     ("database", "storage"), COMBINATIONS,
     ids=[f"database-{'on' if d else 'off'}-storage-{'on' if s else 'off'}" for d, s in COMBINATIONS])
+# The valid triples (#30): `llm: langchain` needs the database, and `database: false` always means
+# `llm: none`. Three shapes, each with storage on or off.
+SHAPES = [(True, "langchain"), (True, "none"), (False, "none")]
+TRIPLES = [(d, s, llm) for d, llm in SHAPES for s in (True, False)]
+ANSWERS3 = pytest.mark.parametrize(
+    ("database", "storage", "llm"), TRIPLES,
+    ids=[f"database-{'on' if d else 'off'}-llm-{llm}-storage-{'on' if s else 'off'}"
+         for d, s, llm in TRIPLES])
 
 STORAGE_FILES = [
     "backend/src/app/storage.py",
@@ -46,34 +54,48 @@ STORAGE_FILES = [
     "backend/tests/test_storage.py",
     "backend/compose/storage/compose.yaml",
 ]
-# The paths `database: false` removes, as patterns (fnmatch: `*` also crosses `/`). Each must match
-# something that is removed, and everything removed must match one (test_database_files_are_exact).
-DATABASE_PATTERNS = [
-    "backend/src/app/db.py",
-    "backend/src/app/models.py",
+# The paths `llm: none` removes (and `database: false` with it), as patterns (fnmatch: `*` also
+# crosses `/`). Each must match something that is removed, and everything removed must match one
+# (test_llm_files_are_exact).
+LLM_PATTERNS = [
     "backend/src/app/llm/*",
     "backend/src/app/prompts/*",
-    "backend/migrations/*",
     "backend/llm-contracts.toml",
-    "backend/compose/db/*",
-    "backend/tests/db.py",
     "backend/tests/models.py",
     "backend/tests/recording.py",
-    "backend/tests/test_db.py",
     "backend/tests/test_llm_*.py",
     "backend/tests/test_recording_keys.py",
     "backend/tests/test_observability.py",
     "backend/tests/evals/*",
     "backend/tests/cassettes/*",
 ]
-# One file from each pattern that must be absent without the database.
+# One file from each pattern that must be absent without the gateway.
+LLM_FILES = [
+    "backend/src/app/llm/gateway.py",
+    "backend/src/app/prompts/README.md",
+    "backend/llm-contracts.toml",
+    "backend/tests/models.py",
+    "backend/tests/recording.py",
+    "backend/tests/test_llm_gateway.py",
+    "backend/tests/test_llm_errors.py",
+    "backend/tests/test_recording_keys.py",
+    "backend/tests/test_observability.py",
+    "backend/tests/evals/conftest.py",
+    "backend/tests/cassettes/test_llm_gateway/test_a_replayed_call_is_answered_and_its_cost_settled.yaml",
+]
+# The paths `database: false` removes besides the gateway's.
+DATABASE_PATTERNS = [
+    "backend/src/app/db.py",
+    "backend/src/app/models.py",
+    "backend/migrations/*",
+    "backend/compose/db/*",
+    "backend/tests/db.py",
+    "backend/tests/test_db.py",
+]
 DATABASE_FILES = [
     "backend/src/app/db.py",
     "backend/src/app/models.py",
-    "backend/src/app/llm/gateway.py",
-    "backend/src/app/prompts/README.md",
     "backend/migrations/env.py",
-    "backend/llm-contracts.toml",
     "backend/migrations/versions/20261025_0001_enable_pgvector.py",
     "backend/migrations/versions/20261026_0002_llm_budget.py",
     "backend/migrations/versions/20261026_0003_agent_checkpoints.py",
@@ -82,15 +104,7 @@ DATABASE_FILES = [
     "backend/migrations/versions/20261026_app_project_root.py",
     "backend/compose/db/compose.yaml",
     "backend/tests/db.py",
-    "backend/tests/models.py",
-    "backend/tests/recording.py",
     "backend/tests/test_db.py",
-    "backend/tests/test_llm_gateway.py",
-    "backend/tests/test_llm_errors.py",
-    "backend/tests/test_recording_keys.py",
-    "backend/tests/test_observability.py",
-    "backend/tests/evals/conftest.py",
-    "backend/tests/cassettes/test_llm_gateway/test_a_replayed_call_is_answered_and_its_cost_settled.yaml",
 ]
 # Files that exist in both renders but change with the answer, each with an all-on plain twin.
 TWINS = [
@@ -111,11 +125,13 @@ def files(root: Path) -> dict[str, Path]:
     return {p.relative_to(root).as_posix(): p for p in root.rglob("*") if p.is_file()}
 
 
-@ANSWERS
-def test_render_matrix(render, database, storage):
-    project = render(database=database, storage=storage)
+@ANSWERS3
+def test_render_matrix(render, database, storage, llm):
+    project = render(database=database, storage=storage, llm=llm)
     for path in DATABASE_FILES:
         assert (project / path).exists() is database, path
+    for path in LLM_FILES:
+        assert (project / path).exists() is (llm == "langchain"), path
     for path in STORAGE_FILES:
         assert (project / path).exists() is storage, path
     # Always there, whatever the answers.
@@ -131,22 +147,21 @@ def test_render_matrix(render, database, storage):
     mk = (project / "mk/fastapi.mk").read_text()
     assert ("storage-up:" in mk) is storage
     answers = yaml.safe_load((project / ".copier-answers.fastapi.yml").read_text())
-    assert (answers["database"], answers["storage"]) == (database, storage)
+    assert (answers["database"], answers["storage"], answers["llm"]) == (database, storage, llm)
 
 
-@ANSWERS
-def test_the_llm_import_contracts_exist_only_with_the_database(render, database, storage):
+@ANSWERS3
+def test_the_llm_import_contracts_exist_only_with_a_gateway(render, database, storage, llm):
     # The core's contract names app.llm.core, which import-linter refuses when the module is not
-    # there, so it lives in its own file that exists only with the database (#33). The one
+    # there, so it lives in its own file that exists only with the gateway (#33). The one
     # contract in pyproject.toml stays for every project (import-linter 2.16 exits 1 with none).
-    project = render(database=database, storage=storage)
+    gateway = llm == "langchain"
+    project = render(database=database, storage=storage, llm=llm)
     contracts = project / "backend/llm-contracts.toml"
-    assert contracts.exists() is database
-    mk = (project / "mk/fastapi.mk").read_text()
-    assert ("lint-imports --config llm-contracts.toml" in mk) is database
+    assert contracts.exists() is gateway
     pyproject = read_toml(project / "backend/pyproject.toml")
     assert len(pyproject["tool"]["importlinter"]["contracts"]) == 1
-    if database:
+    if gateway:
         config = read_toml(contracts)["tool"]["importlinter"]
         assert config["root_package"] == "app"
         (contract,) = config["contracts"]
@@ -164,17 +179,30 @@ def render_other(render, tmp_path: Path, **answers) -> Path:
     return render(dst, **answers)
 
 
-def test_database_files_are_exact(render, tmp_path):
-    # Everything `database: false` removes matches DATABASE_PATTERNS, and every pattern removes
-    # something: a new file under a database path, or a pattern that matches nothing, fails here.
-    on = set(files(render(database=True, storage=True)))
-    off = set(files(render_other(render, tmp_path, database=False, storage=True)))
-    removed = on - off
-    assert (off - on) == set()
-    stray = [p for p in removed if not any(fnmatch.fnmatch(p, pat) for pat in DATABASE_PATTERNS)]
+def _exact(removed: set[str], patterns: list[str]) -> None:
+    stray = [p for p in removed if not any(fnmatch.fnmatch(p, pat) for pat in patterns)]
     assert stray == []
-    unused = [pat for pat in DATABASE_PATTERNS if not any(fnmatch.fnmatch(p, pat) for p in removed)]
+    unused = [pat for pat in patterns if not any(fnmatch.fnmatch(p, pat) for p in removed)]
     assert unused == []
+
+
+def test_llm_files_are_exact(render, tmp_path):
+    # Everything `llm: none` removes (the database stays on) matches LLM_PATTERNS, and every
+    # pattern removes something: a new file under a gateway path, or a pattern that matches
+    # nothing, fails here.
+    langchain = set(files(render(database=True, storage=True, llm="langchain")))
+    none = set(files(render_other(render, tmp_path, database=True, storage=True, llm="none")))
+    assert (none - langchain) == set()
+    _exact(langchain - none, LLM_PATTERNS)
+
+
+def test_database_files_are_exact(render, tmp_path):
+    # `database: false` removes the gateway (llm none) and the database's own files: what is
+    # removed beyond the gateway's matches DATABASE_PATTERNS, and every pattern removes something.
+    none = set(files(render(database=True, storage=True, llm="none")))
+    off = set(files(render_other(render, tmp_path, database=False, storage=True)))
+    assert (off - none) == set()
+    _exact(none - off, DATABASE_PATTERNS)
 
 
 def read_toml(path: Path) -> dict:
@@ -290,8 +318,10 @@ def test_no_rendered_python_file_has_an_unused_import(render, database, storage)
         assert unused == [], (rel, unused)
 
 
-# Template-owned files that exist only with the database (the project's own tests are not listed).
-DATABASE_OWNED = [
+# Template-owned files that exist only with the gateway, and only with the database (the project's
+# own tests are not listed). The migrations stay with the database: the gateway's four are empty
+# twins without the gateway, and still the template's.
+LLM_OWNED = [
     "backend/src/app/llm/__init__.py",
     "backend/src/app/llm/budget.py",
     "backend/src/app/llm/checkpoints.py",
@@ -304,6 +334,9 @@ DATABASE_OWNED = [
     "backend/src/app/llm/core/*.py",
     "backend/src/app/llm/langchain/*.py",
     "backend/llm-contracts.toml",
+    "backend/tests/evals/conftest.py",
+]
+DATABASE_OWNED = [
     "backend/migrations/env.py",
     "backend/migrations/script.py.mako",
     "backend/migrations/versions/20261025_0001_enable_pgvector.py",
@@ -314,19 +347,20 @@ DATABASE_OWNED = [
     "backend/migrations/versions/20261026_app_project_root.py",
     "backend/compose/db/compose.yaml",
     "backend/tests/db.py",
-    "backend/tests/evals/conftest.py",
 ]
 
 
-@ANSWERS
-def test_every_template_owned_entry_exists(render, database, storage):
-    project = render(database=database, storage=storage)
+@ANSWERS3
+def test_every_template_owned_entry_exists(render, database, storage, llm):
+    project = render(database=database, storage=storage, llm=llm)
     owned = (project / ".github/template-owned/fastapi.txt").read_text().splitlines()
     patterns = [ln for ln in owned if ln and not ln.startswith("#")]
     existing = list(files(project))
     for pattern in patterns:
         assert any(fnmatch.fnmatch(f, pattern) for f in existing), pattern
     # And the reverse for the parts that switch: a file is listed exactly when it exists.
+    for path in LLM_OWNED:
+        assert (path in patterns) is (llm == "langchain"), path
     for path in DATABASE_OWNED:
         assert (path in patterns) is database, path
     for path in STORAGE_FILES:
@@ -371,20 +405,20 @@ def test_every_llm_module_but_prices_and_checkpoint_types_and_every_template_mig
         assert not _is_owned(patterns, mine), mine
 
 
-@ANSWERS
-def test_rendered_project_has_no_leftover_template_syntax(render, database, storage):
-    for path in files(render(database=database, storage=storage)).values():
+@ANSWERS3
+def test_rendered_project_has_no_leftover_template_syntax(render, database, storage, llm):
+    for path in files(render(database=database, storage=storage, llm=llm)).values():
         if path.suffix in {".py", ".toml", ".md", ".mk", ".yml", ".yaml", ".txt", ".example"}:
             # GitHub Actions expressions (${{ ... }}) are meant to be there.
             assert not re.search(r"(?<!\$)\{\{|\{%", path.read_text()), path
 
 
-@ANSWERS
-def test_rendered_text_files_end_in_exactly_one_newline(render, database, storage):
+@ANSWERS3
+def test_rendered_text_files_end_in_exactly_one_newline(render, database, storage, llm):
     # The base project's pre-commit end-of-file fixer fails `make check` on a file that ends in a
     # blank line or has no final newline (a `{% endif %}` after the last line once did).
     # Every text file, whatever its name (Dockerfile, .dockerignore, .python-version included).
-    for rel, path in files(render(database=database, storage=storage)).items():
+    for rel, path in files(render(database=database, storage=storage, llm=llm)).items():
         try:
             text = path.read_text()
         except UnicodeDecodeError:
@@ -392,9 +426,9 @@ def test_rendered_text_files_end_in_exactly_one_newline(render, database, storag
         assert not text or (text.endswith("\n") and not text.endswith("\n\n")), rel
 
 
-@ANSWERS
-def test_every_rendered_python_file_parses(render, database, storage):
-    project = render(database=database, storage=storage)
+@ANSWERS3
+def test_every_rendered_python_file_parses(render, database, storage, llm):
+    project = render(database=database, storage=storage, llm=llm)
     for rel, path in files(project).items():
         if path.suffix == ".py":
             ast.parse(path.read_text(), filename=rel)
