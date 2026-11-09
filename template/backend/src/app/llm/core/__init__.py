@@ -1,6 +1,7 @@
 """The framework-neutral part of the model gateway: what a call used (usage.py), what it costs
 (prices.py), which key and price a configured model has (registry.py), how a failed call is
-classified and answered (errors.py), how much a request may cost before it is sent (bounds.py),
+classified and answered (errors.py), the agent step limit (steps.py), how much a request may
+cost before it is sent (bounds.py),
 the daily budget and its llm_call rows (budget.py: an adapter drives its Meter), the llm.*
 metrics (metrics.py), and embeddings batched and metered on a Meter (embeddings.py) with OpenAI's
 call behind them (openai_embeddings.py), the prompt and its version hash (prompts.py) and the
