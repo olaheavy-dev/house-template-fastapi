@@ -256,9 +256,9 @@ STORAGE_NOT_SETTINGS = {"STORAGE_PORT", "STORAGE_CONSOLE_PORT"}
 DATABASE_NOT_SETTINGS = {"DB_PORT", "TEST_DATABASE_URL"}
 
 
-@ANSWERS
-def test_env_example_matches_settings(render, database, storage):
-    project = render(database=database, storage=storage)
+@ANSWERS3
+def test_env_example_matches_settings(render, database, storage, llm):
+    project = render(database=database, storage=storage, llm=llm)
     fields = {f.upper() for f in SETTING.findall((project / "backend/src/app/settings.py").read_text())}
     listed = set(EXAMPLE.findall((project / "backend/.env.example").read_text()))
     allowed = (NOT_SETTINGS - DATABASE_NOT_SETTINGS) | (DATABASE_NOT_SETTINGS if database else set()) | (
@@ -267,12 +267,20 @@ def test_env_example_matches_settings(render, database, storage):
     assert listed - fields - allowed == set(), "variables in .env.example that are not settings"
     assert any(f.startswith("STORAGE_") for f in fields) is storage
     assert ("DATABASE_URL" in fields) is database
-    assert any(f.startswith(("LLM_", "LANGSMITH_")) for f in fields) is database
+    # The model, embedding, key, agent and tracing settings exist only with the gateway.
+    gateway = llm == "langchain"
+    assert any(f.startswith(("LLM_", "LANGSMITH_", "AGENT_")) for f in fields) is gateway
+    assert bool(fields & {"EMBEDDING_MODEL", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"}) is gateway
+    assert bool(listed & {"EMBEDDING_MODEL", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"}) is gateway
+    assert any(v.startswith(("LLM_", "LANGSMITH_", "AGENT_")) for v in listed) is gateway
+    # The test database is the database's, not the gateway's.
+    assert ("TEST_DATABASE_URL" in listed) is database
 
 
-@ANSWERS
-def test_production_guard_names_only_rendered_parts(render, database, storage):
-    settings = (render(database=database, storage=storage) / "backend/src/app/settings.py").read_text()
+@ANSWERS3
+def test_production_guard_names_only_rendered_parts(render, database, storage, llm):
+    settings = (render(database=database, storage=storage, llm=llm)
+                / "backend/src/app/settings.py").read_text()
     assert ("DATABASE_URL is the local default" in settings) is database
     assert ("STORAGE_SECRET_ACCESS_KEY is the local default" in settings) is storage
     assert ("def no_local_defaults_in_production" in settings) is (database or storage)
@@ -280,26 +288,73 @@ def test_production_guard_names_only_rendered_parts(render, database, storage):
     assert ("model_validator" in settings) is (database or storage)
 
 
-@ANSWERS
-def test_conftest_fixtures_follow_the_answers(render, database, storage):
-    conftest = (render(database=database, storage=storage) / "backend/tests/conftest.py").read_text()
+@ANSWERS3
+def test_conftest_fixtures_follow_the_answers(render, database, storage, llm):
+    conftest = (render(database=database, storage=storage, llm=llm) / "backend/tests/conftest.py").read_text()
     tree = ast.parse(conftest)
     defined = {n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
     always = {"anyio_backend", "settings", "app", "client", "production_values",
               "expected_readiness_checks", "database_settings"}
-    with_database = {"database_url", "db_session", "db_client", "test_models",
-                     "live_runs_need_models_and_a_key", "vcr_config", "allowed_hosts", "is_eval_run",
-                     "is_recording"}
+    with_database = {"database_url", "db_session", "db_client"}
+    with_llm = {"test_models", "live_runs_need_models_and_a_key", "vcr_config", "allowed_hosts",
+                "is_eval_run", "is_recording"}
     with_storage = {"storage_endpoint", "storage_settings"}
+    gateway = llm == "langchain"
     assert always <= defined
     assert (with_database <= defined) is database
     assert not (with_database & defined) or database
+    assert (with_llm <= defined) is gateway
+    assert not (with_llm & defined) or gateway
     assert (with_storage <= defined) is storage
     assert not (with_storage & defined) or storage
-    if not database:
-        assert "LANGSMITH" not in conftest and "alembic" not in conftest.lower()
-        assert 'return {}' in conftest  # production_values: nothing to set
+    if not gateway:
+        # No LangSmith lines, no model names, no recording, and the budget's own sessionmaker is
+        # not there for db_client to set.
+        for word in ("LANGSMITH", "budget_sessionmaker", "CHAT_MODEL", "vcr", "OPENAI", "ANTHROPIC",
+                     "SecretStr(os.environ"):
+            assert word not in conftest, word
         assert "Settings(_env_file=None, app_env=\"test\")" in conftest
+    if not database:
+        assert "alembic" not in conftest.lower()
+        assert 'return {}' in conftest  # production_values: nothing to set
+
+
+MODEL_FRAMEWORKS = ("langchain", "langgraph", "langsmith", "openai", "anthropic")
+
+
+def _imported_modules(path: Path) -> list[str]:
+    tree = ast.parse(path.read_text())
+    return [n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)] + [
+        a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names]
+
+
+@pytest.mark.parametrize("storage", [True, False], ids=["storage-on", "storage-off"])
+@pytest.mark.parametrize("database", [True, False], ids=["database-on", "database-off"])
+def test_llm_none_imports_no_model_framework(render, database, storage):
+    # Every rendered Python file, project-wide: nothing imports a model framework or provider SDK,
+    # nor the gateway's own modules (app.llm, app.prompts, tests.models, tests.recording).
+    project = render(database=database, storage=storage, llm="none")
+    gateway = ("app.llm", "app.prompts", "tests.models", "tests.recording")
+    for rel, path in files(project).items():
+        if path.suffix != ".py":
+            continue
+        for module in _imported_modules(path):
+            assert not module.startswith(MODEL_FRAMEWORKS), (rel, module)
+            assert not module.startswith(gateway), (rel, module)
+        # `from app import llm` style imports too.
+        assert not re.search(r"from app import [^\n]*\b(llm|prompts)\b", path.read_text()), rel
+        assert "from tests import" not in path.read_text() or not re.search(
+            r"from tests import [^\n]*\b(models|recording)\b", path.read_text()), rel
+
+
+@pytest.mark.parametrize("database", [True, False], ids=["database-on", "database-off"])
+def test_settings_demand_no_model_when_llm_is_none(render, database):
+    settings = (render(database=database, llm="none") / "backend/src/app/settings.py").read_text()
+    for word in ("llm_model", "embedding_model", "api_key", "agent_", "AGENT_MAX_STEPS",
+                 "no_removed_agent_max_steps", "langsmith", "Decimal", "Any"):
+        assert word not in settings, word
+    # `extra="ignore"` keeps a leftover LLM_MODEL in backend/.env or the environment harmless.
+    assert 'extra="ignore"' in settings
 
 
 @ANSWERS3

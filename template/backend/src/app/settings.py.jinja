@@ -8,9 +8,9 @@ with a safe value.
 from __future__ import annotations
 
 import os
-{% if database %}from decimal import Decimal
+{% if llm == 'langchain' %}from decimal import Decimal
 {% endif %}from functools import lru_cache
-from typing import {% if database %}Any, {% endif %}Literal
+from typing import {% if llm == 'langchain' %}Any, {% endif %}Literal
 
 from pydantic import Field{% if database or storage %}, SecretStr, model_validator{% endif %}
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -101,7 +101,7 @@ class Settings(BaseSettings):
         }
     )
 {%- endif %}
-{%- if database %}
+{%- if llm == 'langchain' %}
 
     # The model the gateway calls, "provider:model id", with its prices in app/llm/prices.py. No
     # default: models and prices change, so you choose one. Unset, the gateway refuses to start with
@@ -146,7 +146,7 @@ class Settings(BaseSettings):
 {%- endif %}
 {%- if database or storage %}
 
-{%- if database %}
+{%- if llm == 'langchain' %}
 
     @model_validator(mode="before")
     @classmethod
