@@ -61,8 +61,8 @@ def downgrade() -> None:
     op.drop_table("llm_call")
 {% else %}"""Model budget (not used here)
 
-This project has no model gateway, so this revision does nothing. It keeps its place in the
-chain, so a project that adds the gateway later (or ran it before) follows the same history.
+This project has no model code, so this revision does nothing. It keeps its place in the
+chain, so a project that adds model code later (or ran it before) follows the same history.
 
 Revision ID: 0002
 Revises: 0001

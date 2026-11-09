@@ -506,20 +506,40 @@ def test_every_rendered_python_file_parses(render, database, storage, llm):
 
 # Words that must not appear in a database-less project, except in pyproject.toml and uv.lock (the
 # packages stay declared in the extras).
+LLM_WORDS = re.compile(
+    r"langchain|langgraph|langsmith|LLM_MODEL|EMBEDDING_MODEL|openai|anthropic|gateway|llm-report|"
+    r"record-llm|make eval|cassette|AGENT_MAX", re.IGNORECASE)
+# "checkpoint" is not a word to look for: migrations/env.py names the checkpoint tables it ignores.
 DATABASE_WORDS = re.compile(
-    r"sqlalchemy|alembic|DATABASE_URL|db_session|db_client|SessionDep|pgvector|psycopg|langchain|"
-    r"langgraph|langsmith|LLM_MODEL|EMBEDDING_MODEL|openai|anthropic|gateway|db-up|make migrat",
-    re.IGNORECASE)
-# The one neutral sentence the rules file keeps whatever the answers: it names every extra, so a
-# project can see what it could switch on. It is the only allowance, and it must be there exactly
-# once (a stale allowance would hide nothing, a duplicated one could hide a leftover).
-EXTRAS_SENTENCE = "`db` and `langchain` come with the `database` answer, `storage` with the `storage` answer"
-ALLOWED = {".claude/rules/fastapi.md": EXTRAS_SENTENCE}
+    r"sqlalchemy|alembic|DATABASE_URL|db_session|db_client|SessionDep|pgvector|psycopg|db-up|"
+    r"make migrat", re.IGNORECASE)
+# The sentences the rules file keeps whatever the answers, because they tell a project what it could
+# switch on. They are the only allowances, and each must be there exactly once (a stale allowance
+# would hide nothing, a duplicated one could hide a leftover).
+EXTRAS_SENTENCE = ("`db` comes with the `database` answer, `langchain` with `llm: langchain`, "
+                   "`storage` with the `storage` answer")
+# The command that turns the gateway on. With no database it only adds to the database's own.
+SWITCH_ON_WITH_DATABASE = "(add `-d llm=langchain` for the model gateway too: it needs the database)"
+SWITCH_ON = "`-d llm=langchain` to turn the model gateway on"
+# For a database that ran without the gateway: its migrations did nothing, so the tables are missing.
+RECIPE = ("A database that ran without the model tables (migrations 0002 to 0005 did nothing there) "
+          "gets them when the model gateway is turned on: run `uv --directory backend run --locked "
+          "--extra db --extra langchain alembic stamp 0001`, then `make migrate`; a new database "
+          "needs only `make migrate`.")
+ALLOWED = {
+    "database": {".claude/rules/fastapi.md": [EXTRAS_SENTENCE, SWITCH_ON_WITH_DATABASE]},
+    "llm": {".claude/rules/fastapi.md": [EXTRAS_SENTENCE, SWITCH_ON, RECIPE]},
+    "storage": {},
+}
 PARTS = {"storage": (STORAGE_WORDS, "boto3", ["backend/src/app/storage.py", "mk/fastapi.mk"]),
-         "database": (DATABASE_WORDS, "sqlalchemy", ["backend/src/app/main.py", "mk/fastapi.mk"])}
+         "database": (re.compile(DATABASE_WORDS.pattern + "|" + LLM_WORDS.pattern, re.IGNORECASE),
+                      "sqlalchemy", ["backend/src/app/main.py", "mk/fastapi.mk"]),
+         "llm": (LLM_WORDS, "langchain", ["backend/src/app/main.py", "mk/fastapi.mk"])}
+# What the answers are for each part switched off (the others stay on, as in a default render).
+OFF = {"storage": {"storage": False}, "database": {"database": False}, "llm": {"llm": "none"}}
 
 
-def word_hits(project: Path, words: re.Pattern[str]) -> list[tuple[str, str]]:
+def word_hits(project: Path, words: re.Pattern[str], part: str, allow: bool = True) -> list[tuple[str, str]]:
     found = []
     for rel, path in files(project).items():
         if rel in NOT_COMPARED or ".git/" in rel:
@@ -528,42 +548,54 @@ def word_hits(project: Path, words: re.Pattern[str]) -> list[tuple[str, str]]:
             text = path.read_text()
         except UnicodeDecodeError:
             continue
-        if rel in ALLOWED:
-            assert text.count(ALLOWED[rel]) == 1, rel
-            text = text.replace(ALLOWED[rel], "")
+        for phrase in ALLOWED[part].get(rel, []) if allow else []:
+            assert text.count(phrase) == 1, (rel, phrase)
+            text = text.replace(phrase, "")
         found += [(rel, m.group(0)) for m in words.finditer(text)]
     return found
 
 
-@ANSWERS
-def test_rules_switch_names_every_extra_and_the_flag_that_changes_each_part(render, database, storage):
-    rules = (render(database=database, storage=storage) / ".claude/rules/fastapi.md").read_text()
+@ANSWERS3
+def test_rules_switch_names_every_extra_and_the_flag_that_changes_each_part(
+        render, database, storage, llm):
+    rules = (render(database=database, storage=storage, llm=llm) / ".claude/rules/fastapi.md").read_text()
     bullet = next(ln for ln in rules.splitlines() if ln.startswith("- Dependencies:"))
     assert EXTRAS_SENTENCE in bullet
-    for part, on in (("database", database), ("storage", storage)):
+    gateway = llm == "langchain"
+    for part, on in (("database", database), ("storage", storage), ("llm", gateway)):
         # The command turns the part to the other state: off when it is on, on when it is off.
-        assert f"-d {part}={'false' if on else 'true'}`" in bullet, part
-        assert f"-d {part}={'true' if on else 'false'}`" not in bullet, part
+        off_flag = "-d llm=none" if part == "llm" else f"-d {part}=false"
+        on_flag = "-d llm=langchain" if part == "llm" else f"-d {part}=true"
+        assert f"{off_flag if on else on_flag}`" in bullet, part
+        assert f"{on_flag if on else off_flag}`" not in bullet, part
+    # Without the database there is no gateway to turn off on its own, and turning it on needs both.
+    if not database:
+        assert "-d llm=none`" not in bullet
+        assert SWITCH_ON_WITH_DATABASE in bullet
+    # The recipe for a database that ran without the gateway appears only where that can be the case.
+    assert (RECIPE in bullet) is (database and not gateway)
 
 
-@pytest.mark.parametrize("part", ["storage", "database"], ids=["storage-off", "database-off"])
+@pytest.mark.parametrize("part", ["storage", "database", "llm"], ids=["storage-off", "database-off", "llm-off"])
 def test_no_part_left_behind(render, part):
     words, dependency, _ = PARTS[part]
-    project = render(**{part: False})
-    assert word_hits(project, words) == []
+    project = render(**OFF[part])
+    assert word_hits(project, words, part) == []
     # The mentions that remain are only the declared dependency.
     pyproject = (project / "backend/pyproject.toml").read_text()
     assert dependency in pyproject
 
 
-@pytest.mark.parametrize("part", ["storage", "database"])
+@pytest.mark.parametrize("part", ["storage", "database", "llm"])
 def test_no_part_left_behind_check_catches_a_leftover(render, part):
     # The word list does find what it is meant to find (a check that cannot fail proves nothing).
     words, _, must_hit = PARTS[part]
     project = render()
-    hits = {rel for rel, _ in word_hits(project, words)}
+    hits = {rel for rel, _ in word_hits(project, words, part, allow=False)}
     assert set(must_hit) <= hits
-    assert {".claude/rules/fastapi.md", "backend/compose.yaml"} <= hits
+    assert {".claude/rules/fastapi.md"} <= hits
+    if part != "llm":
+        assert "backend/compose.yaml" in hits
 
 
 def extras_flags(database: bool, storage: bool, llm: str) -> str:
