@@ -514,14 +514,17 @@ EXTRAS_SENTENCE = ("`db` comes with the `database` answer, `langchain` with `llm
                    "`storage` with the `storage` answer")
 # The command that turns the gateway on. With no database it only adds to the database's own.
 SWITCH_ON_WITH_DATABASE = "(add `-d llm=langchain` for the model gateway too: it needs the database)"
+STAYS_OFF = "(the gateway stays off once the answers file records `llm`, which the first 0.8.0 update does)"
 SWITCH_ON = "`-d llm=langchain` to turn the model gateway on"
 # For a database that ran without the gateway: its migrations did nothing, so the tables are missing.
 RECIPE = ("A database that ran without the model tables (migrations 0002 to 0005 did nothing there) "
-          "gets them when the model gateway is turned on: run `uv --directory backend run --locked "
-          "--extra db --extra langchain alembic stamp 0001`, then `make migrate`; a new database "
-          "needs only `make migrate`.")
+          "gets them only after `copier update` has turned the model gateway on (stamping first would "
+          "make `make migrate` re-run the empty revisions and leave no tables). Then, on every database "
+          "the project runs against, production and staging included, and before the gateway is "
+          "deployed, run `uv --directory backend run --locked --extra db --extra langchain alembic "
+          "stamp 0001`, then `make migrate`; a new database needs only `make migrate`.")
 ALLOWED = {
-    "database": {".claude/rules/fastapi.md": [EXTRAS_SENTENCE, SWITCH_ON_WITH_DATABASE]},
+    "database": {".claude/rules/fastapi.md": [EXTRAS_SENTENCE, STAYS_OFF, SWITCH_ON_WITH_DATABASE]},
     "llm": {".claude/rules/fastapi.md": [EXTRAS_SENTENCE, SWITCH_ON, RECIPE]},
     "storage": {},
 }
@@ -565,7 +568,7 @@ def test_rules_switch_names_every_extra_and_the_flag_that_changes_each_part(
     # Without the database there is no gateway to turn off on its own, and turning it on needs both.
     if not database:
         assert "-d llm=none`" not in bullet
-        assert SWITCH_ON_WITH_DATABASE in bullet
+        assert SWITCH_ON_WITH_DATABASE in bullet and STAYS_OFF in bullet
     # The recipe for a database that ran without the gateway appears only where that can be the case.
     assert (RECIPE in bullet) is (database and not gateway)
 

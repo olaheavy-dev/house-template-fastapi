@@ -21,7 +21,7 @@ from copier.errors import TaskError, UnsafeTemplateError
 import yaml
 
 from conftest import BASE_ANSWERS, ROOT
-from test_golden_render import ANSWERS_FILE, files_of, git, require_ref, tracked
+from test_golden_render import ANSWERS_FILE, committed_baseline_project, files_of, git, require_ref, tracked
 
 PUBLISH = ".github/workflows/publish-api.yml"
 _CACHES = shutil.ignore_patterns(".git", ".venv", "__pycache__", ".mypy_cache", ".ruff_cache",
@@ -735,6 +735,7 @@ def test_turning_the_gateway_off_deletes_its_files_even_if_the_user_edited_them(
 @pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
 def test_turning_the_gateway_back_on_restores_it(tmp_path, tagged_repo):
     dst = committed_project(tagged_repo, tmp_path / "project", "v100.0.0")
+    lock = (dst / "backend/uv.lock").read_bytes()
     update(dst, "v100.0.1", llm="none")
     git(dst, "add", "-A")
     git(dst, "commit", "-q", "-m", "chore: gateway off")
@@ -751,7 +752,7 @@ def test_turning_the_gateway_back_on_restores_it(tmp_path, tagged_repo):
     write_base(fresh)
     copy_layer(tagged_repo, fresh, "v100.0.1")
     after.pop("backend/user_added.txt")
-    assert after.pop("backend/uv.lock") == (dst / "backend/uv.lock").read_bytes()
+    assert after.pop("backend/uv.lock") == lock
     expected = files_of(fresh)
     expected.pop("backend/uv.lock")
     assert after == expected
@@ -768,3 +769,21 @@ def test_the_gateway_cannot_be_turned_on_without_the_database(tmp_path, tagged_r
 
     with pytest.raises(ValueError, match="langchain needs database: true"):
         update(dst, "v100.0.1", llm="langchain")
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+@pytest.mark.parametrize(("data", "gateway"), [({"database": True}, True),
+                                                ({"database": True, "llm": "none"}, False)],
+                         ids=["database-true-only", "with-llm-none"])
+def test_a_v0_7_1_project_without_the_database_has_no_llm_answer_yet(tmp_path, data, gateway):
+    # v0.7.1 recorded no `llm`, so the first update falls back to the default and
+    # `-d database=true` alone brings the gateway back (the README and decision 0005 say so; pass
+    # `-d llm=none` to keep it off). Once `llm` is recorded, database=true alone leaves it none.
+    dst = committed_baseline_project(tmp_path / "project", "v0.7.1", database=False)
+    assert "llm" not in answers(dst)
+
+    copier.run_update(dst, answers_file=ANSWERS_FILE, data=data, defaults=True, unsafe=True,
+                      overwrite=True, quiet=True, vcs_ref="HEAD")
+
+    assert answers(dst)["llm"] == ("langchain" if gateway else "none")
+    assert (dst / "backend/src/app/llm").exists() is gateway

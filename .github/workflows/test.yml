@@ -107,7 +107,7 @@ jobs:
   generated-project-variants:
     # The default-answers job above stays as it is. Each option's "off" answer gets its own
     # project here (#29, #30), and so does the smallest one, with neither part. Every entry names
-    # its `llm` answer (the gateway needs the database, so database=false is always llm=none). Making these checks
+    # its `llm` answer (database=false is always llm=none). Making these checks
     # required is a repository-ruleset change for the owner (.github/rulesets/main.json).
     name: Generated project variants (${{ matrix.name }})
     runs-on: ubuntu-24.04
@@ -226,7 +226,7 @@ jobs:
             "${absent[@]}"
 
       - name: Run the backend from its image and call the readiness probe
-        if: matrix.database == 'false' || matrix.llm == 'none'
+        if: matrix.llm == 'none'
         working-directory: ${{ runner.temp }}/demo-${{ matrix.id }}
         run: |
           # No backend/.env and no model settings: a project without the model gateway needs none.

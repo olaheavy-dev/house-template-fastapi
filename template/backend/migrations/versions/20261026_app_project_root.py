@@ -5,7 +5,7 @@ An empty root for the "app" branch. The template's migrations live on the "templ
 two never share a parent and an update can't leave two competing heads on one branch. Upgrade
 both with `alembic upgrade heads` (make migrate); `make migration` writes new revisions here.
 
-A project migration that needs a template table (a foreign key to llm_call, say) declares
+A project migration that needs a template table (a foreign key to one of the template's tables, say) declares
 depends_on with that template revision, so Alembic applies it first.
 
 Revision ID: app_root

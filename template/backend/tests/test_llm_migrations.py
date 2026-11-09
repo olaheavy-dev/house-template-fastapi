@@ -52,20 +52,29 @@ def test_llm_tables_can_be_added_to_a_database_that_ran_without_them(database_ur
         command.upgrade(config, "heads")
 
 
-def test_downgrade_to_0001_leaves_the_project_branch_alone(database_url: str) -> None:
-    # The README says to drop the gateway's tables with `alembic downgrade 0001`: that removes the
-    # template's revisions above 0001 and does not touch the project's branch.
+def versions_in(url: str) -> set[str]:
+    engine = create_engine(url)
+    try:
+        with engine.connect() as connection:
+            rows = connection.exec_driver_sql("SELECT version_num FROM alembic_version")
+            return {row[0] for row in rows}
+    finally:
+        engine.dispose()
+
+
+def test_downgrade_to_0001_removes_the_gateway_tables(database_url: str) -> None:
+    # The README says to drop the gateway's tables with `alembic downgrade 0001`. It removes the
+    # template's revisions above 0001. This test cannot know your own migrations: one that
+    # `depends_on` a gateway revision is downgraded too, and the project's other migrations stay.
     config = db.alembic_config(database_url)
+    before = versions_in(database_url)
     try:
         command.downgrade(config, "0001")
-        engine = create_engine(database_url)
-        try:
-            with engine.connect() as connection:
-                rows = connection.exec_driver_sql("SELECT version_num FROM alembic_version")
-                versions = {row[0] for row in rows}
-        finally:
-            engine.dispose()
-        assert versions == {"0001", "app_root"}
+        after = versions_in(database_url)
+        assert "0001" in after
+        # Versions that are not the template's (app_root and your own) are as they were.
+        template = {"0001", "0002", "0003", "0004", "0005"}
+        assert after - template == before - template
         assert not tables(database_url) & GATEWAY_TABLES
     finally:
         command.upgrade(config, "heads")

@@ -51,6 +51,7 @@ INTENDED: dict[str, str] = {
     ".copier-answers.fastapi.yml": "records the new llm answer, langchain with the database (#30)",
     "backend/pyproject.toml": "the extras comment names the llm answer (#30)",
     "backend/tests/test_llm_migrations.py": "new: the gateway's tables can be added to a database that ran without them (#30)",
+    "backend/migrations/versions/20261026_app_project_root.py": "the example names no gateway table (#30)",
     "backend/tests/test_llm_surface.py": "expects the new serializer name (#36); the step limit has no 422 and steps.py is public (#34)",
     "backend/.env.example": "AGENT_MAX_MODEL_CALLS=13 replaces AGENT_MAX_STEPS=25 (#34)",
     "backend/src/app/settings.py": "agent_max_model_calls replaces agent_max_steps; the app refuses to start while AGENT_MAX_STEPS is set (#34)",
@@ -191,6 +192,7 @@ INTENDED_SINCE_AF53775 = {
     ".claude/rules/fastapi.md": "the extras sentence and switch commands name the llm answer (#30)",
     "backend/pyproject.toml": "the extras comment names the llm answer (#30)",
     "backend/tests/test_llm_migrations.py": "new: adding the gateway's tables later (#30)",
+    "backend/migrations/versions/20261026_app_project_root.py": "the example names no gateway table (#30)",
 }
 
 
@@ -207,8 +209,9 @@ def test_database_off_render_matches_main_before_the_llm_answer(tmp_path):
     require_ref(AF53775)
     before = files_of(render_at(tmp_path / "before", AF53775, database=False))
     head = files_of(render_at(tmp_path / "head", "HEAD", database=False))
-    intended = {p: why for p, why in INTENDED_SINCE_AF53775.items()
-                if p != "backend/tests/test_llm_migrations.py"}
+    absent = {"backend/tests/test_llm_migrations.py",
+              "backend/migrations/versions/20261026_app_project_root.py"}
+    intended = {p: why for p, why in INTENDED_SINCE_AF53775.items() if p not in absent}
     problems = compare(before, head, intended)
     assert not problems, "The database-off render changed beyond #30:\n" + "\n".join(problems)
     assert b"llm: none\n" in head[ANSWERS_FILE]
