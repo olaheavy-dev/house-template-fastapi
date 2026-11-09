@@ -40,6 +40,8 @@ class LoopingFake(GenericFakeChatModel):
     shape: str = "plain"
     structured: str | None = None
     structured_args: dict[str, Any] = Field(default_factory=dict)
+    # Also ask for `add` in the same message as the structured tool call.
+    stray_with_structured: bool = False
     # Call number (from 1) to the error that call raises instead of answering.
     raises: dict[int, BaseException] = Field(default_factory=dict)
     # Call number to something to run while that call is being made (after its reservation).
@@ -73,7 +75,10 @@ class LoopingFake(GenericFakeChatModel):
                 message = self._tool_message(calls)
             elif self.structured in names:
                 call = {"name": self.structured, "args": self.structured_args, "id": f"c-{number}"}
-                message = AIMessage("", tool_calls=[call], usage_metadata=USAGE)
+                calls = [call]
+                if self.stray_with_structured:
+                    calls.append({"name": "add", "args": {"a": 1, "b": 1}, "id": f"x-{number}"})
+                message = AIMessage("", tool_calls=calls, usage_metadata=USAGE)
         return ChatResult(generations=[ChatGeneration(message=message)])
 
     def _tool_message(self, calls: list[dict[str, Any]]) -> AIMessage:

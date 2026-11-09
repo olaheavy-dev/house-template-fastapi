@@ -743,6 +743,9 @@ class ScriptedClaude(ChatAnthropic):
 
         names = [t["name"] for t in kw.get("tools", [])]
         CLAUDE_SEEN.append({"tools": names, "tool_choice": kw.get("tool_choice")})
+        if kw.get("tool_choice") == {"type": "none"}:  # a ProviderStrategy answer: JSON text
+            answer = AIMessage('{"total": 2}')
+            return ChatResult(generations=[ChatGeneration(message=answer)])
         if "add" in names:
             call = {"name": "add", "args": {"a": 1, "b": 1}, "id": "c1"}
         else:
@@ -797,3 +800,57 @@ async def test_an_invalid_structured_answer_on_the_last_call_ends_the_run_with_a
     last = state["messages"][-1]
     assert (last.type, last.tool_calls) == ("ai", [])  # the error message was dropped
     assert len(await llm_calls(db_session)) == 2
+
+
+def unanswered(messages: list[Any]) -> list[str]:
+    """Ids of tool calls with no tool message: a thread with any is refused by every provider."""
+    answered = {m.tool_call_id for m in messages if m.type == "tool"}
+    return [
+        c["id"] for m in messages if m.type == "ai" for c in m.tool_calls if c["id"] not in answered
+    ]
+
+
+async def test_a_stray_tool_call_beside_a_valid_structured_answer_leaves_a_valid_thread(
+    framework: str, gateway: Gateway, thread_id: str
+) -> None:
+    # N = 2, ToolStrategy. On the last call the model returns a valid Answer and also asks for
+    # add. The run ends there, so add never runs: its call must still be answered, or the saved
+    # thread (human, ai, tool, ai, tool, + the stray call) would get a 400 from the provider on
+    # every later run.
+    setup = Setup(
+        gateway, 2, structured="Answer", structured_args={"total": 2}, stray_with_structured=True
+    )
+    agent = build_agent(
+        framework, gateway, [setup.add], response_format=ToolStrategy(schema=Answer)
+    )
+    first = await agent.ainvoke({"messages": [HumanMessage("Add")]}, config(thread_id))
+    assert first["structured_response"] == Answer(total=2)
+    assert len(setup.tool_runs) == 1  # the stray call on the last call did not run
+    assert unanswered(first["messages"]) == []
+    saved = await agent.aget_state(config(thread_id))
+    assert unanswered(saved.values["messages"]) == []
+    second = await agent.ainvoke({"messages": [HumanMessage("Again")]}, config(thread_id))
+    assert unanswered(second["messages"]) == []
+    assert len(second["messages"]) > len(first["messages"])
+
+
+def test_claude_with_native_structured_output_gets_its_tools_and_no_choice_to_call_them() -> None:
+    # End to end through create_agent, so it also catches LangChain changing what its private
+    # _supports_provider_strategy answers (imported in steps.py): sonnet's profile says native
+    # structured output, so a bare schema is a ProviderStrategy and the last call keeps the tools.
+    CLAUDE_SEEN.clear()
+    model = ScriptedClaude(model="claude-sonnet-5-5", api_key=SecretStr("k"))
+
+    def add(a: int, b: int) -> int:
+        """Add two numbers."""
+        return a + b
+
+    agent = create_agent(
+        model, [add], response_format=Answer, middleware=[steps.StepLimitMiddleware(StepLimit(2))]
+    )
+    state = agent.invoke({"messages": [HumanMessage("Add")]})
+    assert len(CLAUDE_SEEN) == 2
+    assert CLAUDE_SEEN[1]["tools"] == ["add"]
+    assert CLAUDE_SEEN[1]["tool_choice"] == {"type": "none"}
+    assert state["structured_response"] is not None
+    assert steps.step_limit_reached(state) is True

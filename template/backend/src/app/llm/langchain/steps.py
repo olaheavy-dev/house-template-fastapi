@@ -24,6 +24,8 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Annotated, Any, NotRequired
 
+# Private: test_claude_with_native_structured_output_gets_its_tools_and_no_choice_to_call_them
+# (test_llm_steps.py) fails if LangChain renames or removes it.
 from langchain.agents.factory import _supports_provider_strategy
 from langchain.agents.middleware import (
     AgentMiddleware,
@@ -106,8 +108,8 @@ def _anthropic(model: Any) -> bool:
 
 def _uses_provider_strategy(request: ModelRequest[Any]) -> bool:
     """Whether create_agent will bind the model for a ProviderStrategy (langchain.agents.factory,
-    _get_bound_model): an explicit one, or an AutoStrategy or bare schema on a model whose profile
-    says it has native structured output."""
+    _get_bound_model): an explicit one, or an AutoStrategy or bare schema on a model that LangChain
+    knows has native structured output (its profile says so, or its name is on LangChain's list)."""
     response_format = request.response_format
     if response_format is None or isinstance(response_format, ToolStrategy):
         return False
@@ -135,6 +137,29 @@ def _plain(message: AIMessage) -> AIMessage:
     )
 
 
+def _answer_stray_calls(response: ModelResponse[Any]) -> ModelResponse[Any]:
+    """The run ends after the last call, so a tool call beside a valid structured answer never
+    runs. Answer it anyway: a saved thread with a call and no result is refused by every provider
+    on its next run."""
+    answered = {m.tool_call_id for m in response.result if isinstance(m, ToolMessage)}
+    extra = [
+        ToolMessage(
+            content="Not run: the model-call limit was reached.",
+            tool_call_id=call["id"],
+            name=call["name"],
+        )
+        for message in response.result
+        if isinstance(message, AIMessage)
+        for call in message.tool_calls
+        if call["id"] not in answered
+    ]
+    if not extra:
+        return response
+    return ModelResponse(
+        result=[*response.result, *extra], structured_response=response.structured_response
+    )
+
+
 def _answer_without_tool_calls(response: ModelResponse[Any]) -> ModelResponse[Any]:
     """A model that ignores an empty tool list may still ask for a tool, which would send the run
     round the loop again. Remove the request, so the message is a plain answer. A valid structured
@@ -143,7 +168,7 @@ def _answer_without_tool_calls(response: ModelResponse[Any]) -> ModelResponse[An
     ask the model again, past the limit, so the error message is dropped and the answer is the
     text alone, and the run ends whatever caller hooks run after the model."""
     if response.structured_response is not None:
-        return response
+        return _answer_stray_calls(response)
     result = [
         _plain(message)
         if isinstance(message, AIMessage) and (message.tool_calls or message.invalid_tool_calls)
