@@ -134,8 +134,10 @@ class Settings(BaseSettings):
     def no_removed_agent_max_steps(cls, data: Any) -> Any:
         """Refuse to start while the old AGENT_MAX_STEPS is set (environment or backend/.env):
         keeping its number would silently change what it limits (steps became model calls)."""
-        if "AGENT_MAX_STEPS" in os.environ or (
-            isinstance(data, dict) and "agent_max_steps" in data
+        # Environment names are matched as Settings matches them: without regard to case (this
+        # class sets no env_prefix and is not case_sensitive), so agent_max_steps=5 counts too.
+        if "agent_max_steps" in {name.casefold() for name in os.environ} or (
+            isinstance(data, dict) and "agent_max_steps" in {str(k).casefold() for k in data}
         ):
             raise ValueError(
                 "AGENT_MAX_STEPS was replaced by AGENT_MAX_MODEL_CALLS. Delete AGENT_MAX_STEPS "

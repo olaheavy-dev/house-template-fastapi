@@ -56,3 +56,24 @@ def test_the_new_name_in_the_env_file_is_read(tmp_path: Path) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text("AGENT_MAX_MODEL_CALLS=7\n")
     assert Settings(_env_file=env_file).agent_max_model_calls == 7
+
+
+@pytest.mark.parametrize("name", ["agent_max_steps", "Agent_Max_Steps", "AGENT_max_STEPS"])
+def test_the_old_environment_variable_in_any_case_stops_the_app_starting(
+    monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    # Settings reads environment names case-insensitively, so a lower-case agent_max_steps=5 used
+    # to be honoured on Linux; it must be refused too, not ignored.
+    monkeypatch.setenv(name, "5")
+    with pytest.raises(ValidationError, match="AGENT_MAX_STEPS"):
+        Settings(_env_file=None)
+
+
+@pytest.mark.parametrize("key", ["agent_max_steps", "Agent_Max_Steps", "AGENT_MAX_STEPS"])
+def test_the_old_name_in_the_env_file_in_any_case_stops_the_app_starting(
+    tmp_path: Path, key: str
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{key}=5\n")
+    with pytest.raises(ValidationError, match="AGENT_MAX_STEPS"):
+        Settings(_env_file=env_file)
