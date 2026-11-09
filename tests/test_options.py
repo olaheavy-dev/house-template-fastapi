@@ -630,3 +630,32 @@ def test_make_targets_are_separated_by_one_blank_line(render, database, storage)
     assert ("\n\nllm-report:" in mk) is database
     assert ("\n\nstorage-up:" in mk) is storage
     assert ("\n\nimage:" in mk)
+
+
+# The `llm` answer (#30): none or langchain; langchain needs the database. database: false means none.
+@pytest.mark.parametrize(
+    ("database", "llm"), [(True, "langchain"), (False, "none")], ids=["database-on", "database-off"])
+def test_llm_defaults_follow_the_database(render, database, llm):
+    # Worked out from the plan: the default is `langchain` if database else `none`, recorded in the
+    # answers file even when it is the default (no `when` on the question).
+    project = render(database=database)
+    answers = yaml.safe_load((project / ".copier-answers.fastapi.yml").read_text())
+    assert answers["llm"] == llm
+
+
+def test_llm_without_database_is_refused(render):
+    with pytest.raises(ValueError, match="langchain needs database: true"):
+        render(database=False, llm="langchain")
+
+
+def test_llm_none_is_allowed_with_the_database(render):
+    project = render(database=True, llm="none")
+    answers = yaml.safe_load((project / ".copier-answers.fastapi.yml").read_text())
+    assert (answers["database"], answers["llm"]) == (True, "none")
+
+
+@pytest.mark.parametrize("llm", ["maf", "LangChain", "NONE", "true"])
+def test_llm_refuses_an_unknown_framework(render, llm):
+    # `maf` arrives with #35; answers are case-sensitive.
+    with pytest.raises(ValueError, match="Invalid choice for 'llm'"):
+        render(database=True, llm=llm)

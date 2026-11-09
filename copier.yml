@@ -121,6 +121,20 @@ database:
   help: PostgreSQL with pgvector, SQLAlchemy and Alembic migrations (the model gateway needs it, so false removes the gateway too)
   default: true
 
+llm:
+  type: str
+  help: >-
+    The model gateway. none leaves it out; langchain is LangChain and LangGraph with the daily
+    budget, prompts and agent checkpoints in PostgreSQL (needs database: true)
+  choices:
+    "none (no model gateway)": "none"
+    "langchain (LangChain and LangGraph; needs the database)":
+      value: langchain
+      validator: >-
+        {% if not database %}langchain needs database: true (the gateway keeps its budget and
+        agent checkpoints in PostgreSQL). Answer database=true, or llm=none{% endif %}
+  default: "{{ 'langchain' if database else 'none' }}"
+
 storage:
   type: bool
   help: S3-compatible object storage (RustFS locally, R2 in production)
