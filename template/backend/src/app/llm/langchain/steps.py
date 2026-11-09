@@ -56,11 +56,15 @@ def step_limit_reached(result: Mapping[str, Any]) -> bool:
 def recursion_limit(limit: StepLimit, middleware: Sequence[AgentMiddleware[Any, Any, Any]]) -> int:
     """LangGraph's own step limit, a backstop only. A run of N model calls takes 2N steps (N model
     steps, N - 1 tool steps and one more that LangGraph counts; measured, tests/test_llm_steps.py),
-    plus N for each node a caller's middleware runs before or after every model call. Allow
-    (2 + hooks) x N + 3, so that the limit never stops a run first and a graph that loops without
-    calling the model still stops."""
+    plus N for each node a caller's middleware runs before or after every model call (h of them),
+    plus one for each node it runs once before or after the whole run (a of them). Allow
+    (2 + h) x N + a + 3, so that the limit never stops a run first and a graph that loops
+    without calling the model still stops."""
     hooks = sum(_overrides(m, "before_model") + _overrides(m, "after_model") for m in middleware)
-    return (2 + hooks) * limit.max_model_calls + 3
+    run_hooks = sum(
+        _overrides(m, "before_agent") + _overrides(m, "after_agent") for m in middleware
+    )
+    return (2 + hooks) * limit.max_model_calls + run_hooks + 3
 
 
 def _overrides(middleware: AgentMiddleware[Any, Any, Any], hook: str) -> int:
@@ -76,6 +80,19 @@ def _calls_made(request: ModelRequest[Any]) -> int:
     return made if isinstance(made, int) else 0
 
 
+def _plain(message: AIMessage) -> AIMessage:
+    """The message with only its text. A copy that merely emptied tool_calls would keep the
+    provider's own copies (OpenAI's additional_kwargs["tool_calls"], Anthropic's tool_use blocks),
+    which the provider reads back on the next call."""
+    return AIMessage(
+        content=message.text,
+        id=message.id,
+        name=message.name,
+        usage_metadata=message.usage_metadata,
+        response_metadata=message.response_metadata,
+    )
+
+
 def _answer_without_tool_calls(response: ModelResponse[Any]) -> ModelResponse[Any]:
     """A model that ignores an empty tool list may still ask for a tool, which would send the run
     round the loop again. Remove the request, so the message is a plain answer. A structured
@@ -85,7 +102,7 @@ def _answer_without_tool_calls(response: ModelResponse[Any]) -> ModelResponse[An
     ):
         return response
     result = [
-        message.model_copy(update={"tool_calls": [], "invalid_tool_calls": []})
+        _plain(message)
         if isinstance(message, AIMessage) and (message.tool_calls or message.invalid_tool_calls)
         else message
         for message in response.result
@@ -106,6 +123,7 @@ class StepLimitMiddleware(AgentMiddleware[StepLimitState, Any, Any]):
         handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
     ) -> ExtendedModelResponse[Any]:
         made = _calls_made(request)
+        self._check(made)
         if self.limit.offers_tools(made):
             return self._after(handler(request), made, final=False)
         return self._after(handler(request.override(tools=[])), made, final=True)
@@ -116,9 +134,17 @@ class StepLimitMiddleware(AgentMiddleware[StepLimitState, Any, Any]):
         handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
     ) -> ExtendedModelResponse[Any]:
         made = _calls_made(request)
+        self._check(made)
         if self.limit.offers_tools(made):
             return self._after(await handler(request), made, final=False)
         return self._after(await handler(request.override(tools=[])), made, final=True)
+
+    def _check(self, made: int) -> None:
+        # The last call ends the run (see _after), so this is a bug if it ever happens.
+        if made >= self.limit.max_model_calls:
+            raise RuntimeError(
+                f"The model-call limit of {self.limit.max_model_calls} was already used up"
+            )
 
     def _after(
         self, response: ModelResponse[Any], made: int, *, final: bool
@@ -127,5 +153,9 @@ class StepLimitMiddleware(AgentMiddleware[StepLimitState, Any, Any]):
         if final:
             response = _answer_without_tool_calls(response)
             update[STEP_LIMIT_REACHED] = True
+            # End the run here whatever the answer: a structured answer that fails validation
+            # would otherwise send the graph back to the model for call N + 1. Such a run has no
+            # structured_response.
+            update["jump_to"] = "end"
             log_reached(self.limit)
         return ExtendedModelResponse(model_response=response, command=Command(update=update))

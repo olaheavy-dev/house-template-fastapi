@@ -20,7 +20,7 @@ import threading
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import timedelta
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -29,7 +29,7 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain.agents.structured_output import ToolStrategy
 from langchain_core.exceptions import ModelRateLimitError, ModelTimeoutError
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool
 from langgraph.errors import GraphRecursionError
@@ -52,7 +52,9 @@ COST_PER_CALL = 15  # micro-USD, see the module docstring
 @pytest.fixture(params=["langchain"])
 def framework(request: pytest.FixtureRequest) -> str:
     """The framework under test. The MAF adapter (#35 5b) adds "maf" here, so the same tests prove
-    both frameworks give the same answer at the limit."""
+    both frameworks give the same answer at the limit. The tests from "one route, end to end"
+    down (route, timeout, rate limit, budget refusal) build their agent with gateway.agent()
+    and are LangChain-only; #35 adds the MAF equivalents."""
     return str(request.param)
 
 
@@ -214,18 +216,34 @@ async def test_parallel_tool_calls_in_one_turn_count_as_one_model_call(
     assert len(await llm_calls(db_session)) == 3
 
 
+@pytest.mark.parametrize(
+    ("shape", "text"), [("plain", ""), ("openai", "Adding now"), ("anthropic", "Adding now")]
+)
 async def test_a_model_that_ignores_the_empty_tool_list_still_stops_at_the_limit(
-    framework: str, gateway: Gateway, thread_id: str, db_session: AsyncSession
+    framework: str,
+    gateway: Gateway,
+    thread_id: str,
+    db_session: AsyncSession,
+    shape: str,
+    text: str,
 ) -> None:
     # The model asks for add even when offered nothing. Call 3 would end the loop only if its
-    # tool calls are removed: 3 calls, 2 tool runs, 6 messages, the last without tool calls.
-    setup = Setup(gateway, 3, ignore_unbound=True)
+    # tool calls are removed: 3 calls, 2 tool runs, 6 messages, the last without tool calls. The
+    # provider's own copies of the calls go too: OpenAI's additional_kwargs["tool_calls"] and
+    # Anthropic's tool_use blocks (a provider would send them back and reject the history).
+    setup = Setup(gateway, 3, ignore_unbound=True, shape=shape)
     agent = build_agent(framework, gateway, [setup.add])
     with capture_logs() as logs:
         state = await agent.ainvoke({"messages": [HumanMessage("Add")]}, config(thread_id))
     assert (len(setup.fake.offered), len(setup.tool_runs), len(state["messages"])) == (3, 2, 6)
     last = state["messages"][-1]
     assert (last.type, last.tool_calls, last.invalid_tool_calls) == ("ai", [], [])
+    assert "tool_calls" not in last.additional_kwargs
+    assert "function_call" not in last.additional_kwargs
+    assert not [b for b in last.content_blocks if b["type"] in ("tool_call", "tool_use")]
+    assert not [b for b in last.content if isinstance(b, dict) and b.get("type") == "tool_use"]
+    assert last.text == text
+    assert last.usage_metadata is not None  # the usage stays on the message
     assert flag_of(framework, state) is True
     assert len(reached(logs)) == 1
     assert len(await llm_calls(db_session)) == 3
@@ -321,6 +339,57 @@ async def test_a_callers_model_hooks_do_not_trip_the_recursion_backstop(
     assert flag_of(framework, state) is True
 
 
+class AgentHooks(AgentMiddleware):
+    """A caller's middleware with a node before and after the whole run."""
+
+    def before_agent(self, state: Any, runtime: Any) -> None:
+        return None
+
+    def after_agent(self, state: Any, runtime: Any) -> None:
+        return None
+
+
+class AsyncAgentHooks(AgentMiddleware):
+    async def abefore_agent(self, state: Any, runtime: Any) -> None:
+        return None
+
+    async def aafter_agent(self, state: Any, runtime: Any) -> None:
+        return None
+
+
+async def test_a_callers_run_hooks_do_not_trip_the_recursion_backstop(
+    framework: str, gateway: Gateway, thread_id: str
+) -> None:
+    # N = 13 takes 26 steps and each of four run hooks adds one, 30: more than the 29 of the
+    # backstop without them. With a = 4 the backstop is 33.
+    setup = Setup(gateway, 13)
+    agent = build_agent(
+        framework, gateway, [setup.add], middleware=[AgentHooks(), AsyncAgentHooks()]
+    )
+    state = await agent.ainvoke({"messages": [HumanMessage("Add")]}, config(thread_id))
+    assert len(setup.fake.offered) == 13
+    assert flag_of(framework, state) is True
+
+
+async def test_an_invalid_structured_answer_on_the_last_call_ends_the_run_there(
+    framework: str, gateway: Gateway, thread_id: str, db_session: AsyncSession
+) -> None:
+    # N = 2 with a ToolStrategy: call 2 calls the structured tool with arguments that fail
+    # validation. LangChain would answer with an error message and ask the model again (call 3);
+    # the limit is 2 calls, so the run ends after call 2: 2 calls, one log, no structured answer.
+    setup = Setup(gateway, 2, structured="Answer", structured_args={"total": "not a number"})
+    agent = build_agent(
+        framework, gateway, [setup.add], response_format=ToolStrategy(schema=Answer)
+    )
+    with capture_logs() as logs:
+        state = await agent.ainvoke({"messages": [HumanMessage("Add")]}, config(thread_id))
+    assert len(setup.fake.offered) == 2
+    assert state.get("structured_response") is None
+    assert flag_of(framework, state) is True
+    assert len(reached(logs)) == 1
+    assert len(await llm_calls(db_session)) == 2
+
+
 def test_the_backstop_is_two_plus_the_hooks_times_the_limit_plus_three() -> None:
     # No hooks: 2 x 13 + 3 = 29. One middleware with before_model and after_model: h = 2 and
     # (2 + 2) x 13 + 3 = 55; each hook of one middleware counts, sync or async.
@@ -331,6 +400,9 @@ def test_the_backstop_is_two_plus_the_hooks_times_the_limit_plus_three() -> None
     assert steps.recursion_limit(limit, [Hooks(), AsyncHooks()]) == 29 + 13 * 4  # h = 4
     # A middleware with no model hooks adds nothing: N = 3 gives 2 x 3 + 3 = 9.
     assert steps.recursion_limit(StepLimit(3), [AgentMiddleware()]) == 9
+    # Each before_agent and after_agent adds one step per run, not per call: two middlewares with
+    # both make a = 4, so (2 + 0) x 13 + 4 + 3 = 33.
+    assert steps.recursion_limit(limit, [AgentHooks(), AsyncAgentHooks()]) == 33
 
 
 # --- structured output, and sync ----------------------------------------------------------------
@@ -492,7 +564,7 @@ async def test_a_final_call_the_provider_rejects_releases_its_reservation(
 
 
 async def test_a_cancelled_final_call_keeps_its_reservation(
-    gateway: Gateway, thread_id: str, db_session: AsyncSession
+    framework: str, gateway: Gateway, thread_id: str, db_session: AsyncSession
 ) -> None:
     # The third call blocks until released; the task is cancelled while it waits. Whether it was
     # billed is unknown, so its reservation stays counted.
@@ -504,7 +576,7 @@ async def test_a_cancelled_final_call_keeps_its_reservation(
         release.wait(5)
 
     setup = Setup(gateway, 3, hooks={3: block})
-    agent = build_agent("langchain", gateway, [setup.add])
+    agent = build_agent(framework, gateway, [setup.add])
     task = asyncio.create_task(
         agent.ainvoke({"messages": [HumanMessage("Add")]}, config(thread_id))
     )
@@ -580,3 +652,20 @@ def test_a_run_with_before_and_after_model_hooks_takes_52_steps_and_no_fewer() -
     assert steps.step_limit_reached(run_with_recursion_limit(13, 52, Hooks()))
     with pytest.raises(GraphRecursionError):
         run_with_recursion_limit(13, 51, Hooks())
+
+
+async def test_the_model_is_never_called_once_the_limit_is_used_up() -> None:
+    # Unreachable in a run (the last call ends it), so a count at the limit is a bug: refuse.
+    called: list[ModelRequest] = []
+
+    async def handler(request: ModelRequest) -> ModelResponse:
+        called.append(request)
+        return ModelResponse(result=[AIMessage("late")])
+
+    request: ModelRequest = ModelRequest(
+        model=LoopingFake(), messages=[], state=cast(Any, {"messages": [], "run_model_calls": 2})
+    )
+    middleware = steps.StepLimitMiddleware(StepLimit(2))
+    with pytest.raises(RuntimeError, match="limit"):
+        await middleware.awrap_model_call(request, handler)
+    assert called == []

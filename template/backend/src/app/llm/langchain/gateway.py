@@ -163,8 +163,11 @@ class Gateway:
         A run makes at most AGENT_MAX_MODEL_CALLS model calls (default 13). The last one is made
         without tools, so the model writes a final answer, and the result has `step_limit_reached`
         set (app.llm.langchain.steps.step_limit_reached(state)): tell users the answer was cut
-        short. The count restarts on every run, also on a saved thread. Middleware you pass runs
-        outside this limit and cannot offer tools again on the last call.
+        short. A run cut short with a response_format may have no structured_response. The count
+        restarts on every run, also on a saved thread. Middleware you pass runs outside this limit
+        and cannot offer tools again on the last call; one whose wrap_model_call retries or falls
+        back makes extra provider calls that count as one call here, each has its own llm_call
+        row, and step_limit_reached may be logged more than once.
 
         For anything beyond a plain tool loop, build a LangGraph StateGraph whose nodes call
         gateway.model(), and compile it with checkpointer=gateway.checkpointer.

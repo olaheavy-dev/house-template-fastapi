@@ -35,6 +35,9 @@ class LoopingFake(GenericFakeChatModel):
     parallel: int = 1
     answer_on: int | None = None
     ignore_unbound: bool = False
+    # How a tool-calling message is shaped: "plain", "openai" (the calls also in additional_kwargs)
+    # or "anthropic" (a tool_use block in list content), each with the text "Adding now".
+    shape: str = "plain"
     structured: str | None = None
     structured_args: dict[str, Any] = Field(default_factory=dict)
     # Call number (from 1) to the error that call raises instead of answering.
@@ -67,8 +70,29 @@ class LoopingFake(GenericFakeChatModel):
                     {"name": "add", "args": {"a": 1, "b": 1}, "id": f"call-{number}-{i}"}
                     for i in range(self.parallel)
                 ]
-                message = AIMessage("", tool_calls=calls, usage_metadata=USAGE)
+                message = self._tool_message(calls)
             elif self.structured in names:
                 call = {"name": self.structured, "args": self.structured_args, "id": f"c-{number}"}
                 message = AIMessage("", tool_calls=[call], usage_metadata=USAGE)
         return ChatResult(generations=[ChatGeneration(message=message)])
+
+    def _tool_message(self, calls: list[dict[str, Any]]) -> AIMessage:
+        if self.shape == "openai":
+            raw = [
+                {"id": c["id"], "type": "function", "function": {"name": "add", "arguments": "{}"}}
+                for c in calls
+            ]
+            return AIMessage(
+                "Adding now",
+                tool_calls=calls,
+                additional_kwargs={"tool_calls": raw},
+                usage_metadata=USAGE,
+            )
+        if self.shape == "anthropic":
+            blocks: list[str | dict[str, Any]] = [{"type": "text", "text": "Adding now"}]
+            blocks += [
+                {"type": "tool_use", "id": c["id"], "name": "add", "input": c["args"]}
+                for c in calls
+            ]
+            return AIMessage(blocks, tool_calls=calls, usage_metadata=USAGE)
+        return AIMessage("", tool_calls=calls, usage_metadata=USAGE)
