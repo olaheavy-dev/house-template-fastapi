@@ -718,7 +718,7 @@ def test_turning_the_gateway_off_deletes_its_files_even_if_the_user_edited_them(
 ):
     dst = committed_project(tagged_repo, tmp_path / "project", "v100.0.0")
     for rel in ("backend/src/app/llm/prices.py", "backend/src/app/llm/checkpoint_types.py",
-                "backend/src/app/llm/core/budget.py"):
+                "backend/src/app/llm/redaction_rules.py", "backend/src/app/llm/core/budget.py"):
         path = dst / rel
         path.write_text(path.read_text() + "\n# my own change\n")
     git(dst, "add", "-A")
@@ -727,7 +727,7 @@ def test_turning_the_gateway_off_deletes_its_files_even_if_the_user_edited_them(
     update(dst, "v100.0.1", llm="none")
 
     for rel in ("backend/src/app/llm/prices.py", "backend/src/app/llm/checkpoint_types.py",
-                "backend/src/app/llm/core/budget.py"):
+                "backend/src/app/llm/redaction_rules.py", "backend/src/app/llm/core/budget.py"):
         assert not (dst / rel).exists(), rel
         assert "my own change" in git(dst, "show", f"HEAD:{rel}")  # recoverable
 
