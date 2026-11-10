@@ -395,6 +395,9 @@ LLM_OWNED = [
     "backend/src/app/llm/langchain/*.py",
     "backend/llm-contracts.toml",
     "backend/tests/evals/conftest.py",
+    "backend/tests/evals/test_gateway_evals.py",
+    "backend/tests/evals/redaction_corpus.py",
+    "backend/tests/evals/test_redaction_evals.py",
 ]
 DATABASE_OWNED = [
     "backend/migrations/env.py",
