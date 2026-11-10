@@ -48,7 +48,15 @@ from langchain_core.callbacks import AsyncCallbackManager, AsyncCallbackManagerF
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
-from langchain_core.runnables import Runnable, RunnableBinding, RunnableConfig
+from langchain_core.runnables import (
+    Runnable,
+    RunnableBinding,
+    RunnableConfig,
+    RunnableParallel,
+    RunnableSequence,
+)
+from langchain_core.runnables.fallbacks import RunnableWithFallbacks
+from langchain_core.runnables.passthrough import RunnableAssign
 from langchain_core.tracers.langchain import LangChainTracer
 from pydantic import BaseModel, PrivateAttr
 
@@ -476,6 +484,59 @@ class _StreamRestorers:
         return tails
 
 
+def _repoint(runnable: Any, inner: BaseChatModel, outer: BaseChatModel, hits: list[int]) -> Any:
+    """`runnable` with every use of `inner` replaced by `outer`, in the shapes LangChain's
+    with_structured_output builds: a binding of the model, a sequence (model, then a parser), the
+    include_raw map (raw model output beside a parsed one), and fallbacks. `hits` gets one entry
+    per replacement."""
+    if runnable is inner:
+        hits.append(1)
+        return outer
+    if isinstance(runnable, RunnableBinding):
+        if runnable.bound is inner:
+            hits.append(1)
+            return runnable.model_copy(update={"bound": outer})
+        bound = _repoint(runnable.bound, inner, outer, hits)
+        return runnable.model_copy(update={"bound": bound})
+    if isinstance(runnable, RunnableSequence):
+        steps = [_repoint(step, inner, outer, hits) for step in runnable.steps]
+        return RunnableSequence(*steps, name=runnable.name)
+    if isinstance(runnable, RunnableAssign):
+        return RunnableAssign(_repoint(runnable.mapper, inner, outer, hits))
+    if isinstance(runnable, RunnableParallel):
+        mapped = {k: _repoint(v, inner, outer, hits) for k, v in runnable.steps__.items()}
+        return RunnableParallel(mapped)
+    if isinstance(runnable, RunnableWithFallbacks):
+        return runnable.model_copy(
+            update={
+                "runnable": _repoint(runnable.runnable, inner, outer, hits),
+                "fallbacks": [_repoint(f, inner, outer, hits) for f in runnable.fallbacks],
+            }
+        )
+    return runnable
+
+
+def _uses(runnable: Any, target: Any, depth: int = 0) -> bool:
+    """Whether `target` is still reachable in a runnable built by LangChain (the fail-closed check
+    after _repoint: any use left would send the original text to the provider)."""
+    if runnable is target:
+        return True
+    if depth > 12:
+        return True  # deeper than anything LangChain builds: do not guess
+    children: list[Any] = []
+    if isinstance(runnable, RunnableBinding):
+        children = [runnable.bound]
+    elif isinstance(runnable, RunnableSequence):
+        children = list(runnable.steps)
+    elif isinstance(runnable, RunnableAssign):
+        children = [runnable.mapper]
+    elif isinstance(runnable, RunnableParallel):
+        children = list(runnable.steps__.values())
+    elif isinstance(runnable, RunnableWithFallbacks):
+        children = [runnable.runnable, *runnable.fallbacks]
+    return any(_uses(child, target, depth + 1) for child in children)
+
+
 # --- the wrapper -------------------------------------------------------------------------------
 
 
@@ -577,6 +638,23 @@ class RedactingChatModel(BaseChatModel):
             "bind_tools did not return a plain binding of the model, so its tool calls could not "
             "be redacted"
         )
+
+    def with_structured_output(
+        self, schema: Any, *, include_raw: bool = False, **kwargs: Any
+    ) -> Runnable[Any, Any]:
+        """The provider's own structured output (every method it has), with the model inside it
+        replaced by this wrapper, so the request is redacted and the parsed fields are restored.
+        Refuses to be built if the model is not found in what the provider returned, or is still
+        reachable after the replacement."""
+        built = self._inner.with_structured_output(schema, include_raw=include_raw, **kwargs)
+        hits: list[int] = []
+        repointed = _repoint(built, self._inner, self, hits)
+        if not hits or _uses(repointed, self._inner):
+            raise RedactionUnavailable(
+                "with_structured_output did not bind the model in a shape this code knows, so "
+                "its fields could not be redacted"
+            )
+        return cast("Runnable[Any, Any]", repointed)
 
     async def _agenerate(
         self,
