@@ -65,6 +65,7 @@ LLM_PATTERNS = [
 ]
 # One file from each pattern that must be absent without the gateway.
 LLM_FILES = [
+    "backend/src/app/llm/langchain/gateway.py",
     "backend/src/app/prompts/README.md",
     "backend/llm-contracts.toml",
     "backend/tests/models.py",
@@ -434,7 +435,7 @@ def _is_owned(patterns: list[str], path: str) -> bool:
 
 
 def test_every_llm_module_but_prices_and_checkpoint_types_and_every_template_migration_is_template_owned(render):
-    # The warning shims (errors, embeddings, ...) and the template's own migrations are the
+    # The gateway's modules and the template's own migrations are the
     # template's (an edit to one would conflict on the next `copier update`); listing them makes
     # the project's CI warn when a pull request edits one. prices.py is the project's price
     # table, checkpoint_types.py the project's list of its own saved classes (#36) and

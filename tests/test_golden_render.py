@@ -234,15 +234,16 @@ def test_database_off_render_matches_main_before_the_llm_answer(tmp_path):
     require_ref(AF53775)
     before = files_of(render_at(tmp_path / "before", AF53775, database=False))
     head = files_of(render_at(tmp_path / "head", "HEAD", database=False))
-    # The redaction files are part of the gateway, so they are absent here (#78).
-    absent = {*REMOVED_OLD_PATHS, "backend/tests/test_llm_surface.py",
+    # The redaction files are part of the gateway, so they are absent here (#78). Also listed:
+    # fastapi.txt, which is present but unchanged without the gateway (its list is inside an `if`).
+    not_in_this_render_or_unchanged = {*REMOVED_OLD_PATHS, "backend/tests/test_llm_surface.py",
               "backend/tests/test_llm_migrations.py",
               "backend/migrations/versions/20261026_app_project_root.py",
               "backend/src/app/llm/core/__init__.py",
               "backend/src/app/llm/core/redaction.py",
               "backend/src/app/llm/redaction_rules.py",
               "backend/tests/test_llm_core_redaction.py"}
-    intended = {p: why for p, why in INTENDED_SINCE_AF53775.items() if p not in absent}
+    intended = {p: why for p, why in INTENDED_SINCE_AF53775.items() if p not in not_in_this_render_or_unchanged}
     problems = compare(before, head, intended)
     assert not problems, "The database-off render changed beyond #30 and #78:\n" + "\n".join(problems)
     assert b"llm: none\n" in head[ANSWERS_FILE]
@@ -348,9 +349,9 @@ def update_to_head(dst: Path) -> None:
 
 
 @pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
-def test_updating_a_baseline_project_with_defaults_deletes_nothing(tmp_path):
+def test_updating_a_baseline_project_with_defaults_deletes_only_the_old_import_paths(tmp_path):
     # Proves: `copier update --defaults` from BASELINE_REF to the working tree (vcs_ref="HEAD")
-    # keeps every file the project had, keeps a file the user added, leaves no conflict markers or
+    # keeps every file the project had except the old import paths 0.8.0 removes, keeps a file the user added, leaves no conflict markers or
     # .rej files, and brings the project to what a fresh render at HEAD produces. Copier deletes
     # files that an answer change stops generating (#32); the defaults must not stop generating any.
     # The baseline is v0.7.0, which has the #49 fix: the update works without the base answers file
