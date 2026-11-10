@@ -48,7 +48,7 @@ from langchain_core.callbacks import AsyncCallbackManager, AsyncCallbackManagerF
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
-from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables import Runnable, RunnableBinding, RunnableConfig
 from langchain_core.tracers.langchain import LangChainTracer
 from pydantic import BaseModel, PrivateAttr
 
@@ -553,6 +553,29 @@ class RedactingChatModel(BaseChatModel):
     def _generate(self, *args: Any, **kwargs: Any) -> ChatResult:
         raise NotImplementedError(
             "use the async API: await model.ainvoke(...) or model.astream(...)"
+        )
+
+    def bind_tools(
+        self, tools: Sequence[Any], *, tool_choice: str | None = None, **kwargs: Any
+    ) -> Runnable[Any, Any]:
+        """The provider's own tool binding (its schemas, `strict`, `tool_choice`), pointed at this
+        wrapper instead of the provider model, so tool calls are redacted too. Refuses to be built
+        if the provider's binding is not a plain binding of its model."""
+        if tool_choice is not None:
+            kwargs["tool_choice"] = tool_choice
+        bound = self._inner.bind_tools(tools, **kwargs)
+        if bound is self._inner:  # a model that takes no tools (a test double): nothing to bind
+            return self
+        if (
+            isinstance(bound, RunnableBinding)
+            and bound.bound is self._inner
+            and not bound.config
+            and not bound.config_factories
+        ):
+            return self.bind(**bound.kwargs)
+        raise RedactionUnavailable(
+            "bind_tools did not return a plain binding of the model, so its tool calls could not "
+            "be redacted"
         )
 
     async def _agenerate(

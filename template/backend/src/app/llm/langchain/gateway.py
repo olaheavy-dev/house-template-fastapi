@@ -54,6 +54,7 @@ from app.llm.core.steps import StepLimit
 from app.llm.langchain.callbacks import BudgetGuard
 from app.llm.langchain.embeddings import GatewayEmbeddings
 from app.llm.langchain.prompts import prompt_config
+from app.llm.langchain.redaction import RedactingChatModel
 from app.llm.langchain.steps import StepLimitMiddleware, recursion_limit
 from app.llm.redaction_rules import DETECTORS
 from app.problems import Problem
@@ -134,6 +135,7 @@ class Gateway:
         api_key: SecretStr | None = getattr(settings, registry.key_setting(llm_model))
         # Without a key there is no model, and calls get a 503 instead of reaching the provider.
         self._model: BaseChatModel | None = None
+        self._wrapped: RedactingChatModel | None = None
         if api_key is not None:
             self._model = init_chat_model(
                 llm_model,
@@ -146,9 +148,17 @@ class Gateway:
             )
 
     def model(self) -> BaseChatModel:
+        """The chat model. With redaction on (the default) it is a RedactingChatModel around the
+        provider's, so `isinstance(model, ChatOpenAI)` is False (app/llm/langchain/redaction.py)."""
         if self._model is None:
             raise Problem(503, detail="The language model isn't configured.")
-        return self._model
+        if self.redactor is None:
+            return self._model
+        # Wrapped around whatever _model is now (a test may swap it), and kept so every caller
+        # gets the same object.
+        if self._wrapped is None or self._wrapped.inner is not self._model:
+            self._wrapped = RedactingChatModel(self._model, self.redactor)
+        return self._wrapped
 
     def embeddings(self) -> GatewayEmbeddings:
         """Embeddings under the same daily budget; always await them:

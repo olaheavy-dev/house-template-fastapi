@@ -61,6 +61,21 @@ async def test_ainvoke_sends_no_personal_value_and_restores_them_in_the_answer(
 
 
 @pytest.mark.parametrize("provider", PROVIDERS)
+async def test_a_handler_passed_by_the_caller_sees_only_the_public_run(provider: str) -> None:
+    # The hidden inner run inherits no handler of the caller's (LangGraph's message stream is one),
+    # so the caller is told about one model run, with its own text, and nothing twice.
+    _, model = wire.wrapped(provider)
+    outer = wire.Recorder()
+    async with redaction_scope(known={"NAME": [NAME]}):
+        with wire.captured(wire.echo(provider)):
+            await model.ainvoke(HISTORY, config={"callbacks": [outer]})
+    assert outer.names() == ["start", "end"]
+    [(_, seen, _)] = outer.starts
+    assert EMAIL in repr(seen)  # the caller's own run shows the caller's own text
+    assert PLACEHOLDER.search(repr(seen)) is None
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
 async def test_a_request_with_nothing_to_redact_is_byte_identical_to_the_raw_models(
     provider: str,
 ) -> None:

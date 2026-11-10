@@ -21,6 +21,7 @@ from langchain_core.callbacks import AsyncCallbackHandler, BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
+from pydantic import BaseModel
 
 from app.llm.core.redaction import Redactor
 from app.llm.langchain.redaction import RedactingChatModel
@@ -37,6 +38,8 @@ __all__ = [
     "SEEDS",
     "STREAMING_PROVIDERS",
     "TRICKY",
+    "Address",
+    "Contact",
     "Recorder",
     "Transport",
     "anthropic_stream",
@@ -585,3 +588,36 @@ def echo(provider: str) -> Reply:
         return text_reply(provider, "Noted: " + " ".join(found))
 
     return reply
+
+
+class Address(BaseModel):
+    city: str
+    line: str
+
+
+class Contact(BaseModel):
+    """A structured answer with a nested object, for the structured-output and agent tests."""
+
+    name: str
+    email: str
+    address: Address
+
+
+# The same schema as a plain dict (additionalProperties false, as strict mode needs).
+DICT_SCHEMA: dict[str, Any] = {
+    "title": "Contact",
+    "description": "A contact.",
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "email": {"type": "string"},
+        "address": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}, "line": {"type": "string"}},
+            "required": ["city", "line"],
+            "additionalProperties": False,
+        },
+    },
+    "required": ["name", "email", "address"],
+    "additionalProperties": False,
+}
