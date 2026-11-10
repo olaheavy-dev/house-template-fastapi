@@ -41,11 +41,18 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping, Sequence
 from contextlib import aclosing
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any, cast
 
 import structlog
-from langchain_core.callbacks import AsyncCallbackManager, AsyncCallbackManagerForLLMRun
-from langchain_core.language_models import BaseChatModel
+from langchain_core.callbacks import (
+    AsyncCallbackHandler,
+    AsyncCallbackManager,
+    AsyncCallbackManagerForLLMRun,
+    BaseCallbackManager,
+)
+from langchain_core.language_models import BaseChatModel, LanguageModelInput
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_core.runnables import (
@@ -55,6 +62,7 @@ from langchain_core.runnables import (
     RunnableParallel,
     RunnableSequence,
 )
+from langchain_core.runnables.config import ensure_config
 from langchain_core.runnables.fallbacks import RunnableWithFallbacks
 from langchain_core.runnables.passthrough import RunnableAssign
 from langchain_core.tracers.langchain import LangChainTracer
@@ -541,31 +549,93 @@ def _uses(runnable: Any, target: Any, depth: int = 0) -> bool:
 # --- the wrapper -------------------------------------------------------------------------------
 
 
-def _inner_config(run_manager: AsyncCallbackManagerForLLMRun | None, count: int) -> RunnableConfig:
+@dataclass(frozen=True)
+class _CallContext:
+    """What the hidden inner run must inherit from the caller's call of the wrapper: the wrapper
+    run's id (its parent), the tags and metadata (feature, user_ref and prompt among them, which
+    the budget guard reads to apply the per-user cap), and the LangChainTracers."""
+
+    parent_run_id: Any
+    tags: tuple[str, ...]
+    metadata: Mapping[str, Any]
+    tracers: tuple[Any, ...]
+
+
+class _Holder:
+    """Filled in when the wrapper's run starts, read by `_astream` when langchain-core calls it
+    without a run manager (`astream`, and the streaming branch of `ainvoke`)."""
+
+    def __init__(self, context: _CallContext | None = None) -> None:
+        self.context = context
+
+
+_pending: ContextVar[_Holder | None] = ContextVar("redaction_pending_call", default=None)
+
+
+def _tracers(handlers: Sequence[Any]) -> tuple[Any, ...]:
+    return tuple(h for h in handlers if isinstance(h, LangChainTracer))
+
+
+class _CaptureRun(AsyncCallbackHandler):
+    """A handler on the wrapper's own run that records its id, tags and metadata, so `astream` can
+    hand them to the inner run. It runs inline, in the caller's task, before `_astream` starts."""
+
+    run_inline = True
+
+    def __init__(self, holder: _Holder, tracers: tuple[Any, ...]) -> None:
+        self._holder = holder
+        self._tracers = tracers
+
+    async def on_chat_model_start(
+        self,
+        serialized: dict[str, Any],
+        messages: list[list[BaseMessage]],
+        *,
+        run_id: Any,
+        tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        self._holder.context = _CallContext(
+            run_id, tuple(tags or ()), dict(metadata or {}), self._tracers
+        )
+
+
+def _context_of(run_manager: AsyncCallbackManagerForLLMRun | None) -> _CallContext | None:
+    if run_manager is None:
+        return None
+    return _CallContext(
+        run_manager.run_id,
+        tuple(run_manager.inheritable_tags),
+        dict(run_manager.inheritable_metadata),
+        _tracers(run_manager.inheritable_handlers),
+    )
+
+
+def _inner_config(context: _CallContext, count: int) -> RunnableConfig:
     """The config for the hidden inner call: the wrapper's tracers (so LangSmith shows the inner
     run under the wrapper's, masked), nothing else inherited (LangGraph's message stream would send
     the inner tokens to users), the wrapper's tags and metadata, `nostream`, and the redaction
     count."""
-    handlers: list[Any] = []
-    tags: list[str] = []
-    metadata: dict[str, Any] = {}
-    parent = None
-    if run_manager is not None:
-        handlers = [h for h in run_manager.inheritable_handlers if isinstance(h, LangChainTracer)]
-        tags = list(run_manager.inheritable_tags)
-        metadata = dict(run_manager.inheritable_metadata)
-        parent = run_manager.run_id
+    handlers = list(context.tracers)
     manager = AsyncCallbackManager(
-        handlers=handlers, inheritable_handlers=handlers, parent_run_id=parent
+        handlers=handlers, inheritable_handlers=handlers, parent_run_id=context.parent_run_id
     )
     return cast(
         RunnableConfig,
         {
             "callbacks": manager,
-            "tags": [*tags, "nostream"],
-            "metadata": {**metadata, "redacted_count": count},
+            "tags": [*dict.fromkeys(context.tags), "nostream"],
+            "metadata": {**context.metadata, "redacted_count": count},
         },
     )
+
+
+def _missing_context() -> RedactionFailed:
+    """Fail closed: without the caller's context the inner call would be reserved with no user,
+    so the per-user cap would be skipped. Nothing is sent."""
+    log.error("llm_redaction_failed", error_type="MissingCallContext")
+    return RedactionFailed()
 
 
 def _note(prepared: _Prepared) -> None:
@@ -672,11 +742,12 @@ class RedactingChatModel(BaseChatModel):
         run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> ChatResult:
+        context = _context_of(run_manager) or self._pending_context()
         prepared = prepare(self._redactor, messages)
         _note(prepared)
         answer = await self._inner.ainvoke(
             prepared.messages,
-            config=_inner_config(run_manager, prepared.count),
+            config=_inner_config(context, prepared.count),
             stop=stop,
             **kwargs,
         )
@@ -688,6 +759,69 @@ class RedactingChatModel(BaseChatModel):
             log.warning("llm_unrestored_placeholders", count=restorer.unrestored)
         return ChatResult(generations=[ChatGeneration(message=restored)])
 
+    @staticmethod
+    def _pending_context() -> _CallContext:
+        holder = _pending.get()
+        _pending.set(None)  # read once: a later call must set its own
+        if holder is None or holder.context is None:
+            raise _missing_context()
+        return holder.context
+
+    async def astream(
+        self,
+        input: LanguageModelInput,
+        config: RunnableConfig | None = None,
+        *,
+        stop: list[str] | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[AIMessageChunk]:
+        """langchain-core calls `_astream` here without a run manager, so the call's tags, metadata
+        and tracers are captured from the wrapper's own run and handed to `_astream` (a context
+        variable holding a one-call holder). Without them the per-user cap would be skipped."""
+        config = ensure_config(config)
+        holder = _Holder()
+        callbacks = config.get("callbacks")
+        inheritable = (
+            callbacks.inheritable_handlers
+            if isinstance(callbacks, BaseCallbackManager)
+            else list(callbacks or [])
+        )
+        capture = _CaptureRun(holder, _tracers(inheritable))
+        if isinstance(callbacks, BaseCallbackManager):
+            wrapped: Any = callbacks.copy()
+            wrapped.add_handler(capture, inherit=False)
+        else:
+            wrapped = [*(callbacks or []), capture]
+        _pending.set(holder)
+        try:
+            stream = cast(
+                AsyncGenerator[AIMessageChunk, None],
+                super().astream(input, {**config, "callbacks": wrapped}, stop=stop, **kwargs),
+            )
+            # aclosing: closing this stream closes langchain-core's, and with it the inner run.
+            async with aclosing(stream) as chunks:
+                async for chunk in chunks:
+                    yield chunk
+        finally:
+            _pending.set(None)
+
+    async def _agenerate_with_cache(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        """The streaming branch of `ainvoke` (a streaming handler is attached, as LangGraph's
+        message stream does) calls `_astream` without the run manager: hand it over here."""
+        token = _pending.set(_Holder(_context_of(run_manager)))
+        try:
+            return await super()._agenerate_with_cache(
+                messages, stop=stop, run_manager=run_manager, **kwargs
+            )
+        finally:
+            _pending.reset(token)
+
     async def _astream(
         self,
         messages: list[BaseMessage],
@@ -695,6 +829,7 @@ class RedactingChatModel(BaseChatModel):
         run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
+        context = _context_of(run_manager) or self._pending_context()
         prepared = prepare(self._redactor, messages)
         _note(prepared)
         restorers = _StreamRestorers(prepared.mapping, json_text=_json_output(kwargs))
@@ -702,7 +837,7 @@ class RedactingChatModel(BaseChatModel):
             AsyncGenerator[AIMessageChunk, None],
             self._inner.astream(
                 prepared.messages,
-                config=_inner_config(run_manager, prepared.count),
+                config=_inner_config(context, prepared.count),
                 stop=stop,
                 **kwargs,
             ),
