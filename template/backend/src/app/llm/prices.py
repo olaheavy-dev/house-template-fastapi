@@ -12,17 +12,8 @@ list prices: read the page on the day you add or change an entry and never type 
 
 from __future__ import annotations
 
-import warnings
-from typing import TYPE_CHECKING
-
-from app.llm.core import prices as _core
 from app.llm.core.prices import MICRO_USD, Price, Rates
 from app.llm.core.prices import usd_rates as _rates
-
-if TYPE_CHECKING:
-    from app.llm.core.prices import ceiling as ceiling
-    from app.llm.core.prices import cost as cost
-    from app.llm.core.prices import token_details as token_details
 
 __all__ = [
     "EMBEDDING_PRICES",
@@ -30,9 +21,6 @@ __all__ = [
     "PRICES",
     "Price",
     "Rates",
-    "ceiling",
-    "cost",
-    "token_details",
 ]
 
 
@@ -83,32 +71,3 @@ EMBEDDING_PRICES: dict[str, Price] = {
         _rates(0.13, 0, 0, 0, 0), checked="2026-11-06", source=OPENAI_PRICING
     ),
 }
-
-
-# The arithmetic moved to app/llm/core/prices.py (#33). Until 0.8.0 the old names still answer here,
-# with a DeprecationWarning, and are the same objects as the core's.
-_MOVED = frozenset({"cost", "ceiling", "token_details"})
-# Two of them take the core's Usage now. They differ on no usage: cost has no answer for it.
-_CONVERT = (
-    " and now takes app.llm.core.usage.Usage: convert LangChain usage with "
-    "app.llm.langchain.usage.from_langchain"
-)
-_TAKES_USAGE = {
-    "cost": _CONVERT
-    + " (it takes a Usage only, never None or {}: skip pricing when there is no usage)",
-    "token_details": _CONVERT + " (pass None, not {}, for no usage)",
-}
-
-if not TYPE_CHECKING:
-
-    def __getattr__(name: str) -> object:
-        if name in _MOVED:
-            takes_usage = _TAKES_USAGE.get(name, "")
-            warnings.warn(
-                f"app.llm.prices.{name} moved to app.llm.core.prices.{name}: import it from there "
-                f"(the old name goes in 0.8.0){takes_usage}",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            return getattr(_core, name)
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

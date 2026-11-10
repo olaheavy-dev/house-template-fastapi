@@ -21,7 +21,8 @@ from copier.errors import TaskError, UnsafeTemplateError
 import yaml
 
 from conftest import BASE_ANSWERS, ROOT
-from test_golden_render import ANSWERS_FILE, committed_baseline_project, files_of, git, require_ref, tracked
+from test_golden_render import (ANSWERS_FILE, committed_baseline_project, files_of, git, require_ref,
+                                tracked, update_to_head, REMOVED_FILES)
 
 PUBLISH = ".github/workflows/publish-api.yml"
 _CACHES = shutil.ignore_patterns(".git", ".venv", "__pycache__", ".mypy_cache", ".ruff_cache",
@@ -289,20 +290,14 @@ def test_recopy_overwrites_a_v0_6_1_price_table_and_models_but_git_keeps_the_edi
     assert "app.course" not in models.read_text()
 
 
-# main just before the core split (T0, #63); it already has the #49 fix, so `copier update` works.
-PRE_SPLIT = "160b8453a96e996355f1d7e5ff46e0c14f3bbcda"
 SHIMS = ("gateway", "checkpoints", "errors", "embeddings")
 
 
 @pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
-def test_update_from_before_the_core_split_merges_the_price_table_and_conflicts_on_edited_shims(
-        tmp_path):
-    # Goes when 0.8.0 removes the shims (#33). This unreleased main commit stands in for a project
-    # made from main between 0.6.1 and 0.7.0, because a 0.6.1 project cannot `copier update` at all.
-    require_ref(PRE_SPLIT)
-    dst = tmp_path / "project"
-    write_base(dst)
-    copy_layer(ROOT, dst, PRE_SPLIT)
+def test_update_from_0_7_0_removes_the_old_import_paths_and_keeps_the_projects_prices(tmp_path):
+    # What 0.8.0 does to a v0.7.0 project (#33): the old modules go, an edited one included, and the
+    # price table keeps the project's entry. Observed on Copier 9.19.1; the README says the same.
+    dst = committed_baseline_project(tmp_path / "project")
     llm = dst / "backend/src/app/llm"
     entry = ('    "openai:gpt-demo": Price(\n        _rates(1, 4, 0.10, 1.25, 2), checked="2026-11-06",\n'
              '        source=OPENAI_PRICING,\n    ),\n')
@@ -315,24 +310,21 @@ def test_update_from_before_the_core_split_merges_the_price_table_and_conflicts_
             f.write(f"# my edit to {name}\n")
     product = dst / "backend/src/app/api/ask.py"
     product.parent.mkdir(parents=True, exist_ok=True)
-    product.write_text("from app.llm.gateway import GatewayDep\n")
-    git(dst, "init", "-q", "-b", "main")
+    product.write_text("from app.llm.langchain.gateway import GatewayDep\n")
     git(dst, "add", "-A")
-    git(dst, "commit", "-q", "-m", "chore: pre-split project with edits")
+    git(dst, "commit", "-q", "-m", "chore: v0.7.0 project with edits")
     product_before = product.read_bytes()
 
-    copier.run_update(dst, answers_file=ANSWERS_FILE, defaults=True, unsafe=True, overwrite=True,
-                      quiet=True, vcs_ref="HEAD")
+    update_to_head(dst)
 
     merged = (llm / "prices.py").read_text()
     assert entry in merged  # the project's price entry survived
-    assert "_MOVED" in merged  # and the new template's text arrived around it
+    assert "_MOVED" not in merged  # and the forwards for the moved names are gone
     assert "<<<<<<<" not in merged
-    # Observed on Copier 9.19.1 with the default inline conflict mode: exactly the four edited
-    # shims conflict, nothing is left as .rej or .orig, and the product file is untouched.
-    conflicted = sorted(p for p, data in files_of(dst).items() if b"<<<<<<<" in data)
-    assert conflicted == sorted(f"backend/src/app/llm/{name}.py" for name in SHIMS)
+    old = [f"backend/src/app/llm/{n}.py" for n in (*SHIMS, "budget", "metrics", "prompts", "report")]
+    assert [p for p in old if (dst / p).exists()] == []
     assert not list(dst.rglob("*.rej")) and not list(dst.rglob("*.orig"))
+    assert [p for p, data in files_of(dst).items() if b"<<<<<<<" in data] == []
     assert product.read_bytes() == product_before
 
 
@@ -406,7 +398,8 @@ def test_update_from_before_the_storage_and_database_questions_keeps_every_file(
 
     recorded = answers(dst)
     assert (recorded["storage"], recorded["database"]) == (True, True)
-    assert before - set(files_of(dst)) == set(), "update deleted files"
+    # Only the old import paths that 0.8.0 removes (they were real modules in this old copy).
+    assert before - set(files_of(dst)) == before & REMOVED_FILES, "update deleted other files"
     assert (dst / "backend/user_added.txt").read_text() == "mine\n"
     assert not list(dst.rglob("*.rej"))
 
@@ -424,7 +417,7 @@ def test_update_from_before_the_questions_with_one_turned_off_removes_only_its_f
     copier.run_update(dst, answers_file=ANSWERS_FILE, data={answer: False}, defaults=True,
                       unsafe=True, overwrite=True, quiet=True, vcs_ref="HEAD")
 
-    assert before - set(files_of(dst)) == expected
+    assert before - set(files_of(dst)) == expected | before & REMOVED_FILES
     assert answers(dst)[answer] is False
     assert (dst / "backend/user_added.txt").read_text() == "mine\n"
     assert not list(dst.rglob("*.rej"))
@@ -517,7 +510,7 @@ def test_a_project_that_already_has_storage_off_does_not_get_it_back_on_update(
 
 
 DATABASE_PATHS = [
-    "backend/src/app/db.py", "backend/src/app/models.py", "backend/src/app/llm/gateway.py",
+    "backend/src/app/db.py", "backend/src/app/models.py", "backend/src/app/llm/langchain/gateway.py",
     "backend/src/app/prompts/README.md", "backend/migrations/env.py",
     "backend/migrations/versions/20261026_app_project_root.py", "backend/compose/db/compose.yaml",
     "backend/tests/db.py", "backend/tests/test_db.py", "backend/tests/evals/conftest.py",
@@ -664,7 +657,7 @@ def test_turning_both_parts_off_in_one_update_matches_a_fresh_minimal_render(
 
 
 GATEWAY_PATHS = [
-    "backend/src/app/llm/gateway.py", "backend/src/app/llm/prices.py",
+    "backend/src/app/llm/langchain/gateway.py", "backend/src/app/llm/prices.py",
     "backend/src/app/llm/checkpoint_types.py", "backend/src/app/prompts/README.md",
     "backend/llm-contracts.toml", "backend/tests/models.py", "backend/tests/recording.py",
     "backend/tests/test_llm_gateway.py", "backend/tests/evals/conftest.py",
