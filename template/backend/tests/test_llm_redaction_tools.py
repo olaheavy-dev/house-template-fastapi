@@ -299,3 +299,16 @@ def test_a_structured_runnable_that_is_too_deep_to_check_is_refused_fail_closed(
         pytest.raises(RedactionUnavailable, match="with_structured_output"),
     ):
         model.with_structured_output(wire.Contact)
+
+
+def test_a_media_block_is_sent_exactly_as_it_was_even_when_its_text_looks_personal() -> None:
+    # Media is counted, not scanned: a url that holds an email is the provider's to fetch, not ours
+    # to rewrite (rewriting would break it).
+    image = {"type": "image", "source": {"type": "url", "url": f"https://example.com/p?m={EMAIL}"}}
+    message = HumanMessage(content=[{"type": "text", "text": "Look"}, image])
+    prepared = redaction.prepare(Redactor(wire.DETECTORS), [message])
+    [sent] = prepared.messages
+    assert isinstance(sent.content, list)
+    assert sent.content[1] == image
+    assert prepared.count == 0
+    assert prepared.unscanned == 1
