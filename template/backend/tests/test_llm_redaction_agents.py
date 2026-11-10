@@ -252,13 +252,18 @@ async def test_every_strategy_and_the_step_limit_send_the_raw_models_requests_wh
 FINAL_PIECES = ["Hello [NA", "ME_1], mail ", "[EMAIL", "_1] ok"]
 FINAL_TEXT = f"Hello {TRICKY}, mail {EMAIL} ok"
 TOOL_PIECES = ['{"who": "[NA', 'ME_1]", "mail": "[EMAIL', '_1]"}']
-STREAMED = ["openai", "anthropic"]
+STREAMED = ["openai", "openai-responses", "anthropic"]
 
 
 def stream_reply(provider: str) -> wire.Reply:
     def reply(body: dict[str, Any]) -> Any:
         sent = json.dumps(body)
-        after_tool = '"role": "tool"' in sent or "tool_result" in sent
+        markers = ('"role": "tool"', "tool_result", "function_call_output")
+        after_tool = any(marker in sent for marker in markers)
+        if provider == "openai-responses":
+            if after_tool:
+                return wire.responses_stream_text(FINAL_PIECES)
+            return wire.responses_stream_tool("find_person", TOOL_PIECES)
         if provider == "openai":
             if after_tool:
                 return wire.openai_stream_text(FINAL_PIECES)
@@ -297,6 +302,11 @@ async def test_agent_astream_in_messages_mode_shows_restored_text_once(provider:
     assert len(sent.bodies) == 2
     assert "".join(texts) == FINAL_TEXT  # once: the inner run's tokens are not streamed too
     assert json.loads("".join(arguments)) == {"who": TRICKY, "mail": EMAIL}
+    # What the thread keeps (and would send again next turn) is the originals, never a placeholder.
+    saved = await agent.aget_state({"configurable": {"thread_id": "s"}})
+    stored = repr(saved.values["messages"])
+    no_placeholder(stored)
+    assert EMAIL in stored
 
 
 @pytest.mark.parametrize("provider", STREAMED)

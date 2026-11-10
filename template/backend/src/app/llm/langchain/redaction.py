@@ -30,6 +30,10 @@ Limits worth knowing:
   restored on the way back (a provider checks their signature), so it can show placeholders.
 - A schema validator that rejects a placeholder (EmailStr, a pattern) fails inside the provider's
   SDK before the answer reaches this wrapper. Restored values are not validated again.
+- In a stream, text, tool-call arguments (also the Responses API's repeated `function_call`
+  blocks), Anthropic's `partial_json` and complete `refusal` blocks are restored. Not restored:
+  thinking and reasoning blocks, a Responses stream's pre-parsed `additional_kwargs["parsed"]`, and
+  refusal text that arrives as `additional_kwargs` deltas.
 - Images and other media are not scanned (they are counted in `llm_unscanned_images`), and neither
   is a message's `name` field (a provider only accepts plain names there, so no placeholder fits).
 - A LangChainTracer you pass in a call's config with a client of its own records what that client
@@ -409,6 +413,7 @@ class _StreamRestorers:
         self._escaped = _escaped(mapping)
         self._json_text = json_text
         self._streams: dict[tuple[str, Any], StreamRestorer] = {}
+        self._whole_missed = 0
 
     def _stream(self, kind: str, index: Any, *, raw: bool) -> StreamRestorer:
         stream = self._streams.get((kind, index))
@@ -420,7 +425,12 @@ class _StreamRestorers:
 
     @property
     def unrestored(self) -> int:
-        return sum(stream.unrestored for stream in self._streams.values())
+        return self._whole_missed + sum(stream.unrestored for stream in self._streams.values())
+
+    def _whole(self, text: str) -> str:
+        restored, missed = restore(text, self._plain)
+        self._whole_missed += missed
+        return restored
 
     def chunk(self, chunk: AIMessageChunk) -> AIMessageChunk:
         content = chunk.content
@@ -437,6 +447,16 @@ class _StreamRestorers:
                 elif isinstance(block.get("partial_json"), str):
                     feed = self._stream("json", block.get("index"), raw=True).feed
                     blocks.append({**block, "partial_json": feed(block["partial_json"])})
+                elif block.get("type") == "function_call" and isinstance(
+                    block.get("arguments"), str
+                ):
+                    # The Responses API repeats each argument fragment here, beside
+                    # tool_call_chunks: a thread keeps these blocks, so they are restored too.
+                    feed = self._stream("args", block.get("index"), raw=True).feed
+                    blocks.append({**block, "arguments": feed(block["arguments"])})
+                elif block.get("type") == "refusal" and isinstance(block.get("refusal"), str):
+                    # A complete refusal text, not a fragment.
+                    blocks.append({**block, "refusal": self._whole(block["refusal"])})
                 else:  # thinking, reasoning, images: as they are
                     blocks.append(block)
             content = blocks
@@ -469,6 +489,9 @@ class _StreamRestorers:
                 tails.append(
                     AIMessageChunk(content=[{"type": "text", "text": tail, "index": index}])
                 )
+            elif kind == "args":
+                block = {"type": "function_call", "arguments": tail, "index": index}
+                tails.append(AIMessageChunk(content=[block]))
             elif kind == "json":
                 tails.append(
                     AIMessageChunk(

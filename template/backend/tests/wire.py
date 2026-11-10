@@ -56,6 +56,7 @@ __all__ = [
     "openai_tool",
     "raw_model",
     "responses_stream_text",
+    "responses_stream_tool",
     "responses_text",
     "responses_tool",
     "text_reply",
@@ -495,6 +496,84 @@ def responses_stream_text(pieces: list[str]) -> bytes:
                 "type": "response.completed",
                 "sequence_number": sequence + 3,
                 "response": responses_text(text),
+            },
+        ),
+    ]
+    return sse(events)
+
+
+def responses_stream_tool(name: str, pieces: list[str]) -> bytes:
+    """A Responses API stream of one function call whose arguments arrive in `pieces`."""
+    args = "".join(pieces)
+    item = {
+        "type": "function_call",
+        "id": "fc_1",
+        "call_id": "call_1",
+        "name": name,
+        "arguments": "",
+        "status": "in_progress",
+    }
+    events: list[tuple[str | None, Any]] = [
+        (
+            "response.created",
+            {
+                "type": "response.created",
+                "sequence_number": 0,
+                "response": {**_responses([]), "status": "in_progress"},
+            },
+        ),
+        (
+            "response.output_item.added",
+            {
+                "type": "response.output_item.added",
+                "sequence_number": 1,
+                "output_index": 0,
+                "item": item,
+            },
+        ),
+    ]
+    sequence = 2
+    for piece in pieces:
+        events.append(
+            (
+                "response.function_call_arguments.delta",
+                {
+                    "type": "response.function_call_arguments.delta",
+                    "sequence_number": sequence,
+                    "item_id": "fc_1",
+                    "output_index": 0,
+                    "delta": piece,
+                },
+            )
+        )
+        sequence += 1
+    events += [
+        (
+            "response.function_call_arguments.done",
+            {
+                "type": "response.function_call_arguments.done",
+                "sequence_number": sequence,
+                "item_id": "fc_1",
+                "output_index": 0,
+                "name": name,
+                "arguments": args,
+            },
+        ),
+        (
+            "response.output_item.done",
+            {
+                "type": "response.output_item.done",
+                "sequence_number": sequence + 1,
+                "output_index": 0,
+                "item": {**item, "arguments": args, "status": "completed"},
+            },
+        ),
+        (
+            "response.completed",
+            {
+                "type": "response.completed",
+                "sequence_number": sequence + 2,
+                "response": responses_tool(name, args),
             },
         ),
     ]
