@@ -39,19 +39,20 @@ Limits worth knowing:
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping, Sequence
+from contextlib import aclosing
 from typing import Any, cast
 
 import structlog
 from langchain_core.callbacks import AsyncCallbackManager, AsyncCallbackManagerForLLMRun
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tracers.langchain import LangChainTracer
 from pydantic import BaseModel, PrivateAttr
 
-from app.llm.core.redaction import RedactionFailed, Redactor, restore
+from app.llm.core.redaction import RedactionFailed, Redactor, StreamRestorer, restore
 
 __all__ = ["RedactingChatModel", "RedactionUnavailable"]
 
@@ -363,6 +364,118 @@ class _Restorer:
         return message.model_copy(update=update)
 
 
+def _json_output(kwargs: Mapping[str, Any]) -> bool:
+    """Whether the call asks for JSON text as the answer (JSON mode, a schema), judged from the
+    parameters bound to it: then the originals are put back JSON-escaped, so a quote in a value
+    does not break the document. Tool calls are raw JSON anyway and always escaped."""
+    if kwargs.get("response_format") or kwargs.get("output_format"):
+        return True
+    config = kwargs.get("output_config")
+    if isinstance(config, dict) and config.get("format"):
+        return True
+    text = kwargs.get("text")
+    if isinstance(text, dict) and isinstance(text.get("format"), dict):
+        return text["format"].get("type") not in (None, "text")
+    chosen = kwargs.get("ls_structured_output_format")
+    if isinstance(chosen, dict) and isinstance(chosen.get("kwargs"), dict):
+        return chosen["kwargs"].get("method") in ("json_mode", "json_schema")
+    return False
+
+
+class _StreamRestorers:
+    """Restores a stream of chunks for one call: a StreamRestorer for each stream of text that can
+    be cut anywhere (a text block, a tool call's argument fragments), so a placeholder split
+    across chunks is held back until it is whole. Made for one call."""
+
+    def __init__(self, mapping: Mapping[str, str], *, json_text: bool) -> None:
+        self._plain = mapping
+        self._escaped = _escaped(mapping)
+        self._json_text = json_text
+        self._streams: dict[tuple[str, Any], StreamRestorer] = {}
+
+    def _stream(self, kind: str, index: Any, *, raw: bool) -> StreamRestorer:
+        stream = self._streams.get((kind, index))
+        if stream is None:
+            stream = self._streams[(kind, index)] = StreamRestorer(
+                self._escaped if raw else self._plain
+            )
+        return stream
+
+    @property
+    def unrestored(self) -> int:
+        return sum(stream.unrestored for stream in self._streams.values())
+
+    def chunk(self, chunk: AIMessageChunk) -> AIMessageChunk:
+        content = chunk.content
+        if isinstance(content, str):
+            content = self._stream("text", None, raw=self._json_text).feed(content)
+        else:
+            blocks: list[Any] = []
+            for block in content:
+                if not isinstance(block, dict):
+                    blocks.append(block)
+                elif block.get("type") == "text" and isinstance(block.get("text"), str):
+                    feed = self._stream("text", block.get("index"), raw=self._json_text).feed
+                    blocks.append({**block, "text": feed(block["text"])})
+                elif isinstance(block.get("partial_json"), str):
+                    feed = self._stream("json", block.get("index"), raw=True).feed
+                    blocks.append({**block, "partial_json": feed(block["partial_json"])})
+                else:  # thinking, reasoning, images: as they are
+                    blocks.append(block)
+            content = blocks
+        calls = [
+            {**call, "args": self._stream("call", call.get("index"), raw=True).feed(args)}
+            if isinstance(args := call.get("args"), str)
+            else call
+            for call in chunk.tool_call_chunks
+        ]
+        return AIMessageChunk(
+            content=content,
+            additional_kwargs=chunk.additional_kwargs,
+            response_metadata=chunk.response_metadata,
+            id=chunk.id,
+            name=chunk.name,
+            tool_call_chunks=calls,
+            usage_metadata=chunk.usage_metadata,
+        )
+
+    def flush(self) -> list[AIMessageChunk]:
+        """Whatever was still held back at the end, as chunks (empty when nothing was)."""
+        tails: list[AIMessageChunk] = []
+        for (kind, index), stream in self._streams.items():
+            tail = stream.flush()
+            if not tail:
+                continue
+            if kind == "text" and index is None:
+                tails.append(AIMessageChunk(content=tail))
+            elif kind == "text":
+                tails.append(
+                    AIMessageChunk(content=[{"type": "text", "text": tail, "index": index}])
+                )
+            elif kind == "json":
+                tails.append(
+                    AIMessageChunk(
+                        content=[{"type": "input_json_delta", "partial_json": tail, "index": index}]
+                    )
+                )
+            else:
+                tails.append(
+                    AIMessageChunk(
+                        content="",
+                        tool_call_chunks=[
+                            {
+                                "name": None,
+                                "id": None,
+                                "args": tail,
+                                "index": index,
+                                "type": "tool_call_chunk",
+                            }
+                        ],
+                    )
+                )
+        return tails
+
+
 # --- the wrapper -------------------------------------------------------------------------------
 
 
@@ -463,3 +576,31 @@ class RedactingChatModel(BaseChatModel):
         if restorer.unrestored:
             log.warning("llm_unrestored_placeholders", count=restorer.unrestored)
         return ChatResult(generations=[ChatGeneration(message=restored)])
+
+    async def _astream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        prepared = prepare(self._redactor, messages)
+        restorers = _StreamRestorers(prepared.mapping, json_text=_json_output(kwargs))
+        stream = cast(
+            AsyncGenerator[AIMessageChunk, None],
+            self._inner.astream(
+                prepared.messages,
+                config=_inner_config(run_manager, prepared.count),
+                stop=stop,
+                **kwargs,
+            ),
+        )
+        # aclosing: a consumer that stops early (or is cancelled) closes the inner stream too, so
+        # the inner run ends and the budget guard settles or fails its reservation.
+        async with aclosing(stream) as chunks:
+            async for chunk in chunks:
+                yield ChatGenerationChunk(message=restorers.chunk(chunk))
+        for tail in restorers.flush():
+            yield ChatGenerationChunk(message=tail)
+        if restorers.unrestored:
+            log.warning("llm_unrestored_placeholders", count=restorers.unrestored)
