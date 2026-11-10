@@ -219,10 +219,16 @@ def test_a_model_that_takes_no_tools_binds_to_the_wrapper_itself() -> None:
 
 
 def test_invalid_tool_calls_in_the_history_are_redacted() -> None:
+    cut_args = '{"mail": "' + EMAIL + '", "who":'
     message = AIMessage(
         "",
         invalid_tool_calls=[
-            {"name": "lookup", "args": f'{{"mail": "{EMAIL}", "who":', "id": "1", "error": "cut"}
+            {
+                "name": "lookup",
+                "args": cut_args,
+                "id": "1",
+                "error": "cut",
+            }
         ],
     )
     prepared = redaction.prepare(Redactor(wire.DETECTORS), [message])
@@ -242,7 +248,7 @@ async def test_invalid_tool_calls_in_the_history_do_not_reach_the_wire() -> None
         AIMessage(
             "",
             invalid_tool_calls=[
-                {"name": "lookup", "args": f'{{"mail": "{EMAIL}"', "id": "c1", "error": "cut"}
+                {"name": "lookup", "args": '{"mail": "' + EMAIL + '"', "id": "c1", "error": "cut"}
             ],
         ),
         ToolMessage("bad arguments", tool_call_id="c1"),
