@@ -91,6 +91,8 @@ INTENDED: dict[str, str] = {
         "tests for migration 0006 and the stamp-0005 recipe (#78)",
     "backend/tests/test_llm_redaction_agents.py":
         "new: agents and gateway wiring through the wrapper (#78)",
+    "backend/tests/cassettes/test_llm_redaction_wire/test_nothing_unredacted_reaches_the_wire.yaml":
+        "new: the recorded call of the wire test, redacted body only (#78)",
     "backend/tests/conftest.py":
         "restores the process-wide LangSmith client after each test (#78)",
     "backend/tests/test_llm_redaction_context.py":
