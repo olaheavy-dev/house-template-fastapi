@@ -311,6 +311,19 @@ async def test_an_allowed_value_is_not_replaced_but_others_still_are() -> None:
 
 
 @pytest.mark.anyio
+async def test_the_conflict_log_can_be_switched_off_for_trace_masking() -> None:
+    # Trace masking redacts every run payload; it passes log_conflicts=False so one conflicting
+    # known value is not logged for each of them. The redaction itself is the same.
+    async with redaction_scope(
+        known={"EMAIL": ["priya.shah@example.com"]}, allow=["PRIYA.SHAH@example.com"]
+    ):
+        with capture_logs() as logs:
+            result = REDACTOR.redact(["Write to priya.shah@example.com"], log_conflicts=False)
+    assert result.texts == ("Write to [EMAIL_1]",)
+    assert [e for e in logs if e["event"] == "redaction_allow_conflict"] == []
+
+
+@pytest.mark.anyio
 async def test_a_known_value_beats_the_allow_list_and_the_conflict_is_logged() -> None:
     async with redaction_scope(
         known={"EMAIL": ["priya.shah@example.com"]}, allow=["PRIYA.SHAH@example.com"]

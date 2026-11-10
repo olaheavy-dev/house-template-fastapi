@@ -919,7 +919,7 @@ def masking_anonymizer(redactor: Redactor) -> Callable[[dict[str, Any]], dict[st
                 return text
 
             _walk_data(data, collect)
-            replacements = iter(redactor.redact(strings).texts)
+            replacements = iter(redactor.redact(strings, log_conflicts=False).texts)
             masked = _walk_data(data, lambda _text: next(replacements))
             if isinstance(masked, dict):
                 return masked

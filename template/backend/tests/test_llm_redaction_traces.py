@@ -356,3 +356,12 @@ async def test_closing_the_gateway_flushes_the_process_wide_client(settings: Set
         await gateway.aclose()
     flush.assert_called_once()
     assert get_client() is not None
+
+
+async def test_masking_a_trace_does_not_log_an_allow_conflict_for_every_payload() -> None:
+    anonymize = masking_anonymizer(Redactor(DETECTORS))
+    async with redaction_scope(known={"NAME": [NAME]}, allow=[NAME.upper()]):
+        with capture_logs() as logs:
+            masked = anonymize({"inputs": f"Hello {NAME}", "metadata": f"{NAME} again"})
+    assert NAME not in repr(masked)
+    assert [e for e in logs if e["event"] == "redaction_allow_conflict"] == []

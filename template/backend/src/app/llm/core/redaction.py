@@ -318,21 +318,27 @@ class Redactor:
         for detector in self._detectors:
             _check_kind(detector.kind)
 
-    def redact(self, texts: Sequence[str], scope: Scope | None = None) -> Redacted:
+    def redact(
+        self, texts: Sequence[str], scope: Scope | None = None, *, log_conflicts: bool = True
+    ) -> Redacted:
         """Replaces the values in every text. The scope defaults to the current one. Raises
         TypeError for a single str (pass a list), and RedactionFailed on any error while
-        redacting, so the caller sends nothing."""
+        redacting, so the caller sends nothing. `log_conflicts=False` skips the
+        redaction_allow_conflict warning, for a caller that redacts many payloads under one scope
+        (trace masking) and would repeat it for each."""
         items = _check_strings(texts, "texts")
         failure: str | None = None
         try:
-            return self._redact(items, scope if scope is not None else current_scope())
+            return self._redact(
+                items, scope if scope is not None else current_scope(), log_conflicts
+            )
         except Exception as exc:  # fail closed: a bug here must not let the text through
             failure = type(exc).__name__
         # Outside the except block, so the error (which may hold the text) is not chained.
         log.error("llm_redaction_failed", error_type=failure)
         raise RedactionFailed
 
-    def _redact(self, texts: list[str], scope: Scope) -> Redacted:
+    def _redact(self, texts: list[str], scope: Scope, log_conflicts: bool = True) -> Redacted:
         allowed = [p for value in scope.allow for p in _value_patterns(value)]
         named = [
             (kind, value, pattern)
@@ -413,7 +419,7 @@ class Redactor:
                 position = end
             pieces.append(text[position:])
             out.append("".join(pieces))
-        for kind in sorted(conflicts):
+        for kind in sorted(conflicts) if log_conflicts else ():
             log.warning("redaction_allow_conflict", kind=kind)
         return Redacted(tuple(out), mapping, dict(counts))
 
