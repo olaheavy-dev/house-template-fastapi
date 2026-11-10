@@ -31,9 +31,10 @@ Limits worth knowing:
 - A schema validator that rejects a placeholder (EmailStr, a pattern) fails inside the provider's
   SDK before the answer reaches this wrapper. Restored values are not validated again.
 - In a stream, text, tool-call arguments (also the Responses API's repeated `function_call`
-  blocks), Anthropic's `partial_json` and complete `refusal` blocks are restored. Not restored:
-  thinking and reasoning blocks, a Responses stream's pre-parsed `additional_kwargs["parsed"]`, and
-  refusal text that arrives as `additional_kwargs` deltas.
+  blocks and the older `function_call`/`tool_calls` argument strings), Anthropic's `partial_json`,
+  refusals, and the parsed object of a structured answer in `additional_kwargs` are restored. What
+  stays as the model wrote it: thinking and reasoning blocks (including `additional_kwargs`
+  `reasoning`).
 - Images and other media are not scanned (they are counted in `llm_unscanned_images`). A message's
   `name` field cannot take a placeholder (a provider accepts only plain names there), so a call
   whose `name` matches a detector or a known value is refused, nothing sent.
