@@ -60,6 +60,7 @@ from langchain_core.runnables.passthrough import RunnableAssign
 from langchain_core.tracers.langchain import LangChainTracer
 from pydantic import BaseModel, PrivateAttr
 
+from app.llm.core import metrics
 from app.llm.core.redaction import RedactionFailed, Redactor, StreamRestorer, restore
 
 __all__ = ["RedactingChatModel", "RedactionUnavailable"]
@@ -567,6 +568,14 @@ def _inner_config(run_manager: AsyncCallbackManagerForLLMRun | None, count: int)
     )
 
 
+def _note(prepared: _Prepared) -> None:
+    """Counts only, never values: the metric by kind, and a warning for media that was not
+    scanned (images and other files are sent as they are)."""
+    metrics.record_redactions(prepared.counts)
+    if prepared.unscanned:
+        log.warning("llm_unscanned_images", count=prepared.unscanned)
+
+
 class RedactingChatModel(BaseChatModel):
     """A chat model that redacts personal data before the model inside it is called, and restores
     it in the answer. See the module notes."""
@@ -664,6 +673,7 @@ class RedactingChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         prepared = prepare(self._redactor, messages)
+        _note(prepared)
         answer = await self._inner.ainvoke(
             prepared.messages,
             config=_inner_config(run_manager, prepared.count),
@@ -686,6 +696,7 @@ class RedactingChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
         prepared = prepare(self._redactor, messages)
+        _note(prepared)
         restorers = _StreamRestorers(prepared.mapping, json_text=_json_output(kwargs))
         stream = cast(
             AsyncGenerator[AIMessageChunk, None],
