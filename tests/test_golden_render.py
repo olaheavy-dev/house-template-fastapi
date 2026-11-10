@@ -163,6 +163,18 @@ def test_default_render_matches_baseline(tmp_path):
                           + "\n".join(problems))
 
 
+def test_database_off_render_matches_baseline(tmp_path):
+    # Without the database there is no gateway, and the answers file records `llm: none`. Nothing
+    # differs from the baseline on purpose, so this comparison has no entries of its own.
+    require_ref(BASELINE_REF)
+    baseline = files_of(render_at(tmp_path / "baseline", BASELINE_REF, database=False))
+    head = files_of(render_at(tmp_path / "head", "HEAD", database=False))
+    problems = compare(baseline, head, {})
+    assert not problems, (f"The database-off render differs from BASELINE_REF {BASELINE_REF[:7]}:\n"
+                          + "\n".join(problems))
+    assert b"llm: none\n" in head[ANSWERS_FILE]
+
+
 def test_compare_reports_every_unlisted_difference_and_every_stale_entry():
     base = {"a.txt": b"one\n", "b.txt": b"same\n", "gone.txt": b"x\n", "bin": b"\xff\x00"}
     head = {"a.txt": b"two\n", "b.txt": b"same\n", "new.txt": b"y\n", "bin": b"\xfe\x00"}
