@@ -124,6 +124,10 @@ class LlmCall(Base):
     # Whether this call reserved against the user's daily cap, so settlement adjusts that total
     # only for calls that added to it (a worker without the cap may serve the same user).
     user_reserved: Mapped[bool] = mapped_column(server_default=false())
+    # How many values personal-data redaction replaced in this call's request (#78): a count, never
+    # a value. NULL means redaction was off (or the call came before it existed); 0 means it ran
+    # and found nothing.
+    redacted_count: Mapped[int | None] = mapped_column(Integer)
 
 
 class BudgetExhausted(Problem):
@@ -167,6 +171,7 @@ async def reserve(
     feature: str | None = None,
     user_ref: str | None = None,
     user_reserved: bool = False,
+    redacted_count: int | None = None,
 ) -> bool:
     """Add `amount` to the day's total and record the call, or change nothing and return False if
     that would cross `cap`. One statement: Postgres locks the day's row, so concurrent
@@ -202,6 +207,7 @@ async def reserve(
             feature=feature,
             user_ref=user_ref,
             user_reserved=user_reserved,
+            redacted_count=redacted_count,
             status="reserved",
             reserved_micro_usd=amount,
         )
@@ -339,12 +345,14 @@ async def expire_stale(session: AsyncSession, *, older_than: timedelta) -> int:
 class CallTags:
     """What a call is for, recorded on its llm_call row: the prompt's name and version, the
     product feature, and an opaque id of whom for (never a name or an email; counted against that
-    user's daily cap when one is set). Only prompt and feature become metric labels."""
+    user's daily cap when one is set). Only prompt and feature become metric labels.
+    redacted_count is how many values redaction replaced in the request (None when it was off)."""
 
     prompt: str | None = None
     prompt_sha: str | None = None
     feature: str | None = None
     user_ref: str | None = None
+    redacted_count: int | None = None
 
 
 class Meter:
@@ -409,6 +417,7 @@ class Meter:
                 prompt_sha=tags.prompt_sha,
                 feature=tags.feature,
                 user_ref=tags.user_ref,
+                redacted_count=tags.redacted_count,
             )
         labels = metrics.labels(self.model, tags.prompt, tags.feature)
         if refused is None:

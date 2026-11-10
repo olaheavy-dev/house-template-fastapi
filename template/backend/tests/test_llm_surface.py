@@ -215,6 +215,7 @@ def test_the_mapped_table_and_column_names_are_unchanged() -> None:
         "feature",
         "user_ref",
         "user_reserved",
+        "redacted_count",
     }
     assert set(tables["llm_spend_day"].columns.keys()) == {"day", "committed_micro_usd", "warned"}
     assert set(tables["llm_spend_user_day"].columns.keys()) == {

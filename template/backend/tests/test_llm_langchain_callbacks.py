@@ -102,6 +102,20 @@ async def test_a_call_start_reserves_the_bounds_with_the_metadata_as_tags() -> N
     }
 
 
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [({"redacted_count": 3}, 3), ({"redacted_count": 0}, 0), ({}, None)]
+    + [({"redacted_count": bad}, None) for bad in ("3", 2.5, True, None)],
+)
+async def test_the_redaction_count_in_the_metadata_becomes_a_tag_only_when_it_is_a_count(
+    given: dict[str, Any], expected: int | None
+) -> None:
+    g, recorder = guard()
+    await g.on_chat_model_start({}, [HELLO], run_id=uuid.uuid4(), metadata=given)
+    [(_, _, reserved)] = recorder.calls
+    assert reserved["tags"].redacted_count == expected
+
+
 async def test_the_end_of_a_call_settles_its_usage_as_the_neutral_usage() -> None:
     g, recorder = guard()
     with_usage, without, empty = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()

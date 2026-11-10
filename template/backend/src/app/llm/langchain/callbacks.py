@@ -141,6 +141,7 @@ class BudgetGuard(AsyncCallbackHandler):
         output = bounds.output_bound(self.max_tokens, params)
         given = sum(input_bound(batch, params) for batch in messages)
         metadata = metadata or {}
+        counted = metadata.get("redacted_count")
         await self.meter.reserve(
             run_id,
             input_tokens=given,
@@ -150,6 +151,8 @@ class BudgetGuard(AsyncCallbackHandler):
                 prompt_sha=metadata.get("prompt_sha"),
                 feature=metadata.get("feature"),
                 user_ref=metadata.get("user_ref"),
+                # Set by the redacting wrapper (a count, never a value); absent when it is off.
+                redacted_count=counted if type(counted) is int else None,
             ),
         )
 
