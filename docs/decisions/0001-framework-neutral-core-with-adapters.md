@@ -20,7 +20,7 @@ Progress goes stale quickly, so it is not recorded here. Follow it on [#33](http
 ## Consequences
 
 - A second framework reuses the same budget, prices and error rules, so cost behaviour is the same whichever one a project picks.
-- Old import paths (`app.llm.budget`, `app.llm.errors` and others) were shims that warned with `DeprecationWarning` in 0.7.x; 0.8.0 removed them ([#33](https://github.com/olaheavy-dev/house-template-fastapi/issues/33)). Several of the PRs are breaking (`refactor!`).
+- Old import paths (`app.llm.budget`, `app.llm.errors` and others) are shims that warn with `DeprecationWarning`; the plan removes them in 0.8.0 ([#33](https://github.com/olaheavy-dev/house-template-fastapi/issues/33)). Several of the PRs are breaking (`refactor!`).
 - The #30 comments say `llm` must refuse `database: false`, because the budget tables and checkpoints are in PostgreSQL; the coupling is settled in [0005](0005-llm-answer-and-its-migrations.md): `database: false` means `llm: none`, and `langchain` is refused without the database.
 
 ## Alternatives considered
