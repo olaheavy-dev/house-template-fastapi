@@ -341,3 +341,36 @@ async def test_text_that_opens_with_a_placeholder_or_plain_words_is_not(opening:
     from app.llm.langchain.redaction import _opens_json
 
     assert not _opens_json(opening)
+
+
+# --- additional_kwargs in streamed chunks ---------------------------------------------------------
+
+
+def kwargs_chunk(**kwargs: Any) -> AIMessageChunk:
+    return AIMessageChunk(content="", additional_kwargs=kwargs)
+
+
+def raw_call(arguments: str) -> list[dict[str, Any]]:
+    return [{"index": 0, "function": {"arguments": arguments}}]
+
+
+def test_additional_kwargs_fragments_are_restored_and_reasoning_is_left_alone() -> None:
+    from app.llm.langchain.redaction import _StreamRestorers
+
+    restorers = _StreamRestorers({"[NAME_1]": TRICKY, "[EMAIL_1]": EMAIL}, json_text=False)
+    reasoning = {"id": "rs_1", "summary": [{"text": "think [NAME_1]"}]}
+    chunks = [
+        kwargs_chunk(refusal="No, [NA", reasoning=reasoning),
+        kwargs_chunk(refusal="ME_1].", function_call={"arguments": '{"who": "[NA'}),
+        kwargs_chunk(function_call={"arguments": 'ME_1]"}'}),
+        kwargs_chunk(tool_calls=raw_call('{"m": "[EMA')),
+        kwargs_chunk(tool_calls=raw_call('IL_1]"}')),
+    ]
+    out = [restorers.chunk(c).additional_kwargs for c in chunks]
+    assert "".join(k.get("refusal", "") for k in out) == f"No, {TRICKY}."
+    assert out[0]["reasoning"] == reasoning
+    function = "".join(k.get("function_call", {}).get("arguments", "") for k in out)
+    assert json.loads(function) == {"who": TRICKY}
+    calls = "".join(c["function"]["arguments"] for k in out for c in k.get("tool_calls", []))
+    assert json.loads(calls) == {"m": EMAIL}
+    assert restorers.flush() == []

@@ -134,3 +134,83 @@ def test_structured_output_the_wrapper_cannot_re_point_is_refused_at_constructio
         pytest.raises(RedactionUnavailable, match="with_structured_output"),
     ):
         model.with_structured_output(Contact)
+
+
+# --- streamed structured output ------------------------------------------------------------------
+
+JSON_TEXT = json.dumps(PLACEHOLDERS)
+PIECES = [JSON_TEXT[:18], JSON_TEXT[18:40], JSON_TEXT[40:70], JSON_TEXT[70:]]
+STREAMED_METHODS = [
+    ("openai", wire.openai_stream_text),
+    ("openai-responses", wire.responses_stream_text),
+]
+
+
+# langchain-openai puts a parsed pydantic object into additional_kwargs, which pydantic's
+# serializer warns about whenever a chunk is dumped (also without the wrapper); not ours.
+PARSED_WARNING = pytest.mark.filterwarnings("ignore:Pydantic serializer warnings:UserWarning")
+
+
+@PARSED_WARNING
+@pytest.mark.parametrize("include_raw", [False, True])
+@pytest.mark.parametrize("schema_kind", ["pydantic", "dict"])
+@pytest.mark.parametrize(("provider", "stream"), STREAMED_METHODS)
+async def test_streamed_structured_output_returns_the_originals(
+    provider: str, stream: Any, schema_kind: str, include_raw: bool
+) -> None:
+    # langchain-openai adds a final chunk that carries the parsed object (and a refusal) in
+    # additional_kwargs; it must be restored like the text.
+    _, model = wire.wrapped(provider)
+    schema: Any = Contact if schema_kind == "pydantic" else DICT_SCHEMA
+    runnable = model.with_structured_output(schema, include_raw=include_raw)
+    if provider == "openai-responses" and schema_kind == "pydantic":
+        pytest.skip("langchain-openai streams a Responses pydantic schema without parsing it")
+    async with redaction_scope(known={"NAME": [TRICKY], "ADDRESS": [ADDRESS]}):
+        with wire.captured(lambda _b: stream(PIECES)) as sent:
+            outputs = [
+                o async for o in runnable.astream([HumanMessage(f"{TRICKY} {EMAIL} at {ADDRESS}")])
+            ]
+    for seed in (EMAIL, TRICKY, ADDRESS):
+        assert seed not in sent.text
+    final = outputs[-1]
+    parsed = final["parsed"] if include_raw else final
+    assert as_dict(parsed) == EXPECTED
+
+
+@PARSED_WARNING
+async def test_a_graph_node_that_calls_structured_output_under_the_message_stream() -> None:
+    from langgraph.graph import END, START, MessagesState, StateGraph
+
+    _, model = wire.wrapped("openai")
+    structured = model.with_structured_output(Contact)
+    results: list[dict[str, Any]] = []
+
+    async def node(state: MessagesState) -> dict[str, Any]:
+        contact = await structured.ainvoke(state["messages"])
+        results.append(as_dict(contact))
+        return {}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("extract", node)
+    builder.add_edge(START, "extract")
+    builder.add_edge("extract", END)
+    graph = builder.compile()
+    async with redaction_scope(known={"NAME": [TRICKY], "ADDRESS": [ADDRESS]}):
+        with wire.captured(lambda _b: wire.openai_stream_text(PIECES)):
+            async for _ in graph.astream(
+                {"messages": [HumanMessage(f"{TRICKY} {EMAIL} at {ADDRESS}")]},
+                stream_mode="messages",
+            ):
+                pass
+    assert results == [EXPECTED]
+
+
+async def test_a_refusal_block_that_quotes_a_placeholder_is_restored_in_a_stream() -> None:
+    _, model = wire.wrapped("openai-responses")
+    refusal = "I cannot help [NAME_1] with that."
+    async with redaction_scope(known={"NAME": [TRICKY]}):
+        with wire.captured(lambda _b: wire.responses_stream_refusal(refusal)):
+            chunks = [c async for c in model.astream([HumanMessage(f"I am {TRICKY}")])]
+    blocks = [b for c in chunks if isinstance(c.content, list) for b in c.content]
+    [block] = [b for b in blocks if isinstance(b, dict) and b.get("type") == "refusal"]
+    assert block["refusal"] == f"I cannot help {TRICKY} with that."

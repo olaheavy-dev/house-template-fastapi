@@ -425,6 +425,7 @@ class _StreamRestorers:
         self._json_text = json_text
         self._streams: dict[tuple[str, Any], StreamRestorer] = {}
         self._whole_missed = 0
+        self._values = _Restorer(mapping)
         self._undecided: dict[Any, str] = {}
 
     def _stream(self, kind: str, index: Any, *, raw: bool) -> StreamRestorer:
@@ -437,7 +438,8 @@ class _StreamRestorers:
 
     @property
     def unrestored(self) -> int:
-        return self._whole_missed + sum(stream.unrestored for stream in self._streams.values())
+        streams = sum(stream.unrestored for stream in self._streams.values())
+        return self._whole_missed + self._values.unrestored + streams
 
     def _feed_text(self, index: Any, delta: str) -> str:
         """A text delta. Whether the stream is JSON text is decided at its first text that is not
@@ -454,6 +456,36 @@ class _StreamRestorers:
             return ""
         raw = self._json_text or _opens_json(text)
         return self._stream("text", index, raw=raw).feed(text)
+
+    def _kwargs(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """A chunk's additional_kwargs, restored the way `_Restorer.message` restores a whole
+        answer's: complete values (a parsed schema object, structured-output fields) as they come;
+        a refusal and the older raw tool-call arguments, which may arrive in fragments, through a
+        restorer per stream; `reasoning` untouched."""
+        out: dict[str, Any] = {}
+        for key, value in kwargs.items():
+            if key == "reasoning":
+                out[key] = value
+            elif key == "refusal" and isinstance(value, str):
+                out[key] = self._stream("refusal", None, raw=False).feed(value)
+            elif key == "function_call" and isinstance(value, dict):
+                arguments = value.get("arguments")
+                feed = self._stream("kwargs-function", None, raw=True).feed
+                out[key] = (
+                    {**value, "arguments": feed(arguments)} if isinstance(arguments, str) else value
+                )
+            elif key == "tool_calls" and isinstance(value, list):
+                out[key] = [self._raw_call(call) for call in value]
+            else:
+                out[key] = self._values.data(value)
+        return out
+
+    def _raw_call(self, call: Any) -> Any:
+        function = call.get("function") if isinstance(call, dict) else None
+        if isinstance(function, dict) and isinstance(function.get("arguments"), str):
+            feed = self._stream("kwargs-call", call.get("index"), raw=True).feed
+            return {**call, "function": {**function, "arguments": feed(function["arguments"])}}
+        return call
 
     def _whole(self, text: str) -> str:
         restored, missed = restore(text, self._plain)
@@ -497,7 +529,7 @@ class _StreamRestorers:
         ]
         return AIMessageChunk(
             content=content,
-            additional_kwargs=chunk.additional_kwargs,
+            additional_kwargs=self._kwargs(chunk.additional_kwargs),
             response_metadata=chunk.response_metadata,
             id=chunk.id,
             name=chunk.name,
@@ -527,6 +559,16 @@ class _StreamRestorers:
                 tails.append(
                     AIMessageChunk(content=[{"type": "text", "text": tail, "index": index}])
                 )
+            elif kind == "refusal":
+                tails.append(AIMessageChunk(content="", additional_kwargs={"refusal": tail}))
+            elif kind == "kwargs-function":
+                function = {"arguments": tail}
+                tails.append(
+                    AIMessageChunk(content="", additional_kwargs={"function_call": function})
+                )
+            elif kind == "kwargs-call":
+                call = {"index": index, "function": {"arguments": tail}}
+                tails.append(AIMessageChunk(content="", additional_kwargs={"tool_calls": [call]}))
             elif kind == "args":
                 block = {"type": "function_call", "arguments": tail, "index": index}
                 tails.append(AIMessageChunk(content=[block]))
