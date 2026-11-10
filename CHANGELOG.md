@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.8.0](https://github.com/olaheavy-dev/house-template-fastapi/compare/v0.7.1...v0.8.0) (2026-11-10)
+
+
+### ⚠ BREAKING CHANGES
+
+* the old model gateway import paths are removed (app.llm.budget, app.llm.checkpoints, app.llm.embeddings, app.llm.errors, app.llm.gateway, app.llm.metrics, app.llm.prompts and app.llm.report no longer exist, `python -m app.llm.report` is now `python -m app.llm.core.report`, and cost, ceiling and token_details no longer answer from app.llm.prices), so a project must change every such import, patch target and scheduled command to the new path in "Upgrading to 0.8.0" before it updates, and an edited old module is deleted by the update.
+* the `agent_step_limit` log event is replaced by `step_limit_reached`.
+
+### Features
+
+* agents give a final answer at their model-call limit ([#34](https://github.com/olaheavy-dev/house-template-fastapi/issues/34)) ([#90](https://github.com/olaheavy-dev/house-template-fastapi/issues/90)) ([af53775](https://github.com/olaheavy-dev/house-template-fastapi/commit/af53775586f0097e0255ab8a660a2af85a1dc1f8))
+* llm answer (none or langchain) so a project can leave the model gateway out ([#30](https://github.com/olaheavy-dev/house-template-fastapi/issues/30)) ([#92](https://github.com/olaheavy-dev/house-template-fastapi/issues/92)) ([3a5a3fe](https://github.com/olaheavy-dev/house-template-fastapi/commit/3a5a3feb46a6194502180c6b562f7a61a1cde750))
+* personal-data redaction core and decision 0006 ([#78](https://github.com/olaheavy-dev/house-template-fastapi/issues/78), part 1) ([#93](https://github.com/olaheavy-dev/house-template-fastapi/issues/93)) ([797f083](https://github.com/olaheavy-dev/house-template-fastapi/commit/797f08377baff7186e40ec655b9c1c3e6e2a9043))
+* remove the old app.llm import paths ([#99](https://github.com/olaheavy-dev/house-template-fastapi/issues/99)) ([3028a70](https://github.com/olaheavy-dev/house-template-fastapi/commit/3028a70c77ee7316906d760dde0d8c8bd619de1a))
+
 ## [0.7.1](https://github.com/olaheavy-dev/house-template-fastapi/compare/v0.7.0...v0.7.1) (2026-11-08)
 
 
