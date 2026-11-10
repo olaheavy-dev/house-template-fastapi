@@ -22,7 +22,7 @@ import yaml
 
 from conftest import BASE_ANSWERS, ROOT
 from test_golden_render import (ANSWERS_FILE, committed_baseline_project, files_of, git, require_ref,
-                                tracked, update_to_head, REMOVED_FILES)
+                                render_at, tracked, update_to_head, REMOVED_FILES)
 
 PUBLISH = ".github/workflows/publish-api.yml"
 _CACHES = shutil.ignore_patterns(".git", ".venv", "__pycache__", ".mypy_cache", ".ruff_cache",
@@ -297,7 +297,7 @@ SHIMS = ("gateway", "checkpoints", "errors", "embeddings")
 def test_update_from_0_7_0_removes_the_old_import_paths_and_keeps_the_projects_prices(tmp_path):
     # What 0.8.0 does to a v0.7.0 project (#33): the old modules go, an edited one included, and the
     # price table keeps the project's entry. Observed on Copier 9.19.1; the README says the same.
-    dst = committed_baseline_project(tmp_path / "project")
+    dst = committed_baseline_project(tmp_path / "project", "v0.7.0")
     llm = dst / "backend/src/app/llm"
     entry = ('    "openai:gpt-demo": Price(\n        _rates(1, 4, 0.10, 1.25, 2), checked="2026-11-06",\n'
              '        source=OPENAI_PRICING,\n    ),\n')
@@ -780,3 +780,33 @@ def test_a_v0_7_1_project_without_the_database_has_no_llm_answer_yet(tmp_path, d
 
     assert answers(dst)["llm"] == ("langchain" if gateway else "none")
     assert (dst / "backend/src/app/llm").exists() is gateway
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+@pytest.mark.parametrize(("database", "llm"), [(True, "langchain"), (False, "none")],
+                         ids=["database-on", "database-off"])
+def test_updating_a_v0_7_1_project_with_defaults_records_the_llm_answer_and_deletes_only_the_old_paths(
+    tmp_path, database, llm
+):
+    # v0.7.1 has no `llm` answer. `copier update --defaults` gives such a project the default,
+    # langchain with the database and none without it, and deletes only the old import paths: the `llm is defined`
+    # guards in copier.yml's _exclude are for the old copy's answers, which have no `llm`. Goes
+    # when the README stops supporting updates from 0.7.x.
+    dst = committed_baseline_project(tmp_path / "project", "v0.7.1", database=database)
+    assert "llm" not in yaml.safe_load((dst / ANSWERS_FILE).read_text())
+    before = tracked(dst)
+    lock = (dst / "backend" / "uv.lock").read_bytes()
+
+    update_to_head(dst)
+
+    after = files_of(dst)
+    # Only what 0.8.0 removes on purpose, and only where the gateway exists.
+    assert before - after.keys() == (REMOVED_FILES if database else set()), "unexpected deletions"
+    assert yaml.safe_load((dst / ANSWERS_FILE).read_text())["llm"] == llm
+    assert not list(dst.rglob("*.rej"))
+    assert [p for p, data in after.items() if b"<<<<<<<" in data] == []
+    fresh = files_of(render_at(tmp_path / "fresh", "HEAD", database=database))
+    after.pop("backend/user_added.txt")
+    assert after.pop("backend/uv.lock") == lock
+    fresh.pop("backend/uv.lock")
+    assert after == fresh
