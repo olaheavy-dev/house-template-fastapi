@@ -4,6 +4,7 @@ integration, answered from tests/cassettes/ with the network blocked."""
 from __future__ import annotations
 
 from pathlib import Path
+from unittest import mock
 
 import httpx
 import pytest
@@ -11,6 +12,8 @@ from fastapi import FastAPI
 from langchain_core.messages import HumanMessage
 from langchain_core.messages.ai import UsageMetadata
 from langchain_core.tracers.langchain import LangChainTracer
+from langsmith import Client
+from langsmith.schemas import LangSmithInfo
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from structlog.testing import capture_logs
@@ -27,6 +30,7 @@ from tests.models import CHAT_MODEL, EMBEDDING_MODEL
 pytestmark = pytest.mark.anyio
 
 CASSETTES = Path(__file__).parent / "cassettes"
+INFO = LangSmithInfo()
 
 
 def add_ask_route(app: FastAPI) -> None:
@@ -127,11 +131,15 @@ def test_tracing_follows_the_settings_and_is_never_on_in_tests() -> None:
         "langsmith_tracing": True,
         "langsmith_project": "demo",
         "langsmith_api_key": "lsv2-x",
+        "langsmith_endpoint": "http://langsmith.invalid",
         "database_url": "postgresql+psycopg://app:secret@db.internal:5432/app",
     }
-    production = Gateway(Settings(_env_file=None, app_env="production", **on), lambda: None)  # type: ignore[arg-type,return-value]
+    # A tracing client asks LangSmith about itself in a background thread: answer that offline.
+    with mock.patch.object(Client, "info", new_callable=mock.PropertyMock, return_value=INFO):
+        production = Gateway(Settings(_env_file=None, app_env="production", **on), lambda: None)  # type: ignore[arg-type,return-value]
     assert isinstance(production.tracer, LangChainTracer)
     assert production.tracer.project_name == "demo"
+    production.tracer.client.close(timeout=0)  # stop its background thread (it batches)
     assert Gateway(Settings(_env_file=None, app_env="test", **on), lambda: None).tracer is None  # type: ignore[arg-type,return-value]
 
 

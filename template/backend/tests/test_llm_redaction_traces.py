@@ -15,6 +15,7 @@ from langchain_core.language_models import GenericFakeChatModel
 from langchain_core.messages import HumanMessage
 from langchain_core.tracers.langchain import LangChainTracer, get_client, wait_for_all_tracers
 from langsmith import Client, configure, tracing_context
+from langsmith.schemas import LangSmithInfo
 from pydantic import SecretStr
 from structlog.testing import capture_logs
 
@@ -27,6 +28,8 @@ from tests.test_llm_redaction_agents import build_agent
 from tests.wire import DETECTORS, EMAIL, NAME, PHONE, TRICKY
 
 pytestmark = pytest.mark.anyio
+
+INFO = LangSmithInfo()
 
 
 @pytest.fixture(autouse=True)
@@ -297,15 +300,8 @@ def test_with_redaction_on_the_gateway_sets_a_masking_client_for_the_process(
 def test_the_gateways_tracer_uses_that_client_and_keeps_the_hide_settings(
     settings: Settings,
 ) -> None:
-    gateway = make_gateway(
-        settings,
-        app_env="production",
-        langsmith_tracing=True,
-        langsmith_project="demo",
-        langsmith_api_key=SecretStr("lsv2-x"),
-        langsmith_hide_outputs=True,
-        database_url=SecretStr("postgresql+psycopg://app:secret@db.internal:5432/app"),
-    )
+    with mock.patch.object(Client, "info", new_callable=mock.PropertyMock, return_value=INFO):
+        gateway = _tracing_gateway(settings)
     assert gateway.tracer is not None
     assert gateway.tracer.client is get_client()
     client = gateway.tracer.client
@@ -313,6 +309,20 @@ def test_the_gateways_tracer_uses_that_client_and_keeps_the_hide_settings(
     assert client._hide_outputs is True
     assert client._hide_inputs is False
     assert client.tracing_queue is not None  # batching, as a tracing client always had
+    client.close(timeout=0)  # stop its background thread
+
+
+def _tracing_gateway(settings: Settings) -> Gateway:
+    return make_gateway(
+        settings,
+        app_env="production",
+        langsmith_tracing=True,
+        langsmith_project="demo",
+        langsmith_api_key=SecretStr("lsv2-x"),
+        langsmith_endpoint="http://langsmith.invalid",
+        langsmith_hide_outputs=True,
+        database_url=SecretStr("postgresql+psycopg://app:secret@db.internal:5432/app"),
+    )
 
 
 def test_with_redaction_off_the_gateway_sets_no_client_and_traces_as_before(
@@ -324,17 +334,20 @@ def test_with_redaction_off_the_gateway_sets_no_client_and_traces_as_before(
 
     assert run_trees._CLIENT is None
     assert gateway.tracer is None
-    traced = make_gateway(
-        settings,
-        llm_redaction="off",
-        app_env="production",
-        langsmith_tracing=True,
-        langsmith_api_key=SecretStr("lsv2-x"),
-        database_url=SecretStr("postgresql+psycopg://app:secret@db.internal:5432/app"),
-    )
+    with mock.patch.object(Client, "info", new_callable=mock.PropertyMock, return_value=INFO):
+        traced = make_gateway(
+            settings,
+            llm_redaction="off",
+            app_env="production",
+            langsmith_tracing=True,
+            langsmith_api_key=SecretStr("lsv2-x"),
+            langsmith_endpoint="http://langsmith.invalid",
+            database_url=SecretStr("postgresql+psycopg://app:secret@db.internal:5432/app"),
+        )
     assert traced.tracer is not None
     assert traced.tracer.client._anonymizer is None
     assert run_trees._CLIENT is None
+    traced.tracer.client.close(timeout=0)
 
 
 async def test_closing_the_gateway_flushes_the_process_wide_client(settings: Settings) -> None:
