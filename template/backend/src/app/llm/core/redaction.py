@@ -50,6 +50,7 @@ __all__ = [
     "Scope",
     "Span",
     "StreamRestorer",
+    "choose_detectors",
     "context",
     "current_scope",
     "luhn_valid",
@@ -234,6 +235,21 @@ class RegexDetector:
             ):
                 continue
             yield Span(match.start(), match.end(), self.kind)
+
+
+def choose_detectors(detectors: Sequence[Detector], kinds: str) -> tuple[Detector, ...]:
+    """The detectors whose kind is in `kinds`, a comma separated list such as LLM_REDACT_KINDS.
+    Raises ValueError for a name that no detector has, so a typo stops the app starting instead of
+    quietly redacting less. An empty list chooses none (only known values are replaced)."""
+    wanted = [name.strip() for name in kinds.split(",") if name.strip()]
+    available = {detector.kind for detector in detectors}
+    unknown = sorted({name for name in wanted if name not in available})
+    if unknown:
+        raise ValueError(
+            "LLM_REDACT_KINDS names " + ", ".join(unknown) + ", which no detector in "
+            "app/llm/redaction_rules.py has. Available: " + ", ".join(sorted(available))
+        )
+    return tuple(detector for detector in detectors if detector.kind in wanted)
 
 
 # --- the redactor -----------------------------------------------------------------------------

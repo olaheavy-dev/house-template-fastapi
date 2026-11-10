@@ -143,6 +143,15 @@ class Settings(BaseSettings):
     # Leave prompts and answers out of traces when they may hold personal data.
     langsmith_hide_inputs: bool = False
     langsmith_hide_outputs: bool = False
+    # Personal-data redaction (#78, docs/decisions/0006): before a request goes to the model
+    # provider, contact, bank and ID numbers in common formats and the values the app names
+    # (`redaction_scope`) are replaced by placeholders, and put back in the answer. Not complete,
+    # and not anonymisation. "off" sends text as it is and records no count. With it on, LangSmith
+    # traces are masked the same way.
+    llm_redaction: Literal["on", "off"] = "on"
+    # The detector kinds to run, from app/llm/redaction_rules.py (comma separated). A name no
+    # detector has stops the app starting.
+    llm_redact_kinds: str = "EMAIL,PHONE,NINO,IBAN,SORT_CODE,ACCOUNT,CARD,NHS,DOB"
 {%- endif %}
 {%- if database or storage %}
 

@@ -33,6 +33,7 @@ from app.llm.core.redaction import (
     Scope,
     Span,
     StreamRestorer,
+    choose_detectors,
     current_scope,
     redaction_scope,
     restore,
@@ -938,3 +939,31 @@ def test_known_values_run_in_linear_time_too() -> None:
     with capture_logs():
         REDACTOR.redact([text], scope=Scope(known={"NAME": ["a b"]}))
     assert time.perf_counter() - started < 2.0
+
+
+# --- choosing detectors by kind (LLM_REDACT_KINDS) ------------------------------------------
+
+
+def test_choose_detectors_keeps_only_the_named_kinds() -> None:
+    chosen = choose_detectors(DETECTORS, " EMAIL , PHONE,")
+    assert {d.kind for d in chosen} == {"EMAIL", "PHONE"}
+    assert Redactor(chosen).redact(["a@example.com 07700 900123 QQ123456C"]).texts == (
+        "[EMAIL_1] [PHONE_1] QQ123456C",
+    )
+
+
+def test_a_kind_with_two_detectors_keeps_both() -> None:
+    assert len([d for d in choose_detectors(DETECTORS, "CARD") if d.kind == "CARD"]) == 2
+
+
+def test_an_empty_list_chooses_no_detectors_so_only_known_values_are_replaced() -> None:
+    assert choose_detectors(DETECTORS, "") == ()
+    assert choose_detectors(DETECTORS, " , ") == ()
+
+
+def test_an_unknown_kind_is_refused_naming_it_and_the_available_kinds() -> None:
+    with pytest.raises(ValueError, match=r"names EMIAL, which no detector.*Available: .*EMAIL"):
+        choose_detectors(DETECTORS, "EMIAL,PHONE")
+    # Kinds are matched exactly: lower case is not a kind.
+    with pytest.raises(ValueError, match="email"):
+        choose_detectors(DETECTORS, "email")

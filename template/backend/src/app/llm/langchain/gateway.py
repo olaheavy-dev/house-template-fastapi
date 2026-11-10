@@ -28,6 +28,7 @@ from collections.abc import Callable, Sequence
 from typing import Annotated, Any, cast
 
 import anyio
+import structlog
 from fastapi import Depends, Request
 from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
@@ -48,15 +49,19 @@ from app.llm.core import registry
 from app.llm.core.openai_embeddings import openai_client
 from app.llm.core.prices import MICRO_USD
 from app.llm.core.prompts import Prompt
+from app.llm.core.redaction import Redactor, choose_detectors
 from app.llm.core.steps import StepLimit
 from app.llm.langchain.callbacks import BudgetGuard
 from app.llm.langchain.embeddings import GatewayEmbeddings
 from app.llm.langchain.prompts import prompt_config
 from app.llm.langchain.steps import StepLimitMiddleware, recursion_limit
+from app.llm.redaction_rules import DETECTORS
 from app.problems import Problem
 from app.settings import Settings
 
 __all__ = ["Gateway", "GatewayDep", "get_gateway"]
+
+log = structlog.get_logger()
 
 
 class Gateway:
@@ -93,6 +98,17 @@ class Gateway:
             max_tokens=settings.llm_max_tokens,
             sessionmaker=sessionmaker,
         )
+        # Personal-data redaction (#78): None when LLM_REDACTION=off. An unknown kind raises here,
+        # so the app does not start.
+        self.redactor: Redactor | None = None
+        if settings.llm_redaction == "on":
+            detectors = choose_detectors(DETECTORS, settings.llm_redact_kinds)
+            self.redactor = Redactor(detectors)
+            log.info(
+                "llm_redaction", state="on", kinds=sorted({detector.kind for detector in detectors})
+            )
+        else:
+            log.info("llm_redaction", state="off", kinds=[])
         callbacks: list[BaseCallbackHandler] = [self.guard]
         self.tracer = _tracer(settings)
         if self.tracer:
