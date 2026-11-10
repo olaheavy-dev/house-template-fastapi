@@ -297,7 +297,7 @@ SHIMS = ("gateway", "checkpoints", "errors", "embeddings")
 def test_update_from_0_7_0_removes_the_old_import_paths_and_keeps_the_projects_prices(tmp_path):
     # What 0.8.0 does to a v0.7.0 project (#33): the old modules go, an edited one included, and the
     # price table keeps the project's entry. Observed on Copier 9.19.1; the README says the same.
-    dst = committed_baseline_project(tmp_path / "project")
+    dst = committed_baseline_project(tmp_path / "project", "v0.7.0")
     llm = dst / "backend/src/app/llm"
     entry = ('    "openai:gpt-demo": Price(\n        _rates(1, 4, 0.10, 1.25, 2), checked="2026-11-06",\n'
              '        source=OPENAI_PRICING,\n    ),\n')
