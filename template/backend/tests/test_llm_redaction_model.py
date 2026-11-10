@@ -376,3 +376,35 @@ async def test_concurrent_calls_keep_their_own_mappings_scopes_and_counts() -> N
     # Counts travel with their own call: 2, 3 and 4 values.
     assert sorted(m["redacted_count"] for _, _, m in recorder.starts) == [2, 3, 4]
     assert len(meter.reserved) == 3
+
+
+# --- a message's name field ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", [NAME, EMAIL])
+async def test_a_message_name_that_holds_personal_data_is_refused_and_nothing_is_sent(
+    name: str,
+) -> None:
+    _, model = wire.wrapped("openai")
+    with (
+        capture_logs() as logs,
+        wire.captured(lambda _b: wire.openai_text("ok")) as sent,
+        pytest.raises(RedactionFailed),
+    ):
+        async with redaction_scope(known={"NAME": [NAME]}):
+            await model.ainvoke([HumanMessage("hello", name=name)])
+    assert sent.bodies == []
+    [event] = [e for e in logs if e["event"] == "llm_redaction_failed"]
+    assert event["error_type"] == "_NameFieldHoldsPersonalData"
+    assert name not in repr(logs)
+
+
+async def test_a_plain_message_name_is_sent_as_it_is() -> None:
+    inner, model = wire.wrapped("openai")
+    messages: list[BaseMessage] = [HumanMessage("hello", name="tenant")]
+    with wire.captured(lambda _b: wire.openai_text("ok")) as raw:
+        await inner.ainvoke(messages)
+    with wire.captured(lambda _b: wire.openai_text("ok")) as wrapped:
+        await model.ainvoke(messages)
+    assert wrapped.bodies == raw.bodies
+    assert '"name":"tenant"' in wrapped.text

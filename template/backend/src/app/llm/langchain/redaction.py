@@ -34,8 +34,9 @@ Limits worth knowing:
   blocks), Anthropic's `partial_json` and complete `refusal` blocks are restored. Not restored:
   thinking and reasoning blocks, a Responses stream's pre-parsed `additional_kwargs["parsed"]`, and
   refusal text that arrives as `additional_kwargs` deltas.
-- Images and other media are not scanned (they are counted in `llm_unscanned_images`), and neither
-  is a message's `name` field (a provider only accepts plain names there, so no placeholder fits).
+- Images and other media are not scanned (they are counted in `llm_unscanned_images`). A message's
+  `name` field cannot take a placeholder (a provider accepts only plain names there), so a call
+  whose `name` matches a detector or a known value is refused, nothing sent.
 - A LangChainTracer you pass in a call's config with a client of its own records what that client
   is given; only the gateway's client masks.
 """
@@ -256,6 +257,10 @@ class _Prepared:
         self.unscanned = unscanned
 
 
+class _NameFieldHoldsPersonalData(Exception):
+    """A message's `name` matched a detector or a known value (only its type name is logged)."""
+
+
 def prepare(redactor: Redactor, messages: Sequence[BaseMessage]) -> _Prepared:
     """Redact every string the provider will read, in one Redactor call so that numbering follows
     first appearance across the whole message list. Any failure raises RedactionFailed and nothing
@@ -270,6 +275,10 @@ def prepare(redactor: Redactor, messages: Sequence[BaseMessage]) -> _Prepared:
 
         for message in messages:
             _walk_message(message, collect)
+        names = [m.name for m in messages if m.name]
+        if names and redactor.redact(names).texts != tuple(names):
+            # A provider accepts only plain names there, so no placeholder fits: refuse.
+            raise _NameFieldHoldsPersonalData
         result = redactor.redact(strings)
         replacements = iter(result.texts)
         rebuilt = [_walk_message(message, lambda _text: next(replacements)) for message in messages]
