@@ -294,25 +294,21 @@ def _escaped(mapping: Mapping[str, str]) -> dict[str, str]:
     return {key: json.dumps(value, ensure_ascii=False)[1:-1] for key, value in mapping.items()}
 
 
-def _looks_like_json(text: str) -> bool:
-    stripped = text.strip()
-    if not stripped or stripped[0] not in "{[":
-        return False
-    try:
-        json.loads(stripped)
-    except ValueError:
-        return False
-    return True
+def _opens_json(text: str) -> bool:
+    """One rule for both paths (a whole answer, and the first text of a stream): an answer that
+    opens with { or [ is taken as JSON text, so a quote or backslash in an original is escaped."""
+    return text.lstrip()[:1] in ("{", "[")
 
 
 class _Restorer:
     """Puts originals back into an answer. Made for one call; counts the placeholder-shaped
     strings it could not restore (invented or mangled by the model)."""
 
-    def __init__(self, mapping: Mapping[str, str]) -> None:
+    def __init__(self, mapping: Mapping[str, str], *, json_text: bool = False) -> None:
         self.plain = mapping
         self.escaped = _escaped(mapping)
         self.unrestored = 0
+        self._json_text = json_text
 
     def text(self, text: str) -> str:
         restored, missed = restore(text, self.plain)
@@ -325,8 +321,9 @@ class _Restorer:
         return restored
 
     def answer(self, text: str) -> str:
-        """Answer text: JSON text (JSON mode, a schema answer) gets escaped originals."""
-        return self.raw(text) if _looks_like_json(text) else self.text(text)
+        """Answer text: JSON text gets escaped originals. It is JSON when the call asked for JSON
+        (_json_output) or the answer opens with { or [ (_opens_json), as in a stream."""
+        return self.raw(text) if self._json_text or _opens_json(text) else self.text(text)
 
     def data(self, obj: Any) -> Any:
         if isinstance(obj, BaseModel):
@@ -397,9 +394,6 @@ def _json_output(kwargs: Mapping[str, Any]) -> bool:
     text = kwargs.get("text")
     if isinstance(text, dict) and isinstance(text.get("format"), dict):
         return text["format"].get("type") not in (None, "text")
-    chosen = kwargs.get("ls_structured_output_format")
-    if isinstance(chosen, dict) and isinstance(chosen.get("kwargs"), dict):
-        return chosen["kwargs"].get("method") in ("json_mode", "json_schema")
     return False
 
 
@@ -427,6 +421,17 @@ class _StreamRestorers:
     def unrestored(self) -> int:
         return self._whole_missed + sum(stream.unrestored for stream in self._streams.values())
 
+    def _feed_text(self, index: Any, delta: str) -> str:
+        """A text delta. Whether the stream is JSON text is decided at its first text that is not
+        whitespace (the same rule as for a whole answer); before that nothing is held."""
+        stream = self._streams.get(("text", index))
+        if stream is None:
+            if not delta.strip():
+                return delta
+            raw = self._json_text or _opens_json(delta)
+            stream = self._stream("text", index, raw=raw)
+        return stream.feed(delta)
+
     def _whole(self, text: str) -> str:
         restored, missed = restore(text, self._plain)
         self._whole_missed += missed
@@ -435,15 +440,16 @@ class _StreamRestorers:
     def chunk(self, chunk: AIMessageChunk) -> AIMessageChunk:
         content = chunk.content
         if isinstance(content, str):
-            content = self._stream("text", None, raw=self._json_text).feed(content)
+            content = self._feed_text(None, content)
         else:
             blocks: list[Any] = []
             for block in content:
                 if not isinstance(block, dict):
                     blocks.append(block)
                 elif block.get("type") == "text" and isinstance(block.get("text"), str):
-                    feed = self._stream("text", block.get("index"), raw=self._json_text).feed
-                    blocks.append({**block, "text": feed(block["text"])})
+                    blocks.append(
+                        {**block, "text": self._feed_text(block.get("index"), block["text"])}
+                    )
                 elif isinstance(block.get("partial_json"), str):
                     feed = self._stream("json", block.get("index"), raw=True).feed
                     blocks.append({**block, "partial_json": feed(block["partial_json"])})
@@ -776,7 +782,7 @@ class RedactingChatModel(BaseChatModel):
         )
         if not isinstance(answer, AIMessage):
             raise TypeError("the model did not return an AIMessage")
-        restorer = _Restorer(prepared.mapping)
+        restorer = _Restorer(prepared.mapping, json_text=_json_output(kwargs))
         restored = restorer.message(answer)
         if restorer.unrestored:
             log.warning("llm_unrestored_placeholders", count=restorer.unrestored)

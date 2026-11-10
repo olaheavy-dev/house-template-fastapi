@@ -247,3 +247,21 @@ async def test_a_cancelled_stream_leaves_the_same_ledger_row_as_the_raw_model(
         if row.id not in first
     }
     assert list(second.values()) == list(first.values())
+
+
+@pytest.mark.parametrize("provider", ["openai", "openai-responses", "anthropic"])
+async def test_a_json_answer_is_restored_the_same_way_whole_and_streamed(provider: str) -> None:
+    # One rule for both paths: no response_format is bound (the prompt asked for JSON), and the
+    # answer opens with "{", so the original, which holds a quote and a backslash, is escaped.
+    document = '{"name": "[NAME_1]", "email": "[EMAIL_1]"}'
+    pieces = [document[:3], document[3:14], document[14:27], document[27:]]
+    _, model = wire.wrapped(provider)
+    messages = [HumanMessage(f"Reply in JSON for {TRICKY} at {EMAIL}")]
+    async with redaction_scope(known={"NAME": [TRICKY]}):
+        with wire.captured(lambda _b: wire.text_reply(provider, document)):
+            whole = (await model.ainvoke(messages)).text
+        with wire.captured(stream_reply(provider, pieces)):
+            streamed = "".join([c.text async for c in model.astream(messages)])
+    expected = {"name": TRICKY, "email": EMAIL}
+    assert json.loads(whole) == expected
+    assert json.loads(streamed) == expected
