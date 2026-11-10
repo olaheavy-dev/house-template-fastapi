@@ -46,12 +46,78 @@ REMOVED_FILES = {
     "backend/tests/test_llm_shims.py",
 }
 
-# {rendered path: "reason (#NN)"}. Starts empty. The test fails for a path that differs without an
-# entry here, and for an entry whose path no longer differs. A path-level entry hides a second,
-# accidental change to the same file until the next baseline move.
+# {rendered path: "reason (#NN)"}. Starts empty after each baseline move; the entries below are the
+# changes of #78 part 2 (personal-data redaction in the LangChain adapter). The test fails for a
+# path that differs without an entry here, and for an entry whose path no longer differs. A
+# path-level entry hides a second, accidental change to the same file until the next baseline move.
 # Not compared: file modes, symlinks and empty directories (the template has no tracked
 # executables today).
-INTENDED: dict[str, str] = {}
+INTENDED: dict[str, str] = {
+    ".claude/rules/fastapi.md":
+        "rules text for personal-data redaction, and migrations 0002 to 0006 (#78)",
+    ".github/template-owned/fastapi.txt":
+        "owns migration 0006 and the redaction evals (#78)",
+    "backend/.env.example":
+        "LLM_REDACTION and LLM_REDACT_KINDS (#78)",
+    "backend/migrations/versions/20261110_0006_llm_call_redacted_count.py":
+        "new migration 0006: llm_call.redacted_count (#78)",
+    "backend/src/app/llm/core/budget.py":
+        "LlmCall.redacted_count, CallTags.redacted_count, reserve() (#78)",
+    "backend/src/app/llm/core/metrics.py":
+        "the llm.redactions counter (#78)",
+    "backend/src/app/llm/core/redaction.py":
+        "choose_detectors (LLM_REDACT_KINDS) (#78)",
+    "backend/src/app/llm/langchain/callbacks.py":
+        "BudgetGuard reads redacted_count from the call metadata (#78)",
+    "backend/src/app/llm/langchain/gateway.py":
+        "gateway.model() returns the redacting wrapper; LangSmith masking client (#78)",
+    "backend/src/app/llm/langchain/redaction.py":
+        "new: RedactingChatModel and masking_anonymizer (#78)",
+    "backend/src/app/settings.py":
+        "LLM_REDACTION and LLM_REDACT_KINDS settings (#78)",
+    "backend/tests/evals/redaction_corpus.py":
+        "new: synthetic corpus for the redaction evals (#78)",
+    "backend/tests/evals/test_redaction_evals.py":
+        "new: live redaction evals (#78)",
+    "backend/tests/test_llm_core_redaction.py":
+        "tests for choose_detectors (#78)",
+    "backend/tests/test_llm_gateway.py":
+        "tests for the redaction start-up log and kinds (#78)",
+    "backend/tests/test_llm_langchain_callbacks.py":
+        "tests for the redaction count tag (#78)",
+    "backend/tests/test_llm_ledger.py":
+        "tests for llm_call.redacted_count (#78)",
+    "backend/tests/test_llm_migrations.py":
+        "tests for migration 0006 and the stamp-0005 recipe (#78)",
+    "backend/tests/test_llm_redaction_agents.py":
+        "new: agents and gateway wiring through the wrapper (#78)",
+    "backend/tests/test_llm_redaction_corpus.py":
+        "new: the corpus against the default detectors, offline (#78)",
+    "backend/tests/test_llm_redaction_ledger.py":
+        "new: redaction counts on a real ledger (#78)",
+    "backend/tests/test_llm_redaction_logs.py":
+        "new: logs and the 503 body hold no value (#78)",
+    "backend/tests/test_llm_redaction_model.py":
+        "new: ainvoke through the wrapper (#78)",
+    "backend/tests/test_llm_redaction_observability.py":
+        "new: the llm.redactions metric and unscanned media (#78)",
+    "backend/tests/test_llm_redaction_stream.py":
+        "new: streaming through the wrapper (#78)",
+    "backend/tests/test_llm_redaction_structured.py":
+        "new: structured output through the wrapper (#78)",
+    "backend/tests/test_llm_redaction_tools.py":
+        "new: tool calls through the wrapper (#78)",
+    "backend/tests/test_llm_redaction_traces.py":
+        "new: masked LangSmith traces (#78)",
+    "backend/tests/test_llm_redaction_wire.py":
+        "new: nothing unredacted on the wire (cassette test) (#78)",
+    "backend/tests/test_llm_settings.py":
+        "tests for the redaction settings (#78)",
+    "backend/tests/test_llm_surface.py":
+        "the llm_call column pin includes redacted_count (#78)",
+    "backend/tests/wire.py":
+        "new: a fake provider wire for the redaction tests (#78)",
+}
 
 # DEPENDABOT_*: what Dependabot updates in this repository's rendered output
 # (.github/dependabot.yml). Its PRs must pass this test unchanged, so these are normalised away
