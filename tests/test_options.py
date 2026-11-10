@@ -60,6 +60,7 @@ LLM_PATTERNS = [
     "backend/tests/test_llm_*.py",
     "backend/tests/test_recording_keys.py",
     "backend/tests/test_observability.py",
+    "backend/tests/wire.py",
     "backend/tests/evals/*",
     "backend/tests/cassettes/*",
 ]
@@ -74,6 +75,7 @@ LLM_FILES = [
     "backend/tests/test_llm_errors.py",
     "backend/tests/test_recording_keys.py",
     "backend/tests/test_observability.py",
+    "backend/tests/wire.py",
     "backend/tests/evals/conftest.py",
     "backend/tests/cassettes/test_llm_gateway/test_a_replayed_call_is_answered_and_its_cost_settled.yaml",
 ]
