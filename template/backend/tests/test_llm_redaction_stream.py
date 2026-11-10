@@ -292,3 +292,52 @@ async def test_anthropic_thinking_deltas_pass_unchanged_and_do_not_disturb_the_t
     assert block["thinking"] == "Mention [NAME_1] and [EMAIL_1]."
     assert block["signature"] == "sig-xyz"
     assert total.text == f"Hi {NAME}, mail {EMAIL}."
+
+
+ADDRESS = '12 "Quoted" Row\\Flat\nLeeds'
+
+
+@pytest.mark.parametrize("provider", ["openai", "openai-responses", "anthropic"])
+async def test_a_plain_answer_that_starts_with_a_placeholder_is_restored_exactly(
+    provider: str,
+) -> None:
+    # Every placeholder starts with "[", so an answer opening with one is not JSON: the originals,
+    # which hold a quote, a backslash and a newline, go back as they were, whole and streamed.
+    answer = "[NAME_1], here is your draft. Address: [ADDRESS_1]."
+    pieces = ["[", "NAME_1], here is ", "your draft. Address: [ADDR", "ESS_1]."]
+    expected = f"{TRICKY}, here is your draft. Address: {ADDRESS}."
+    _, model = wire.wrapped(provider)
+    messages = [HumanMessage(f"I am {TRICKY} at {ADDRESS}")]
+    async with redaction_scope(known={"NAME": [TRICKY], "ADDRESS": [ADDRESS]}):
+        with wire.captured(lambda _b: wire.text_reply(provider, answer)):
+            whole = (await model.ainvoke(messages)).text
+        with wire.captured(stream_reply(provider, pieces)):
+            streamed = "".join([c.text async for c in model.astream(messages)])
+    assert whole == expected
+    assert streamed == expected
+
+
+async def test_a_lone_opening_bracket_at_the_end_of_a_stream_is_still_shown() -> None:
+    _, model = wire.wrapped("openai")
+    with wire.captured(stream_reply("openai", ["See ", "["])):
+        chunks = [c async for c in model.astream([HumanMessage("hi")])]
+    assert "".join(c.text for c in chunks) == "See ["
+    with wire.captured(stream_reply("openai", ["["])):
+        chunks = [c async for c in model.astream([HumanMessage("hi")])]
+    assert "".join(c.text for c in chunks) == "["
+
+
+@pytest.mark.parametrize("opening", ['{"a": ', '["x", ', "[1, ", "[ 2"])
+async def test_text_that_opens_like_a_json_document_is_taken_as_json(opening: str) -> None:
+    from app.llm.langchain.redaction import _opens_json
+
+    assert _opens_json(opening)
+
+
+@pytest.mark.parametrize(
+    "opening", ["[NAME_1], hi", "  [EMAIL_2]", "[", "Hello {", "[a", "[ NAME_1]"]
+)
+async def test_text_that_opens_with_a_placeholder_or_plain_words_is_not(opening: str) -> None:
+    from app.llm.langchain.redaction import _opens_json
+
+    assert not _opens_json(opening)

@@ -44,6 +44,7 @@ Limits worth knowing:
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping, Sequence
 from contextlib import aclosing
 from contextvars import ContextVar
@@ -303,10 +304,17 @@ def _escaped(mapping: Mapping[str, str]) -> dict[str, str]:
     return {key: json.dumps(value, ensure_ascii=False)[1:-1] for key, value in mapping.items()}
 
 
+_JSON_OPENING = re.compile(r"\s*(?:\{|\[\s*[^A-Za-z\s])")
+
+
 def _opens_json(text: str) -> bool:
-    """One rule for both paths (a whole answer, and the first text of a stream): an answer that
-    opens with { or [ is taken as JSON text, so a quote or backslash in an original is escaped."""
-    return text.lstrip()[:1] in ("{", "[")
+    """The rule for text that is JSON without the call having asked for a response format, the same
+    for a whole answer and for the first text of a stream. It is JSON when it opens with `{`, or
+    with `[` followed (after any spaces) by something that is not a letter. A placeholder is `[`
+    and a letter, so an answer that starts with one is plain text. Missed on purpose: an array
+    that starts with a letter (`[true, ...]`, `[null]`). A lone `[` is undecided (a stream waits
+    for the next text)."""
+    return _JSON_OPENING.match(text) is not None
 
 
 class _Restorer:
@@ -417,6 +425,7 @@ class _StreamRestorers:
         self._json_text = json_text
         self._streams: dict[tuple[str, Any], StreamRestorer] = {}
         self._whole_missed = 0
+        self._undecided: dict[Any, str] = {}
 
     def _stream(self, kind: str, index: Any, *, raw: bool) -> StreamRestorer:
         stream = self._streams.get((kind, index))
@@ -432,14 +441,19 @@ class _StreamRestorers:
 
     def _feed_text(self, index: Any, delta: str) -> str:
         """A text delta. Whether the stream is JSON text is decided at its first text that is not
-        whitespace (the same rule as for a whole answer); before that nothing is held."""
+        whitespace, by the rule in _opens_json; a lone `[` waits for the next text."""
         stream = self._streams.get(("text", index))
-        if stream is None:
-            if not delta.strip():
-                return delta
-            raw = self._json_text or _opens_json(delta)
-            stream = self._stream("text", index, raw=raw)
-        return stream.feed(delta)
+        if stream is not None:
+            return stream.feed(delta)
+        text = self._undecided.pop(index, "") + delta
+        stripped = text.lstrip()
+        if not stripped:
+            return text
+        if stripped == "[" or (stripped.startswith("[") and not stripped[1:].strip()):
+            self._undecided[index] = text
+            return ""
+        raw = self._json_text or _opens_json(text)
+        return self._stream("text", index, raw=raw).feed(text)
 
     def _whole(self, text: str) -> str:
         restored, missed = restore(text, self._plain)
@@ -494,6 +508,15 @@ class _StreamRestorers:
     def flush(self) -> list[AIMessageChunk]:
         """Whatever was still held back at the end, as chunks (empty when nothing was)."""
         tails: list[AIMessageChunk] = []
+        for index, text in self._undecided.items():  # a lone `[` that nothing followed: plain text
+            stream = self._stream("text", index, raw=self._json_text)
+            shown = stream.feed(text) + stream.flush()
+            if index is None:
+                tails.append(AIMessageChunk(content=shown))
+            else:
+                block = {"type": "text", "text": shown, "index": index}
+                tails.append(AIMessageChunk(content=[block]))
+        self._undecided.clear()
         for (kind, index), stream in self._streams.items():
             tail = stream.flush()
             if not tail:

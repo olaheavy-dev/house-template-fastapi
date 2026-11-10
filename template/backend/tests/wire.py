@@ -55,6 +55,7 @@ __all__ = [
     "openai_text",
     "openai_tool",
     "raw_model",
+    "responses_stream_refusal",
     "responses_stream_text",
     "responses_stream_tool",
     "responses_text",
@@ -496,6 +497,47 @@ def responses_stream_text(pieces: list[str]) -> bytes:
                 "type": "response.completed",
                 "sequence_number": sequence + 3,
                 "response": responses_text(text),
+            },
+        ),
+    ]
+    return sse(events)
+
+
+def responses_stream_refusal(text: str) -> bytes:
+    """A Responses API stream that ends in a refusal block (one complete text)."""
+    message = {
+        "type": "message",
+        "id": "msg_1",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "refusal", "refusal": text}],
+    }
+    events: list[tuple[str | None, Any]] = [
+        (
+            "response.created",
+            {
+                "type": "response.created",
+                "sequence_number": 0,
+                "response": {**_responses([]), "status": "in_progress"},
+            },
+        ),
+        (
+            "response.refusal.done",
+            {
+                "type": "response.refusal.done",
+                "sequence_number": 1,
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "refusal": text,
+            },
+        ),
+        (
+            "response.completed",
+            {
+                "type": "response.completed",
+                "sequence_number": 2,
+                "response": _responses([message]),
             },
         ),
     ]
