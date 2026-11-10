@@ -23,8 +23,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from structlog.testing import capture_logs
 
-from app.llm.core.budget import LlmCall
-from app.llm.core.redaction import Redactor, Scope, redaction_scope
+from app.llm.core.budget import BudgetExhausted, LlmCall
+from app.llm.core.redaction import RedactionFailed, Redactor, Scope, redaction_scope
 from app.llm.core.registry import key_setting
 from app.llm.langchain.gateway import Gateway
 from app.llm.redaction_rules import DETECTORS
@@ -48,6 +48,7 @@ async def spend_stays_under_the_cap(database_url: str) -> AsyncIterator[None]:
             spent = await session.scalar(select(func.coalesce(func.sum(LlmCall.cost_micro_usd), 0)))
     finally:
         await engine.dispose()
+    print(f"redaction evals: settled spend so far {spent or 0} micro-USD (cap {CAP_MICRO_USD})")
     assert (spent or 0) < CAP_MICRO_USD, f"the redaction evals spent {spent} micro-USD"
 
 
@@ -96,23 +97,32 @@ async def test_redaction_keeps_drafts_useful(gateway: Gateway) -> None:
 async def test_redaction_leak_corpus(short_gateway: Gateway, tmp_path: Path) -> None:
     # Twenty synthetic documents through the real SDK. The calls are recorded (all of them, into a
     # throwaway cassette) only to read what was really sent.
+    refused: list[str] = []
     recorder = vcr.VCR(record_mode="all", filter_headers=SECRET_HEADERS)
     with recorder.use_cassette(str(tmp_path / "leak.yaml")) as cassette:
         for document in LEAK_CORPUS:
             async with redaction_scope(known=document.known, allow=document.allow):
-                await short_gateway.model().ainvoke(
-                    [
-                        SystemMessage("Reply with the single word: ok"),
-                        HumanMessage(document.text),
-                    ]
-                )
+                try:
+                    await short_gateway.model().ainvoke(
+                        [
+                            SystemMessage("Reply with the single word: ok"),
+                            HumanMessage(document.text),
+                        ]
+                    )
+                except (RedactionFailed, BudgetExhausted):
+                    raise
+                except Exception as error:
+                    # A reasoning model may use its whole 32-token limit before it answers, and
+                    # the provider refuses that with a 400. The request was still sent, and the
+                    # request is what is checked; count the refusals instead of failing.
+                    refused.append(type(error).__name__)
         sent = [
             r.body.decode() if isinstance(r.body, bytes) else str(r.body) for r in cassette.requests
         ]
     wire_text = "\n".join(sent)
     leaked = [v for document in LEAK_CORPUS for v in document.seeded if v in wire_text]
     t.log_inputs({"documents": len(LEAK_CORPUS)})
-    t.log_outputs({"requests": len(sent), "leaked": len(leaked)})
+    t.log_outputs({"requests": len(sent), "leaked": len(leaked), "refused": len(refused)})
     t.log_feedback(key="seeded_values_sent", score=len(leaked))
     for kind in sorted({k for document in LEAK_CORPUS for k in document.counts}):
         total = sum(document.counts.get(kind, 0) for document in LEAK_CORPUS)

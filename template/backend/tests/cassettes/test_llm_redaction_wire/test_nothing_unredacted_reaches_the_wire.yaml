@@ -1,0 +1,63 @@
+interactions:
+- request:
+    body: '{"model":"gpt-6-luna","stream":false,"messages":[{"content":"You help [NAME_1]
+      with a tenancy.","role":"system"},{"content":"Mail [EMAIL_1], phone [PHONE_1],
+      NI [NINO_1]. Reply with one word: ok.","role":"user"}],"max_completion_tokens":1024}'
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate, zstd
+      connection:
+      - keep-alive
+      content-length:
+      - '242'
+      content-type:
+      - application/json
+      host:
+      - api.openai.com
+      user-agent:
+      - AsyncOpenAI/Python 3.37.0
+      x-stainless-arch:
+      - arm64
+      x-stainless-async:
+      - async:asyncio
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - MacOS
+      x-stainless-package-version:
+      - 3.37.0
+      x-stainless-raw-response:
+      - 'true'
+      x-stainless-read-timeout:
+      - '60.0'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.14.5
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: "{\n  \"id\": \"chatcmpl-EioF5g3NuAmIOU0m1zdP3aOBvQdVQ\",\n  \"object\":
+        \"chat.completion\",\n  \"created\": 1794348271,\n  \"model\": \"gpt-6-luna\",\n
+        \ \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        \"role\":
+        \"assistant\",\n        \"content\": \"ok\",\n        \"refusal\": null,\n
+        \       \"annotations\": []\n      },\n      \"finish_reason\": \"stop\"\n
+        \   }\n  ],\n  \"usage\": {\n    \"prompt_tokens\": 47,\n    \"completion_tokens\":
+        155,\n    \"total_tokens\": 202,\n    \"prompt_tokens_details\": {\n      \"cached_tokens\":
+        0,\n      \"cache_write_tokens\": 0,\n      \"audio_tokens\": 0\n    },\n
+        \   \"completion_tokens_details\": {\n      \"reasoning_tokens\": 145,\n      \"audio_tokens\":
+        0,\n      \"accepted_prediction_tokens\": 0,\n      \"rejected_prediction_tokens\":
+        0\n    }\n  },\n  \"service_tier\": \"default\",\n  \"system_fingerprint\":
+        null\n}\n"
+    headers:
+      content-type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+version: 1
