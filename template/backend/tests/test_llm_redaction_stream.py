@@ -265,3 +265,30 @@ async def test_a_json_answer_is_restored_the_same_way_whole_and_streamed(provide
     expected = {"name": TRICKY, "email": EMAIL}
     assert json.loads(whole) == expected
     assert json.loads(streamed) == expected
+
+
+async def test_anthropic_thinking_deltas_pass_unchanged_and_do_not_disturb_the_text() -> None:
+    # Thinking is produced from placeholders and carries a signature the provider checks, so it is
+    # neither restored nor changed; the text block after it is restored as usual.
+    thinking = [
+        {"type": "thinking_delta", "thinking": "Mention [NAME_1] and "},
+        {"type": "thinking_delta", "thinking": "[EMAIL_1]."},
+        {"type": "signature_delta", "signature": "sig-xyz"},
+    ]
+    text = [{"type": "text_delta", "text": t} for t in ("Hi [NA", "ME_1], mail [EMAIL", "_1].")]
+    data = wire.anthropic_stream(
+        [
+            ({"type": "thinking", "thinking": "", "signature": ""}, thinking),
+            ({"type": "text", "text": ""}, text),
+        ]
+    )
+    _, model = wire.wrapped("anthropic")
+    async with redaction_scope(known={"NAME": [NAME]}):
+        with wire.captured(lambda _b: data):
+            chunks = [c async for c in model.astream([HumanMessage(f"I am {NAME}, {EMAIL}")])]
+    total = merged(chunks)
+    assert isinstance(total.content, list)
+    [block] = [b for b in total.content if isinstance(b, dict)]
+    assert block["thinking"] == "Mention [NAME_1] and [EMAIL_1]."
+    assert block["signature"] == "sig-xyz"
+    assert total.text == f"Hi {NAME}, mail {EMAIL}."
