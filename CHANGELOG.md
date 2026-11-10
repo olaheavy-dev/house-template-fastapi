@@ -6,6 +6,8 @@
 ### ⚠ BREAKING CHANGES
 
 * the old model gateway import paths are removed (app.llm.budget, app.llm.checkpoints, app.llm.embeddings, app.llm.errors, app.llm.gateway, app.llm.metrics, app.llm.prompts and app.llm.report no longer exist, `python -m app.llm.report` is now `python -m app.llm.core.report`, and cost, ceiling and token_details no longer answer from app.llm.prices), so a project must change every such import, patch target and scheduled command to the new path in "Upgrading to 0.8.0" before it updates, and an edited old module is deleted by the update.
+* the `AGENT_MAX_STEPS` setting is removed and replaced by `AGENT_MAX_MODEL_CALLS` (default 13: the old 25 LangGraph steps allowed 13 model calls), and the app refuses to start while the old name is set, so delete `AGENT_MAX_STEPS` from `backend/.env` and from every deployment.
+* an agent that reaches its limit no longer gets an HTTP 422: it makes a final model call without tools and returns a real answer with `step_limit_reached` set, `StepLimitReached` and `step_limit_response` are removed, and a `GraphRecursionError` is now a plain 500.
 * the `agent_step_limit` log event is replaced by `step_limit_reached`.
 
 ### Features
