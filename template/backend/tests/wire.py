@@ -16,6 +16,7 @@ from typing import Any
 from unittest import mock
 
 import httpx2
+import requests
 from langchain_anthropic import ChatAnthropic
 from langchain_core.callbacks import AsyncCallbackHandler, BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
@@ -40,6 +41,7 @@ __all__ = [
     "TRICKY",
     "Address",
     "Contact",
+    "FakeLangSmithSession",
     "Recorder",
     "Transport",
     "anthropic_stream",
@@ -621,3 +623,28 @@ DICT_SCHEMA: dict[str, Any] = {
     "required": ["name", "email", "address"],
     "additionalProperties": False,
 }
+
+
+class FakeLangSmithSession(requests.Session):
+    """A requests session that records what a LangSmith client would send, as text, and answers
+    200. Give it to `langsmith.Client(session=...)`: nothing leaves the machine."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.sent: list[str] = []
+
+    def request(self, method: str, url: str, **kwargs: Any) -> requests.Response:  # type: ignore[override]
+        data = kwargs.get("data")
+        if data is None and kwargs.get("json") is not None:
+            data = json.dumps(kwargs["json"])
+        if isinstance(data, bytes):
+            data = data.decode("utf-8", "replace")
+        self.sent.append(f"{method} {url} {data or ''}")
+        response = requests.Response()
+        response.status_code = 200
+        response._content = b"{}"
+        return response
+
+    @property
+    def text(self) -> str:
+        return "\n".join(self.sent)

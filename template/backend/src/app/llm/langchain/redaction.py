@@ -63,7 +63,7 @@ from pydantic import BaseModel, PrivateAttr
 from app.llm.core import metrics
 from app.llm.core.redaction import RedactionFailed, Redactor, StreamRestorer, restore
 
-__all__ = ["RedactingChatModel", "RedactionUnavailable"]
+__all__ = ["RedactingChatModel", "RedactionUnavailable", "masking_anonymizer"]
 
 log = structlog.get_logger()
 
@@ -716,3 +716,36 @@ class RedactingChatModel(BaseChatModel):
             yield ChatGenerationChunk(message=tail)
         if restorers.unrestored:
             log.warning("llm_unrestored_placeholders", count=restorers.unrestored)
+
+
+def masking_anonymizer(redactor: Redactor) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """For `langsmith.Client(anonymizer=...)`: every string in a run's inputs, outputs, metadata or
+    error is masked before it is sent, one way (nothing is restored in a trace). It uses the
+    redaction scope of the request that made the run, so the app's known values are masked too: the
+    tracer's worker threads run in a copy of that request's context.
+
+    If masking fails for any reason it returns an empty dict, so the trace carries nothing rather
+    than the text, and the failure is logged by type only."""
+
+    def anonymize(data: dict[str, Any]) -> dict[str, Any]:
+        failure: str | None = None
+        try:
+            strings: list[str] = []
+
+            def collect(text: str) -> str:
+                strings.append(text)
+                return text
+
+            _walk_data(data, collect)
+            replacements = iter(redactor.redact(strings).texts)
+            masked = _walk_data(data, lambda _text: next(replacements))
+            if isinstance(masked, dict):
+                return masked
+        except RedactionFailed:  # already logged, by type only
+            return {}
+        except Exception as exc:  # fail closed, and say only the type
+            failure = type(exc).__name__
+        log.error("llm_redaction_failed", error_type=failure or "TypeError", where="langsmith")
+        return {}
+
+    return anonymize

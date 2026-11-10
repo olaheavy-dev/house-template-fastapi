@@ -207,8 +207,10 @@ STRATEGIES: dict[str, Any] = {
 }
 
 
-def build_agent(model: Any, *, limit: int, response_format: Any) -> Any:
-    seen: list[dict[str, Any]] = []
+def build_agent(
+    model: Any, *, limit: int, response_format: Any, seen: list[dict[str, Any]] | None = None
+) -> Any:
+    seen = [] if seen is None else seen
     return create_agent(
         model,
         [make_find_person(seen)],

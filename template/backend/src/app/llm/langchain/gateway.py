@@ -40,6 +40,7 @@ from langchain_core.tracers.langchain import LangChainTracer, wait_for_all_trace
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 from langsmith import Client
+from langsmith import configure as configure_langsmith
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -54,7 +55,7 @@ from app.llm.core.steps import StepLimit
 from app.llm.langchain.callbacks import BudgetGuard
 from app.llm.langchain.embeddings import GatewayEmbeddings
 from app.llm.langchain.prompts import prompt_config
-from app.llm.langchain.redaction import RedactingChatModel
+from app.llm.langchain.redaction import RedactingChatModel, masking_anonymizer
 from app.llm.langchain.steps import StepLimitMiddleware, recursion_limit
 from app.llm.redaction_rules import DETECTORS
 from app.problems import Problem
@@ -111,7 +112,13 @@ class Gateway:
         else:
             log.info("llm_redaction", state="off", kinds=[])
         callbacks: list[BaseCallbackHandler] = [self.guard]
-        self.tracer = _tracer(settings)
+        # One LangSmith client for the process: it masks what traces carry whenever redaction is
+        # on, so it is also the client of tracing that starts from the environment or from a graph,
+        # not only of this gateway's tracer. (It is also what shutdown flushes.)
+        client = _langsmith_client(settings, self.redactor)
+        if client is not None and self.redactor is not None:
+            configure_langsmith(client=client)
+        self.tracer = _tracer(settings, client)
         if self.tracer:
             callbacks.append(self.tracer)
 
@@ -231,24 +238,42 @@ class Gateway:
         return cast(RunnableConfig, merged)
 
     async def aclose(self) -> None:
-        if self.tracer:
+        if self.tracer or self.redactor is not None:
             # Traces are sent from a background thread; send what's left before the process ends.
+            # (It flushes the process-wide client, which is this gateway's own client when
+            # redaction is on.)
             await anyio.to_thread.run_sync(wait_for_all_tracers)
 
 
-def _tracer(settings: Settings) -> LangChainTracer | None:
+def _tracing_on(settings: Settings) -> bool:
     # Attaching a tracer also stops LangChain adding its own from LANGSMITH_* variables, so
     # tracing follows these settings alone.
-    if not settings.langsmith_tracing or settings.app_env == "test":
+    return settings.langsmith_tracing and settings.app_env != "test"
+
+
+def _langsmith_client(settings: Settings, redactor: Redactor | None) -> Client | None:
+    """The LangSmith client: with the masking anonymizer when redaction is on (also when tracing is
+    off, for tracing that starts from the environment), and with `hide_inputs`/`hide_outputs`,
+    which still win over masking. None when there is nothing to trace or mask. Batching, and its
+    background thread, only when this gateway traces."""
+    tracing = _tracing_on(settings)
+    if not tracing and redactor is None:
         return None
     api_key = settings.langsmith_api_key
-    client = Client(
+    return Client(
         api_url=settings.langsmith_endpoint,
         api_key=api_key.get_secret_value() if api_key else None,
         hide_inputs=settings.langsmith_hide_inputs,
         hide_outputs=settings.langsmith_hide_outputs,
         tracing_sampling_rate=settings.langsmith_tracing_sampling_rate,
+        anonymizer=masking_anonymizer(redactor) if redactor is not None else None,
+        auto_batch_tracing=tracing,
     )
+
+
+def _tracer(settings: Settings, client: Client | None) -> LangChainTracer | None:
+    if not _tracing_on(settings) or client is None:
+        return None
     return LangChainTracer(project_name=settings.langsmith_project, client=client)
 
 
