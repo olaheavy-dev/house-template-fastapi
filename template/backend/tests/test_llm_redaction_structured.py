@@ -156,7 +156,7 @@ PARSED_WARNING = pytest.mark.filterwarnings("ignore:Pydantic serializer warnings
 @pytest.mark.parametrize("schema_kind", ["pydantic", "dict"])
 @pytest.mark.parametrize(("provider", "stream"), STREAMED_METHODS)
 async def test_streamed_structured_output_returns_the_originals(
-    provider: str, stream: Any, schema_kind: str, include_raw: bool
+    provider: str, stream: Any, schema_kind: str, include_raw: bool, request: pytest.FixtureRequest
 ) -> None:
     # langchain-openai adds a final chunk that carries the parsed object (and a refusal) in
     # additional_kwargs; it must be restored like the text.
@@ -164,7 +164,9 @@ async def test_streamed_structured_output_returns_the_originals(
     schema: Any = Contact if schema_kind == "pydantic" else DICT_SCHEMA
     runnable = model.with_structured_output(schema, include_raw=include_raw)
     if provider == "openai-responses" and schema_kind == "pydantic":
-        pytest.skip("langchain-openai streams a Responses pydantic schema without parsing it")
+        # langchain-openai streams a Responses pydantic schema without parsing it, so even the raw
+        # provider model raises this ValueError. strict: the case fails once that is supported.
+        request.applymarker(pytest.mark.xfail(strict=True, raises=ValueError))
     async with redaction_scope(known={"NAME": [TRICKY], "ADDRESS": [ADDRESS]}):
         with wire.captured(lambda _b: stream(PIECES)) as sent:
             outputs = [

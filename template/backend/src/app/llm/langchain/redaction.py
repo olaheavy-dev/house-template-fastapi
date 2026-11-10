@@ -314,7 +314,9 @@ def _opens_json(text: str) -> bool:
     with `[` followed (after any spaces) by something that is not a letter. A placeholder is `[`
     and a letter, so an answer that starts with one is plain text. Missed on purpose: an array
     that starts with a letter (`[true, ...]`, `[null]`). A lone `[` is undecided (a stream waits
-    for the next text)."""
+    for the next text). A misfire, rare and accepted: prose that opens with a footnote marker
+    (`[1]`, `[2]`, `[*`) is taken as JSON, so a later original holding `"`, `\\` or a newline is
+    shown escaped."""
     return _JSON_OPENING.match(text) is not None
 
 

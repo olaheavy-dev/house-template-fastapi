@@ -374,3 +374,19 @@ def test_additional_kwargs_fragments_are_restored_and_reasoning_is_left_alone() 
     calls = "".join(c["function"]["arguments"] for k in out for c in k.get("tool_calls", []))
     assert json.loads(calls) == {"m": EMAIL}
     assert restorers.flush() == []
+
+
+async def test_a_lone_bracket_then_a_json_array_is_taken_as_json_whole_and_streamed() -> None:
+    # "[" arrives alone, so the stream waits: with the next text the answer opens with `[1`, which
+    # is JSON, and the original (a quote and a backslash) is put back escaped, so it still parses.
+    document = '[1, "[NAME_1]"]'
+    pieces = ["[", '1, "[NAME_1]"]']
+    _, model = wire.wrapped("openai")
+    messages = [HumanMessage(f"I am {TRICKY}")]
+    async with redaction_scope(known={"NAME": [TRICKY]}):
+        with wire.captured(lambda _b: wire.openai_text(document)):
+            whole = (await model.ainvoke(messages)).text
+        with wire.captured(stream_reply("openai", pieces)):
+            streamed = "".join([c.text async for c in model.astream(messages)])
+    assert json.loads(whole) == [1, TRICKY]
+    assert json.loads(streamed) == [1, TRICKY]
