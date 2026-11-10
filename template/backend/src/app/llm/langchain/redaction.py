@@ -853,14 +853,23 @@ class RedactingChatModel(BaseChatModel):
             log.warning("llm_unrestored_placeholders", count=restorers.unrestored)
 
 
+_NEUTRAL = "[redaction failed]"
+
+
+def _neutral(data: Any) -> dict[str, Any]:
+    return dict.fromkeys(data, _NEUTRAL) if isinstance(data, dict) else {"error": _NEUTRAL}
+
+
 def masking_anonymizer(redactor: Redactor) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """For `langsmith.Client(anonymizer=...)`: every string in a run's inputs, outputs, metadata or
     error is masked before it is sent, one way (nothing is restored in a trace). It uses the
     redaction scope of the request that made the run, so the app's known values are masked too: the
     tracer's worker threads run in a copy of that request's context.
 
-    If masking fails for any reason it returns an empty dict, so the trace carries nothing rather
-    than the text, and the failure is logged by type only."""
+    If masking fails for any reason it returns the same keys with a neutral value, so the trace
+    carries nothing rather than the text, and the failure is logged by type only. The keys stay
+    because LangSmith keeps a run's original error unless the result still has an "error" key
+    (client.py `_hide_run_error`); inputs, outputs and metadata take the result as it is."""
 
     def anonymize(data: dict[str, Any]) -> dict[str, Any]:
         failure: str | None = None
@@ -877,10 +886,10 @@ def masking_anonymizer(redactor: Redactor) -> Callable[[dict[str, Any]], dict[st
             if isinstance(masked, dict):
                 return masked
         except RedactionFailed:  # already logged, by type only
-            return {}
+            return _neutral(data)
         except Exception as exc:  # fail closed, and say only the type
             failure = type(exc).__name__
         log.error("llm_redaction_failed", error_type=failure or "TypeError", where="langsmith")
-        return {}
+        return _neutral(data)
 
     return anonymize

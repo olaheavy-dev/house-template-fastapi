@@ -11,6 +11,7 @@ from typing import Any
 from unittest import mock
 
 import pytest
+from langchain_core.language_models import GenericFakeChatModel
 from langchain_core.messages import HumanMessage
 from langchain_core.tracers.langchain import LangChainTracer, get_client, wait_for_all_tracers
 from langsmith import Client, configure, tracing_context
@@ -225,13 +226,41 @@ async def test_an_anonymizer_that_fails_sends_nothing_and_logs_only_the_error_ty
     assert EMAIL not in repr(logs)
 
 
-def test_the_anonymizer_returns_an_empty_dict_for_a_shape_it_cannot_mask() -> None:
+async def test_a_run_that_errors_while_the_anonymizer_fails_sends_no_value_at_all() -> None:
+    # LangSmith keeps a run's original error unless the anonymizer's result still has an "error"
+    # key, so a bare {} on failure would let the error (and its email) through.
+    class Boom:
+        kind = "EMAIL"
+
+        def find(self, text: str) -> Any:
+            raise RuntimeError("masking is broken")
+
+    class Raising(GenericFakeChatModel):
+        async def _agenerate(self, *args: Any, **kwargs: Any) -> Any:
+            raise ValueError(f"no account for {EMAIL}")
+
+    client, session = mask_client(Redactor([Boom()]))
+    tracer = LangChainTracer(client=client, project_name="test")
+    model = RedactingChatModel(Raising(messages=iter([])), Redactor(DETECTORS))
+    with pytest.raises(ValueError, match="no account"):
+        await model.ainvoke([HumanMessage(f"Reach {EMAIL}")], config={"callbacks": [tracer]})
+    wait_for_all_tracers()
+    assert session.text.count("PATCH") + session.text.count("POST") >= 2
+    assert EMAIL not in session.text
+    assert "no account for" not in session.text
+    assert "[redaction failed]" in session.text
+
+
+def test_the_anonymizer_keeps_the_keys_with_a_neutral_value_for_a_shape_it_cannot_mask() -> None:
     anonymize = masking_anonymizer(Redactor(DETECTORS))
     with (
         mock.patch("app.llm.langchain.redaction._walk_data", return_value=["not", "a", "dict"]),
         capture_logs() as logs,
     ):
-        assert anonymize({"inputs": EMAIL}) == {}
+        assert anonymize({"inputs": EMAIL, "error": EMAIL}) == {
+            "inputs": "[redaction failed]",
+            "error": "[redaction failed]",
+        }
     assert EMAIL not in repr(logs)
 
 
