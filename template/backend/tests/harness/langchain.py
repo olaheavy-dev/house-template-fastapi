@@ -139,11 +139,15 @@ class LangChainHarness:
         answer = await model.ainvoke(convert_to_messages(list(messages)), config=config)
         return answer.text
 
-    def last_request_body(self, gateway: Gateway) -> dict[str, Any] | None:
+    def last_request_messages(self, gateway: Gateway) -> list[Message] | None:
         seen = self._scripted(gateway).seen
         if not seen:
             return None
-        return {"messages": [message.model_dump() for message in seen[-1]]}
+        roles = {"human": "user", "ai": "assistant", "system": "system", "tool": "tool"}
+        return [
+            {"role": roles.get(message.type, message.type), "content": message.content}
+            for message in seen[-1]
+        ]
 
     def raised_by(self, failure: Failure) -> type[BaseException]:
         return ERRORS[failure.kind]

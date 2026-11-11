@@ -132,8 +132,11 @@ class Harness(Protocol):
         prompt_sha, feature, user_ref."""
         ...
 
-    def last_request_body(self, gateway: Any) -> dict[str, Any] | None:
-        """What the provider was last given (the messages after redaction), or None."""
+    def last_request_messages(self, gateway: Any) -> list[Message] | None:
+        """What the provider was last given, after redaction, as neutral messages
+        (`{"role": "user", "content": "text"}`, role one of system, user, assistant, tool), or None
+        when it was not asked yet. No test uses it in PR 1; it is the first of what the protocol
+        grows with (streaming, tools, structured output) as shared tests move here."""
         ...
 
     def raised_by(self, failure: Failure) -> type[BaseException]:

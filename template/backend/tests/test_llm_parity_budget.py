@@ -146,10 +146,19 @@ async def test_a_call_without_usage_keeps_its_reservation(
     assert call.cost_micro_usd == call.reserved_micro_usd == await committed(db_session)
 
 
-async def test_a_larger_bound_limit_is_reserved_for(framework: Harness, gateway: Any) -> None:
-    # 500 output tokens fit a $0.01 cap; a caller binding 5,000 must not slip through.
-    framework.meter(gateway).cap = 10_000
-    framework.install_scripted(gateway, [ANSWER])
+async def test_a_larger_bound_limit_is_reserved_for(
+    framework: Harness, gateway: Any, db_session: AsyncSession
+) -> None:
+    # The cap is set from what a plain call reserves (plus one micro-USD of room), so the only
+    # difference between the two asks is the bound: the plain one fits, the 5,000-token one must
+    # not slip through. It cannot go vacuous if the input bound changes.
+    framework.install_scripted(gateway, [ANSWER, ANSWER, ANSWER])
+    await framework.ask(gateway, QUESTION)
+    [probe] = await calls(db_session)
+    settled = await committed(db_session)
+    assert settled is not None
+    framework.meter(gateway).cap = settled + probe.reserved_micro_usd + 1
+    await framework.ask(gateway, QUESTION)  # control: the same ask without options is allowed
     with pytest.raises(BudgetExhausted):
         await framework.ask(
             gateway, QUESTION, options=framework.params_for_tools(max_output_tokens=5_000)
