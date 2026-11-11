@@ -174,8 +174,12 @@ async def test_streamed_structured_output_returns_the_originals(
             ]
     for seed in (EMAIL, TRICKY, ADDRESS):
         assert seed not in sent.text
-    final = outputs[-1]
-    parsed = final["parsed"] if include_raw else final
+    if include_raw:
+        # include_raw streams partial dicts ({"raw": ...}, {"parsed": ...}) in an order that is
+        # not fixed, so the parsed one is not always the last.
+        parsed = [o["parsed"] for o in outputs if isinstance(o, dict) and "parsed" in o][-1]
+    else:
+        parsed = outputs[-1]
     assert as_dict(parsed) == EXPECTED
 
 
