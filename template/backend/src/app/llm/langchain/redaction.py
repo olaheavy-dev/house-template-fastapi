@@ -76,10 +76,10 @@ from pydantic import PrivateAttr
 from app.llm.core import metrics
 from app.llm.core.redaction import RedactionFailed, Redactor, StreamRestorer, restore
 from app.llm.core.redaction_data import (
-    _MEDIA,
-    _RAW_KEYS,
-    _STRUCTURAL,
-    _UNTOUCHED,
+    MEDIA,
+    RAW_KEYS,
+    STRUCTURAL,
+    UNTOUCHED,
     Leaf,
     Restorer,
     escaped,
@@ -112,14 +112,14 @@ def _type_of(block: dict[str, Any]) -> str | None:
 def _walk_block(
     block: dict[str, Any], leaf: Leaf, tools: Mapping[str, str], context: str = ""
 ) -> dict[str, Any]:
-    if _type_of(block) in _MEDIA or _type_of(block) in _UNTOUCHED:
+    if _type_of(block) in MEDIA or _type_of(block) in UNTOUCHED:
         return block
     if block.get("type") == "tool_result":  # the answer of the tool named by its tool_use
         context = field_context(tools.get(str(block.get("tool_use_id"))))
     out: dict[str, Any] = {}
     for key, value in block.items():
         if isinstance(value, str):
-            out[key] = value if key in _STRUCTURAL else walk_text(value, leaf, context)
+            out[key] = value if key in STRUCTURAL else walk_text(value, leaf, context)
         elif key in ("content", "summary") and isinstance(value, list):
             out[key] = _walk_content(value, leaf, tools, context)
         elif isinstance(value, dict | list | tuple):
@@ -210,7 +210,7 @@ def _walk_raw_call(call: Any, leaf: Leaf) -> Any:
 def _media_count(content: Any) -> int:
     if isinstance(content, list):
         return sum(
-            (1 if _type_of(item) in _MEDIA else _media_count(item.get("content")))
+            (1 if _type_of(item) in MEDIA else _media_count(item.get("content")))
             for item in content
             if isinstance(item, dict)
         )
@@ -292,14 +292,12 @@ class _Restorer(Restorer):
         function_call, Anthropic's partial JSON), by its position in the block; the same name
         deeper down is a tool's own data."""
         kind = _type_of(block)
-        if kind in _UNTOUCHED:
+        if kind in UNTOUCHED:
             return block
         if kind == "text" and isinstance(block.get("text"), str):
             return {**block, "text": self.answer(block["text"])}
         return {
-            key: self.raw(value)
-            if key in _RAW_KEYS and isinstance(value, str)
-            else self.data(value)
+            key: self.raw(value) if key in RAW_KEYS and isinstance(value, str) else self.data(value)
             for key, value in block.items()
         }
 

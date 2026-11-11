@@ -20,16 +20,28 @@ from pydantic import BaseModel
 
 from app.llm.core.redaction import restore
 
-__all__ = ["Leaf", "Restorer", "escaped", "field_context", "opens_json", "walk_data", "walk_text"]
+__all__ = [
+    "MEDIA",
+    "RAW_KEYS",
+    "STRUCTURAL",
+    "UNTOUCHED",
+    "Leaf",
+    "Restorer",
+    "escaped",
+    "field_context",
+    "opens_json",
+    "walk_data",
+    "walk_text",
+]
 
 # Content blocks that are not text: counted, and sent as they are.
-_MEDIA = frozenset(
+MEDIA = frozenset(
     {"image", "image_url", "input_image", "audio", "input_audio", "file", "input_file", "video"}
 )
 # Blocks the provider checks or the model produced from placeholders: never changed.
-_UNTOUCHED = frozenset({"thinking", "redacted_thinking", "reasoning"})
+UNTOUCHED = frozenset({"thinking", "redacted_thinking", "reasoning"})
 # String values of a content block that are structure, not text.
-_STRUCTURAL = frozenset(
+STRUCTURAL = frozenset(
     {
         "type",
         "id",
@@ -48,7 +60,7 @@ _STRUCTURAL = frozenset(
     }
 )
 # Keys whose string value is raw JSON text (a provider's argument string, a streamed fragment).
-_RAW_KEYS = frozenset({"arguments", "partial_json"})
+RAW_KEYS = frozenset({"arguments", "partial_json"})
 
 # What the walkers call for each string: (the text, the field name in front of it) -> the text. The
 # field name ("date of birth: ") is context for detection only; see Redactor.redact(contexts=).
@@ -339,8 +351,8 @@ class Restorer:
         return "".join(pieces)
 
     def answer(self, text: str) -> str:
-        """Answer text: JSON text gets escaped originals. It is JSON when the call asked for JSON
-        (_json_output) or the answer opens with { or [ (opens_json), as in a stream."""
+        """Answer text: JSON text gets escaped originals. It is JSON when `json_text` is set (the
+        call asked for JSON) or the answer opens with { or [ (opens_json), as in a stream."""
         return self.raw(text) if self._json_text or opens_json(text) else self.text(text)
 
     def data(self, obj: Any) -> Any:
