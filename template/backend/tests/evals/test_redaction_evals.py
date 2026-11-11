@@ -166,6 +166,8 @@ def cosine(a: list[float], b: list[float]) -> float:
 
 @pytest.mark.langsmith
 async def test_redacted_embeddings_still_find_the_right_chunk(gateway: Gateway) -> None:
+    # The wire test (tests/test_llm_redaction_embeddings.py) covers what the vectors are made from;
+    # this eval checks that they still rank well.
     # Documents and questions are embedded under the same scope, as the docs say to. The vectors
     # are of the cleaned text (no name, email or phone), and the right chunk must still rank first
     # for every question.
