@@ -190,6 +190,7 @@ LANGCHAIN_ONLY = {
     "test_llm_redaction_agents.py",
     "test_llm_redaction_context.py",
     "test_llm_redaction_corpus.py",
+    "test_llm_redaction_embeddings.py",
     "test_llm_redaction_fields.py",
     "test_llm_redaction_ledger.py",
     "test_llm_redaction_logs.py",
