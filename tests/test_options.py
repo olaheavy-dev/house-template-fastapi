@@ -1019,5 +1019,5 @@ def test_the_maf_rules_say_switching_back_is_one_way_and_sensitive_telemetry_sta
     rules = (render(database=True, llm="maf") / ".claude/rules/fastapi.md").read_text()
     assert "from `maf` back to `langchain` is not yet (one-way)" in rules
     assert "`ENABLE_SENSITIVE_DATA`" in rules
-    assert "never add chat middleware per call or per agent" in rules
+    assert "Never add chat middleware per call" in rules
     assert "`ALLOWED_OPTIONS`" in rules
