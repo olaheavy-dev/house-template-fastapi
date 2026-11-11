@@ -21,7 +21,11 @@ from app.llm.core.bounds import PromptTooLong
 from app.llm.core.budget import BudgetExhausted, LlmCall, LlmSpendDay
 from app.llm.core.errors import FailureKind, ProviderError
 from app.llm.core.prices import Price, Rates
+from app.llm.core.redaction import Redactor
 from app.llm.langchain.embeddings import GatewayEmbeddings
+from app.llm.langchain.gateway import Gateway
+from app.llm.redaction_rules import DETECTORS
+from app.settings import Settings
 
 pytestmark = pytest.mark.anyio
 
@@ -63,6 +67,7 @@ def embeddings(
         cap: int = 10**9,
         price: Price = EMBED,
         client: Any = None,
+        redactor: Redactor | None = None,
     ) -> tuple[GatewayEmbeddings, FakeEmbeddingsApi]:
         fake = FakeEmbeddingsApi()
         return (
@@ -70,6 +75,7 @@ def embeddings(
                 model=MODEL,
                 price=price,
                 client=client or SimpleNamespace(embeddings=fake),
+                redactor=redactor,
                 cap_micro_usd=cap,
                 sessionmaker=lambda: sessions,
                 today=lambda: DAY,
@@ -227,3 +233,38 @@ async def test_a_text_past_the_price_limit_refuses_the_call_before_any_batch_is_
     assert raised.value.status == 422
     assert fake.requests == []
     assert (await rows(db_session), await total(db_session)) == ([], None)
+
+
+# --- redaction (#78 part 3) -----------------------------------------------------------------------
+
+
+async def test_the_redactor_is_a_required_keyword_of_the_class(
+    sessions: async_sessionmaker[AsyncSession],
+) -> None:
+    with pytest.raises(TypeError, match="redactor"):
+        GatewayEmbeddings(  # type: ignore[call-arg]
+            model=MODEL,
+            price=EMBED,
+            client=SimpleNamespace(),
+            cap_micro_usd=10**9,
+            sessionmaker=lambda: sessions,
+        )
+
+
+async def test_a_redactor_given_to_the_class_cleans_what_the_provider_is_sent(
+    embeddings: Callable[..., tuple[GatewayEmbeddings, FakeEmbeddingsApi]],
+) -> None:
+    e, api = embeddings(redactor=Redactor(DETECTORS))
+    await e.aembed_documents(["write to a@example.com"])
+    await e.aembed_query("who is a@example.com")
+    assert api.requests == [["write to [EMAIL_1]"], ["who is [EMAIL_1]"]]
+
+
+async def test_the_gateway_gives_its_embeddings_its_own_redactor_or_none_when_redaction_is_off(
+    settings: Settings, sessions: async_sessionmaker[AsyncSession]
+) -> None:
+    on = Gateway(settings, lambda: sessions)
+    assert on.redactor is not None
+    assert on.embeddings()._redactor is on.redactor
+    off = Gateway(settings.model_copy(update={"llm_redaction": "off"}), lambda: sessions)
+    assert off.embeddings()._redactor is None

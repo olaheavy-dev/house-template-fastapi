@@ -134,6 +134,7 @@ class Gateway:
                     timeout=settings.llm_timeout_seconds,
                     max_retries=settings.llm_max_retries,
                 ),
+                redactor=self.redactor,
                 cap_micro_usd=self.guard.cap,
                 user_cap_micro_usd=self.guard.user_cap,
                 sessionmaker=sessionmaker,

@@ -6,12 +6,19 @@ before it is sent (its UTF-8 bytes bound its tokens, as in core/bounds.py) and s
 usage OpenAI returns, by core/embeddings.py on a Meter. A request the provider rejected releases
 its reservation; any other failure keeps it (both decided by the error's core/errors.py
 FailureKind). An embedding price's max_prompt_tokens applies to each request: texts are batched
-under it, and one text past it alone is refused with a 422. Errors come back as LangChain's
-Model*Error family, so app/llm/langchain/errors.py answers them as it does chat calls.
+under it, and one text past it alone is refused with a 422. With redaction on (the default) the
+texts are cleaned of personal data first, one way, each on its own (core/embeddings.py, #78): the
+vector of a text depends only on the text and the redaction scope. Embed documents and the queries
+that look for them under the same `redaction_scope`, or the placeholders will not line up. Errors
+come back as LangChain's Model*Error family, so app/llm/langchain/errors.py answers them as it
+does chat calls.
 
 Ask the gateway for it and always await it:
 
     vectors = await gateway.embeddings().aembed_documents(texts, feature="ingest")
+
+Overriding `_embed` (or calling the provider another way) skips both the budget and the redaction:
+tests/test_llm_redaction_embeddings.py fails the build when anything under app/ does.
 """
 
 from __future__ import annotations
@@ -28,13 +35,15 @@ from app.llm.core import openai_embeddings
 from app.llm.core.budget import CallTags, Meter, utc_today
 from app.llm.core.errors import ProviderError
 from app.llm.core.prices import Price
+from app.llm.core.redaction import Redactor
 from app.llm.core.usage import Usage
 from app.llm.langchain.errors import model_error
 
 
 class GatewayEmbeddings(Embeddings):
     """OpenAI embeddings, each request reserved and settled against the daily budget through its
-    Meter. model, price, cap, user_cap, sessionmaker and today are the Meter's."""
+    Meter. model, price, cap, user_cap, sessionmaker and today are the Meter's. `redactor` is the
+    gateway's (None when LLM_REDACTION=off)."""
 
     # OpenAI's limits per request: 2,048 inputs and 300,000 tokens (bytes bound tokens).
     MAX_INPUTS = core_embeddings.MAX_INPUTS
@@ -46,6 +55,7 @@ class GatewayEmbeddings(Embeddings):
         model: str,
         price: Price,
         client: Any,
+        redactor: Redactor | None,
         cap_micro_usd: int,
         user_cap_micro_usd: int | None = None,
         sessionmaker: Callable[[], async_sessionmaker[AsyncSession]],
@@ -61,6 +71,8 @@ class GatewayEmbeddings(Embeddings):
         )
         self._model_id = model.split(":", 1)[1]
         self._client = client
+        # None is redaction off. Required, so a forgotten argument is a TypeError, not a leak.
+        self._redactor = redactor
 
     @property
     def model(self) -> str:
@@ -135,6 +147,7 @@ class GatewayEmbeddings(Embeddings):
                 self.meter,
                 self._create,
                 texts,
+                redactor=self._redactor,
                 tags=tags,
                 max_inputs=self.MAX_INPUTS,
                 max_bytes=self.MAX_BYTES,
