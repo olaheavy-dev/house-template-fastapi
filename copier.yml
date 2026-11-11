@@ -58,6 +58,10 @@ _exclude:
   - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/tests/models.py{% endif %}"
   - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/tests/recording.py{% endif %}"
   - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/tests/test_llm_*.py{% endif %}"
+  - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/tests/harness{% endif %}"
+  # Each framework's test harness exists only with that framework (tests/harness/__init__.py is the
+  # shared protocol).
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/harness/langchain.py{% endif %}"
   - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/tests/test_recording_keys.py{% endif %}"
   - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/tests/test_observability.py{% endif %}"
   - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/tests/wire.py{% endif %}"

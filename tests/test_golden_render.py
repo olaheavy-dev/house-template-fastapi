@@ -53,6 +53,22 @@ REMOVED_FILES = {
 # Not compared: file modes, symlinks and empty directories (the template has no tracked
 # executables today).
 INTENDED: dict[str, str] = {
+    "backend/src/app/llm/core/redaction_data.py":
+        "new: the framework-neutral redaction walkers and restorer, moved from langchain (#35)",
+    "backend/src/app/llm/core/__init__.py":
+        "docstring names redaction_data.py (#35)",
+    "backend/tests/harness/__init__.py":
+        "new: the harness protocol the shared parity tests run through (#35)",
+    "backend/tests/harness/langchain.py":
+        "new: the LangChain harness (#35)",
+    "backend/tests/test_llm_parity_budget.py":
+        "new: the budget cases moved here, run once per framework (#35)",
+    "backend/tests/test_llm_budget.py":
+        "the budget cases that hold for every framework moved to test_llm_parity_budget.py (#35)",
+    "backend/tests/test_llm_embeddings.py":
+        "the shared embedding budget cases moved to test_llm_parity_budget.py (#35)",
+    "backend/tests/test_llm_errors.py":
+        "the failure-to-problem cases moved to test_llm_parity_budget.py (#35)",
     ".claude/rules/fastapi.md":
         "rules text for personal-data redaction, and migrations 0002 to 0006 (#78)",
     ".github/template-owned/fastapi.txt":
