@@ -29,6 +29,7 @@ from typing import Any, Protocol
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.llm.core.budget import Meter
+from app.llm.core.redaction import Redactor
 from app.settings import Settings
 
 __all__ = [
@@ -144,6 +145,10 @@ class Harness(Protocol):
         ...
 
     def install_embeddings(self, gateway: Any, api: FakeEmbeddingsApi) -> None: ...
+
+    def set_redactor(self, gateway: Any, redactor: Redactor | None) -> None:
+        """Replace the redactor chat and embedding calls use (None is redaction off)."""
+        ...
 
     def embedding_meter(self, gateway: Any) -> Meter: ...
 

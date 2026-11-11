@@ -7,17 +7,30 @@ rejected gives its reservation back (core/errors.py REJECTED); any other failure
 price's max_prompt_tokens applies to each request: texts are batched under it, and one text past it
 alone is refused (PromptTooLong, a 422) before anything is reserved or sent.
 
+Personal data is removed first, one way (#78, docs/decisions/0006): with a Redactor, each text is
+redacted on its own (Redactor.redact_each), so a text's vector depends only on the text and the
+redaction scope, never on its neighbours or on where the batches are cut. Vectors come back, so
+nothing is restored and no mapping is kept. The order is: redact every text, count the values
+replaced (the llm.redactions metric, once for the call), check the size of the redacted texts, cut
+batches on the redacted texts, then for each batch reserve with that batch's own count, send,
+settle. A text that cannot be redacted fails the whole call before anything is reserved or sent
+(RedactionFailed, a 503). The redactor is required: None means redaction is off (the row's count
+stays NULL); forgetting it is a TypeError, not a silent leak.
+
 The provider call is passed in (core/openai_embeddings.py is OpenAI's), so no SDK is imported here.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import uuid
 from collections.abc import Awaitable, Callable, Iterator, Sequence
 
+from app.llm.core import metrics
 from app.llm.core.bounds import INPUT_MARGIN_TOKENS, check_prompt_size
 from app.llm.core.budget import CallTags, Meter
 from app.llm.core.errors import ProviderError
+from app.llm.core.redaction import Redactor
 from app.llm.core.usage import Usage
 
 __all__ = ["MAX_BYTES", "MAX_INPUTS", "Create", "batches", "embed"]
@@ -53,14 +66,22 @@ async def embed(
     create: Create,
     texts: Sequence[str],
     *,
+    redactor: Redactor | None,
     tags: CallTags | None = None,
     max_inputs: int = MAX_INPUTS,
     max_bytes: int = MAX_BYTES,
 ) -> list[list[float]]:
-    """The vectors of `texts`, in order. Raises PromptTooLong, before anything is sent, for a text
-    past the price's max_prompt_tokens; BudgetExhausted or UserBudgetExhausted when a batch is
-    refused (the earlier ones are already sent and settled); and whatever `create` raises (a
-    ProviderError for a provider's error)."""
+    """The vectors of `texts`, in order, of the texts with personal data removed when there is a
+    `redactor` (None: redaction is off). Raises RedactionFailed before anything is sent when a text
+    cannot be redacted; PromptTooLong, before anything is sent, for a (redacted) text past the
+    price's max_prompt_tokens; BudgetExhausted or UserBudgetExhausted when a batch is refused (the
+    earlier ones are already sent and settled); and whatever `create` raises (a ProviderError for a
+    provider's error)."""
+    counts: list[int] | None = None
+    if redactor is not None:
+        redacted = redactor.redact_each(texts)  # raises RedactionFailed: the call stops here
+        metrics.record_redactions(redacted.kinds)
+        texts, counts = redacted.texts, list(redacted.counts)
     limit = meter.price.max_prompt_tokens
     if limit:  # 0 is no limit, as in bounds.check_prompt_size
         max_bytes = min(max_bytes, limit - INPUT_MARGIN_TOKENS)
@@ -69,8 +90,16 @@ async def embed(
         for text in texts:
             check_prompt_size(meter.price, len(text.encode()) + INPUT_MARGIN_TOKENS)
     vectors: list[list[float]] = []
+    start = 0
     for batch in batches(texts, max_inputs=max_inputs, max_bytes=max_bytes):
-        vectors += await _embed(meter, create, batch, tags)
+        batch_tags = tags
+        if counts is not None:
+            # This batch's own count, not the call's: each row says what was replaced in it.
+            batch_tags = dataclasses.replace(
+                tags or CallTags(), redacted_count=sum(counts[start : start + len(batch)])
+            )
+        start += len(batch)
+        vectors += await _embed(meter, create, batch, batch_tags)
     return vectors
 
 

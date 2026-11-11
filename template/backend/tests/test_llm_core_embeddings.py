@@ -11,7 +11,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import date
 from types import SimpleNamespace
 from typing import Any
@@ -24,12 +24,14 @@ from pydantic import SecretStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.llm.core import embeddings, openai_embeddings
+from app.llm.core import embeddings, metrics, openai_embeddings
 from app.llm.core.bounds import PromptTooLong
 from app.llm.core.budget import BudgetExhausted, CallTags, LlmCall, LlmSpendDay, Meter
 from app.llm.core.errors import FailureKind, ProviderError
 from app.llm.core.prices import Price, Rates
+from app.llm.core.redaction import RedactionFailed, Redactor, Span, redaction_scope
 from app.llm.core.usage import Usage
+from app.llm.redaction_rules import DETECTORS
 from tests.test_llm_core import FRAMEWORKS
 
 pytestmark = pytest.mark.anyio
@@ -43,6 +45,11 @@ K = FailureKind
 
 def limited(tokens: int) -> Price:
     return Price(EMBED.rates, checked="2026-11-06", source=SOURCE, max_prompt_tokens=tokens)
+
+
+async def embed_plain(*args: Any, **kwargs: Any) -> list[list[float]]:
+    """embed() with redaction off, for the tests of batching, budget and errors."""
+    return await embeddings.embed(*args, redactor=None, **kwargs)
 
 
 class Provider:
@@ -138,7 +145,7 @@ async def test_no_texts_send_no_request_and_leave_no_row(
     meter: Callable[..., Meter], db_session: AsyncSession
 ) -> None:
     provider = Provider()
-    assert await embeddings.embed(meter(), provider.create, []) == []
+    assert await embed_plain(meter(), provider.create, []) == []
     assert provider.requests == []
     assert (await rows(db_session), await total(db_session)) == ([], None)
 
@@ -149,7 +156,7 @@ async def test_a_batch_reserves_before_it_is_sent_and_settles_at_the_providers_u
     clock = iter([10.0, 10.5])
     provider = Provider()
     tags = CallTags(feature="ingest", user_ref="u_1")
-    vectors = await embeddings.embed(
+    vectors = await embed_plain(
         meter(clock=lambda: next(clock)), provider.create, ["a", "b", "c"], tags=tags
     )
     assert vectors == [[1.0], [1.0], [1.0]]
@@ -181,7 +188,7 @@ async def test_a_provider_error_settles_by_its_kind_and_is_raised_as_it_was(
     error = ProviderError(kind, source="X")
     provider = Provider(error)
     with pytest.raises(ProviderError) as raised:
-        await embeddings.embed(meter(), provider.create, ["a", "b", "c"])
+        await embed_plain(meter(), provider.create, ["a", "b", "c"])
     assert raised.value is error
     [row] = await rows(db_session)
     # Reserved 21 as above.
@@ -194,7 +201,7 @@ async def test_an_unknown_error_keeps_the_reservation_and_is_raised_untouched(
 ) -> None:
     error = RuntimeError("boom")
     with pytest.raises(RuntimeError) as raised:
-        await embeddings.embed(meter(), Provider(error).create, ["a", "b", "c"])
+        await embed_plain(meter(), Provider(error).create, ["a", "b", "c"])
     assert raised.value is error
     # Unknown: it may have been billed, so it costs its reservation (21).
     [row] = await rows(db_session)
@@ -208,7 +215,7 @@ async def test_a_later_batch_the_budget_cant_cover_is_refused_and_never_sent(
 ) -> None:
     provider = Provider()
     with pytest.raises(BudgetExhausted):
-        await embeddings.embed(meter(cap=21), provider.create, ["a", "b"], max_inputs=1)
+        await embed_plain(meter(cap=21), provider.create, ["a", "b"], max_inputs=1)
     # Batch 1: (1 + 1,024) = 1,025 x 0.02 = 20.5 -> 21 <= cap 21, reserved. It settles at
     # 7 x 0.02 = 0.14 -> 1. Batch 2 reserves 21 more: 1 + 21 = 22 > 21, refused.
     assert provider.requests == [["a"]]
@@ -227,12 +234,12 @@ async def test_a_request_at_the_price_limit_is_sent_and_one_byte_more_is_refused
     m = meter(limited(1_030))
     # "abcdef": 6 + 1,024 = 1,030 tokens, not over the limit: sent. Reserved 1,030 x 0.02 = 20.6
     # -> 21.
-    await embeddings.embed(m, provider.create, ["abcdef"])
+    await embed_plain(m, provider.create, ["abcdef"])
     [row] = await rows(db_session)
     assert (provider.requests, row.reserved_micro_usd) == ([["abcdef"]], 21)
     # "abcdefg": 7 + 1,024 = 1,031 > 1,030: refused before anything is reserved or sent.
     with pytest.raises(PromptTooLong):
-        await embeddings.embed(m, provider.create, ["abcdefg"])
+        await embed_plain(m, provider.create, ["abcdefg"])
     assert provider.requests == [["abcdef"]]
     assert len(await rows(db_session)) == 1
 
@@ -244,7 +251,7 @@ async def test_a_text_past_the_limit_refuses_the_whole_call_before_any_batch_is_
     # "abc" alone would be fine (3 + 1,024 = 1,027 <= 1,030), but "abcdefg" is 1,031 > 1,030: the
     # call is refused up front, so "abc" is not sent and paid for first.
     with pytest.raises(PromptTooLong) as raised:
-        await embeddings.embed(meter(limited(1_030)), provider.create, ["abc", "abcdefg"])
+        await embed_plain(meter(limited(1_030)), provider.create, ["abc", "abcdefg"])
     assert raised.value.status == 422
     assert provider.requests == []
     assert (await rows(db_session), await total(db_session)) == ([], None)
@@ -262,7 +269,7 @@ async def test_the_reservation_is_the_sum_of_the_utf8_bytes_plus_the_margin(
         sessionmaker=lambda: sessions,
         today=lambda: DAY,
     )
-    await embeddings.embed(m, Provider().create, ["é", "ab"])
+    await embed_plain(m, Provider().create, ["é", "ab"])
     [row] = await rows(db_session)
     # Reserved: "é" is 2 bytes, "ab" is 2: 2 + 2 + 1,024 margin = 1,028 tokens x 1 = 1,028.
     # Settled: 2 texts x 7 = 14 tokens x 1 = 14.
@@ -273,7 +280,7 @@ async def test_texts_are_batched_under_the_price_limit(
     meter: Callable[..., Meter], db_session: AsyncSession
 ) -> None:
     provider = Provider()
-    await embeddings.embed(meter(limited(1_030)), provider.create, ["abc", "abc", "abc"])
+    await embed_plain(meter(limited(1_030)), provider.create, ["abc", "abc", "abc"])
     # The byte budget is 1,030 - 1,024 = 6: two texts (3 + 3) fit, a third would make 9.
     assert provider.requests == [["abc", "abc"], ["abc"]]
     # Reserved: (6 + 1,024) = 1,030 x 0.02 = 20.6 -> 21; (3 + 1,024) = 1,027 x 0.02 = 20.54 -> 21.
@@ -283,7 +290,7 @@ async def test_texts_are_batched_under_the_price_limit(
 async def test_a_limit_of_zero_means_no_limit(meter: Callable[..., Meter]) -> None:
     provider = Provider()
     # With a limit of 0 taken literally the byte budget would be -1,024 and every text alone.
-    await embeddings.embed(meter(limited(0)), provider.create, ["abcdefg", "hi"])
+    await embed_plain(meter(limited(0)), provider.create, ["abcdefg", "hi"])
     assert provider.requests == [["abcdefg", "hi"]]
 
 
@@ -292,7 +299,7 @@ async def test_a_limit_below_the_margin_refuses_every_text(
 ) -> None:
     provider = Provider()
     with pytest.raises(PromptTooLong):
-        await embeddings.embed(meter(limited(1_000)), provider.create, ["a", "b"])
+        await embed_plain(meter(limited(1_000)), provider.create, ["a", "b"])
     # "a": 1 + 1,024 = 1,025 > 1,000.
     assert provider.requests == []
     assert (await rows(db_session), await total(db_session)) == ([], None)
@@ -307,7 +314,7 @@ async def test_a_cancelled_call_stays_reserved_and_the_meter_forgets_it(
     m = meter()
     cancelled = anyio.get_cancelled_exc_class()()
     with pytest.raises(type(cancelled)) as raised:
-        await embeddings.embed(m, Provider(cancelled).create, ["a"])
+        await embed_plain(m, Provider(cancelled).create, ["a"])
     assert raised.value is cancelled
     # Whether it was billed is unknown: the row stays reserved (counted at its reservation, 21:
     # 1,025 x 0.02 = 20.5 -> 21) until expire_stale closes it.
@@ -323,6 +330,186 @@ async def test_abandoning_a_call_the_meter_does_not_know_changes_nothing(
     m = meter()
     m.abandon(uuid.uuid4())
     assert m._started == {}
+
+
+# --- embed(): redaction, one way (#78) -----------------------------------------------------
+#
+# The values below are worked out by hand. A placeholder is [KIND_n]: "[EMAIL_1]" is 9 bytes, the
+# email a@example.com is 13, and "[NAME_1]" is 8 bytes. "one" charges 1 micro-USD per token, so a
+# reservation is the request's bytes plus the 1,024-token margin, with no rounding.
+
+REDACTOR = Redactor(DETECTORS)
+MAIL = "a@example.com"  # 13 bytes; redacted "[EMAIL_1]" is 9
+ONE = Price(Rates(1_000_000, 0, 0, 0, 0), checked="2026-11-06", source=SOURCE)
+
+
+class ExplodesOn:
+    kind = "EMAIL"
+
+    def __init__(self, word: str) -> None:
+        self._word = word
+
+    def find(self, text: str) -> Iterable[Span]:
+        if self._word in text:
+            raise ValueError(f"cannot read {text}")
+        return []
+
+
+async def test_the_provider_gets_the_redacted_texts_and_the_vectors_keep_their_order(
+    meter: Callable[..., Meter],
+) -> None:
+    provider = Provider()
+    vectors = await embeddings.embed(
+        meter(), provider.create, [MAIL, "hi", f"{MAIL} and b@example.com"], redactor=REDACTOR
+    )
+    # Each text is numbered on its own: the second email of the third text is [EMAIL_2].
+    assert provider.requests == [["[EMAIL_1]", "hi", "[EMAIL_1] and [EMAIL_2]"]]
+    assert vectors == [[9.0], [2.0], [23.0]]  # the provider's vector is the length of what it got
+
+
+async def test_the_size_check_and_the_reservation_use_the_redacted_bytes(
+    meter: Callable[..., Meter], db_session: AsyncSession
+) -> None:
+    provider = Provider()
+    # The limit is 1,033 tokens. The original is 13 + 1,024 = 1,037 (over it); the redacted text is
+    # 9 + 1,024 = 1,033 (exactly at it), so it is sent, and reserved at 1,033 x 1 micro-USD.
+    await embeddings.embed(meter(limited_one(1_033)), provider.create, [MAIL], redactor=REDACTOR)
+    [row] = await rows(db_session)
+    assert (provider.requests, row.reserved_micro_usd) == ([["[EMAIL_1]"]], 1_033)
+
+
+def limited_one(tokens: int) -> Price:
+    return Price(ONE.rates, checked="2026-11-06", source=SOURCE, max_prompt_tokens=tokens)
+
+
+async def test_a_placeholder_longer_than_its_original_can_push_a_text_past_the_limit(
+    meter: Callable[..., Meter], db_session: AsyncSession
+) -> None:
+    provider = Provider()
+    # The limit 1,030 leaves 6 bytes. "Al" is 2 bytes, but its placeholder "[NAME_1]" is 8: 8 +
+    # 1,024 = 1,032 > 1,030, so a 422, with nothing sent and no row.
+    with patch_redactions() as recorded:
+        async with redaction_scope(known={"NAME": ["Al"]}):
+            with pytest.raises(PromptTooLong) as raised:
+                await embeddings.embed(
+                    meter(limited(1_030)), provider.create, ["Al"], redactor=REDACTOR
+                )
+    assert raised.value.status == 422
+    assert provider.requests == []
+    assert (await rows(db_session), await total(db_session)) == ([], None)
+    assert recorded == [{"NAME": 1}]  # counted once, before the size check
+
+
+async def test_batches_are_cut_on_the_redacted_texts(meter: Callable[..., Meter]) -> None:
+    provider = Provider()
+    # max_bytes 20: the originals (13 + 13 = 26) would be one per batch; the redacted 9 + 9 = 18
+    # fit two to a batch, and the third text starts the next.
+    await embeddings.embed(meter(), provider.create, [MAIL] * 3, redactor=REDACTOR, max_bytes=20)
+    assert provider.requests == [["[EMAIL_1]", "[EMAIL_1]"], ["[EMAIL_1]"]]
+
+
+async def test_each_batch_row_counts_only_the_values_replaced_in_its_own_texts(
+    meter: Callable[..., Meter], db_session: AsyncSession
+) -> None:
+    provider = Provider()
+    texts = [f"{MAIL} 07700 900123", "plain", "b@example.com"]  # 2, 0 and 1 values
+    vectors = await embeddings.embed(
+        meter(), provider.create, texts, redactor=REDACTOR, max_inputs=2
+    )
+    # Two batches: the first holds texts 1 and 2 (2 + 0 = 2 values), the second text 3 (1 value).
+    assert provider.requests == [["[EMAIL_1] [PHONE_1]", "plain"], ["[EMAIL_1]"]]
+    assert vectors == [[19.0], [5.0], [9.0]]
+    assert sorted(row.redacted_count or 0 for row in await rows(db_session)) == [1, 2]
+
+
+async def test_redaction_is_counted_once_per_call_however_many_batches(
+    meter: Callable[..., Meter],
+) -> None:
+    with patch_redactions() as recorded:
+        await embeddings.embed(
+            meter(), Provider().create, [MAIL, "x", MAIL], redactor=REDACTOR, max_inputs=1
+        )
+    assert recorded == [{"EMAIL": 2}]
+
+
+async def test_a_text_that_cannot_be_redacted_blocks_every_batch_and_writes_no_row(
+    meter: Callable[..., Meter], db_session: AsyncSession
+) -> None:
+    provider = Provider()
+    with pytest.raises(RedactionFailed):
+        await embeddings.embed(
+            meter(),
+            provider.create,
+            ["first", "second", "boom"],
+            redactor=Redactor([ExplodesOn("boom")]),
+            max_inputs=1,
+        )
+    # The third text fails, and the first two (batches of their own) were never sent either.
+    assert provider.requests == []
+    assert (await rows(db_session), await total(db_session)) == ([], None)
+
+
+async def test_with_redaction_off_the_texts_are_untouched_and_the_row_count_is_null(
+    meter: Callable[..., Meter], db_session: AsyncSession
+) -> None:
+    provider = Provider()
+    with patch_redactions() as recorded:
+        await embeddings.embed(meter(), provider.create, [MAIL], redactor=None)
+    assert provider.requests == [[MAIL]]
+    [row] = await rows(db_session)
+    assert row.redacted_count is None
+    assert recorded == []
+
+
+async def test_with_redaction_on_and_nothing_found_the_row_count_is_zero(
+    meter: Callable[..., Meter], db_session: AsyncSession
+) -> None:
+    provider = Provider()
+    await embeddings.embed(meter(), provider.create, ["a freehold"], redactor=REDACTOR)
+    assert provider.requests == [["a freehold"]]
+    [row] = await rows(db_session)
+    assert row.redacted_count == 0  # redaction ran and replaced nothing: zero, not NULL
+
+
+async def test_the_callers_tags_are_kept_and_only_the_count_is_added(
+    meter: Callable[..., Meter], db_session: AsyncSession
+) -> None:
+    tags = CallTags(feature="ingest", user_ref="u_1")
+    await embeddings.embed(meter(), Provider().create, [MAIL], redactor=REDACTOR, tags=tags)
+    [row] = await rows(db_session)
+    assert (row.feature, row.user_ref, row.redacted_count) == ("ingest", "u_1", 1)
+    assert tags.redacted_count is None  # the caller's tags are not changed
+
+
+async def test_no_texts_with_redaction_on_send_nothing_and_write_no_row(
+    meter: Callable[..., Meter], db_session: AsyncSession
+) -> None:
+    provider = Provider()
+    assert await embeddings.embed(meter(), provider.create, [], redactor=REDACTOR) == []
+    assert provider.requests == []
+    assert await rows(db_session) == []
+
+
+async def test_the_redactor_is_a_required_keyword(meter: Callable[..., Meter]) -> None:
+    with pytest.raises(TypeError, match="redactor"):
+        await embeddings.embed(meter(), Provider().create, ["a"])  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        await embeddings.embed(meter(), Provider().create, ["a"], REDACTOR)  # type: ignore[call-arg]
+
+
+class patch_redactions:
+    """Records what core.metrics.record_redactions is given."""
+
+    def __enter__(self) -> list[dict[str, int]]:
+        self._patch = pytest.MonkeyPatch()
+        self.recorded: list[dict[str, int]] = []
+        self._patch.setattr(
+            metrics, "record_redactions", lambda counts: self.recorded.append(dict(counts))
+        )
+        return self.recorded
+
+    def __exit__(self, *exc: object) -> None:
+        self._patch.undo()
 
 
 # --- OpenAI's call --------------------------------------------------------------------------------

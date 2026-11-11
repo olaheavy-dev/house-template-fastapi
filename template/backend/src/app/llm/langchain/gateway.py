@@ -134,6 +134,7 @@ class Gateway:
                     timeout=settings.llm_timeout_seconds,
                     max_retries=settings.llm_max_retries,
                 ),
+                redactor=self.redactor,
                 cap_micro_usd=self.guard.cap,
                 user_cap_micro_usd=self.guard.user_cap,
                 sessionmaker=sessionmaker,
@@ -243,6 +244,8 @@ class Gateway:
             # (It flushes the process-wide client, which is this gateway's own client when
             # redaction is on.)
             await anyio.to_thread.run_sync(wait_for_all_tracers)
+        if self._embeddings is not None:
+            await self._embeddings.aclose()
 
 
 def _tracing_on(settings: Settings) -> bool:
