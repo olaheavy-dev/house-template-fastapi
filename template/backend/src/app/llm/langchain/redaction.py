@@ -1244,7 +1244,12 @@ _NEUTRAL = "[redaction failed]"
 
 
 def _neutral(data: Any) -> dict[str, Any]:
-    return dict.fromkeys(data, _NEUTRAL) if isinstance(data, dict) else {"error": _NEUTRAL}
+    """What a failed mask returns: a key is text and can be personal data, so no key of the payload
+    survives, at any depth. The one key LangSmith reads back is `error` (client.py `_hide_run_error`
+    keeps a run's original error unless the result still has it), so that fixed key stays, with a
+    neutral value, when the payload had it. Inputs, outputs and metadata are taken as they are,
+    whatever keys they have, so an empty dict is a valid result for them."""
+    return {"error": _NEUTRAL} if isinstance(data, dict) and "error" in data else {}
 
 
 def masking_anonymizer(redactor: Redactor) -> Callable[[dict[str, Any]], dict[str, Any]]:
@@ -1253,10 +1258,9 @@ def masking_anonymizer(redactor: Redactor) -> Callable[[dict[str, Any]], dict[st
     redaction scope of the request that made the run, so the app's known values are masked too: the
     tracer's worker threads run in a copy of that request's context.
 
-    If masking fails for any reason it returns the same keys with a neutral value, so the trace
-    carries nothing rather than the text, and the failure is logged by type only. The keys stay
-    because LangSmith keeps a run's original error unless the result still has an "error" key
-    (client.py `_hide_run_error`); inputs, outputs and metadata take the result as it is."""
+    If masking fails for any reason it returns nothing of the payload (see _neutral: not even its
+    keys, which can be personal data; only the fixed `error` key LangSmith needs, neutralised), so
+    the trace carries nothing rather than the text, and the failure is logged by type only."""
 
     def anonymize(data: dict[str, Any]) -> dict[str, Any]:
         failure: str | None = None

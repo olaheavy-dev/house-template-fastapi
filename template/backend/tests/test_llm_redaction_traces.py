@@ -12,7 +12,7 @@ from unittest import mock
 
 import pytest
 from langchain_core.language_models import GenericFakeChatModel
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tracers.langchain import LangChainTracer, get_client, wait_for_all_tracers
 from langsmith import Client, configure, tracing_context
 from langsmith.schemas import LangSmithInfo
@@ -254,17 +254,65 @@ async def test_a_run_that_errors_while_the_anonymizer_fails_sends_no_value_at_al
     assert "[redaction failed]" in session.text
 
 
-def test_the_anonymizer_keeps_the_keys_with_a_neutral_value_for_a_shape_it_cannot_mask() -> None:
+def test_a_failed_mask_keeps_only_the_error_key_langsmith_needs_and_no_other_key() -> None:
     anonymize = masking_anonymizer(Redactor(DETECTORS))
     with (
         mock.patch("app.llm.langchain.redaction._walk_data", return_value=["not", "a", "dict"]),
         capture_logs() as logs,
     ):
-        assert anonymize({"inputs": EMAIL, "error": EMAIL}) == {
-            "inputs": "[redaction failed]",
-            "error": "[redaction failed]",
-        }
+        masked = anonymize({"inputs": EMAIL, "error": EMAIL, EMAIL: PHONE})
+    # LangSmith keeps a run's original error unless the result still has an "error" key, so that
+    # one protocol key stays, with a neutral value. Every other key is dropped, whatever it is.
+    assert masked == {"error": "[redaction failed]"}
     assert EMAIL not in repr(logs)
+
+
+class Boom:
+    kind = "EMAIL"
+
+    def find(self, text: str) -> Any:
+        raise RuntimeError(f"cannot read {text}")
+
+
+PERSONAL_KEYS = {
+    EMAIL: "landlord",
+    PHONE: {"nested " + EMAIL: [{PHONE: "x"}], NAME: 1},
+}
+
+
+def test_a_failing_detector_sends_no_key_of_any_depth_for_inputs_outputs_metadata_or_error() -> (
+    None
+):
+    client, session = mask_client(Redactor([Boom()]))
+    assert client._hide_run_inputs(dict(PERSONAL_KEYS)) == {}
+    assert client._hide_run_outputs(dict(PERSONAL_KEYS)) == {}
+    assert client._hide_run_metadata(dict(PERSONAL_KEYS)) == {}
+    assert client._hide_run_error(f"no account for {EMAIL}") == "[redaction failed]"
+    # What LangSmith is given is a plain dict, which it takes as it is (it reads no other key).
+    for hidden in (
+        client._hide_run_inputs(dict(PERSONAL_KEYS)),
+        client._hide_run_outputs(dict(PERSONAL_KEYS)),
+    ):
+        assert isinstance(hidden, dict)
+        for personal in (EMAIL, PHONE, NAME):
+            assert personal not in json.dumps(hidden)
+    assert session.sent == []
+
+
+async def test_a_real_run_with_personal_keys_and_a_failing_detector_sends_none_of_them() -> None:
+    client, session = mask_client(Redactor([Boom()]))
+    tracer = LangChainTracer(client=client, project_name="test")
+    history = [
+        HumanMessage("save it"),
+        AIMessage("", tool_calls=[{"name": "n", "args": dict(PERSONAL_KEYS), "id": "1"}]),
+    ]
+    _, model = wire.wrapped("openai")  # the model's own redactor works; only tracing's is broken
+    with wire.captured(lambda _b: wire.openai_text("ok")):
+        await model.ainvoke(history, config={"callbacks": [tracer]})
+    wait_for_all_tracers()
+    assert session.sent
+    for personal in (EMAIL, PHONE, NAME):
+        assert personal not in session.text
 
 
 async def test_hide_inputs_still_wins_over_masking() -> None:
