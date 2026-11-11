@@ -24,6 +24,7 @@ from app.main import create_app
 from app.settings import Settings
 from app.storage import create_bucket
 from tests import db, storage
+from tests.harness import Harness, load
 from tests.models import CHAT_MODEL, EMBEDDING_MODEL
 from tests.recording import missing_recording_keys
 
@@ -83,6 +84,17 @@ def live_runs_need_models_and_a_key(request: pytest.FixtureRequest) -> None:
             "backend/.env (their prices must be in app/llm/prices.py)",
             returncode=2,
         )
+
+
+# The model frameworks the shared parity tests (tests/test_llm_parity_*.py) run against: the one
+# this project chose with the `llm` answer (tests/harness/ has a module for each).
+FRAMEWORKS = ["langchain"]
+
+
+@pytest.fixture(params=FRAMEWORKS)
+def framework(request: pytest.FixtureRequest) -> Harness:
+    """The harness of the framework under test; a parity test using it runs once per framework."""
+    return load(request.param)
 
 
 @pytest.fixture
