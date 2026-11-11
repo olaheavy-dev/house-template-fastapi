@@ -143,11 +143,31 @@ name = "Only the model gateway talks to model providers"
 type = "forbidden"
 source_modules = ["app"]
 # `langchain` too: init_chat_model would build a model that skips the budget. langchain_core
-# (messages, prompts, runnables) is fine anywhere.
-forbidden_modules = ["openai", "anthropic", "langchain", "langchain_openai", "langchain_anthropic"]
+# (messages, prompts, runnables) is fine anywhere. `agent_framework` (Microsoft Agent Framework)
+# and its provider packages likewise: a MAF client built elsewhere would skip the budget and the
+# redaction, and tests/test_llm_maf_surface.py checks the same rule on the syntax tree.
+forbidden_modules = [
+    "openai",
+    "anthropic",
+    "langchain",
+    "langchain_openai",
+    "langchain_anthropic",
+    "agent_framework",
+    "agent_framework_openai",
+    "agent_framework_anthropic",
+]
 # OpenAI's embeddings call imports its SDK itself (app/llm/core/openai_embeddings.py): LangChain's
-# embeddings drop the usage the budget settles from.
-ignore_imports = ["app.llm.** -> langchain", "app.llm.core.openai_embeddings -> openai"]
+# embeddings drop the usage the budget settles from. The MAF adapter imports MAF under
+# app/llm/maf, and the two SDK modules that must name SDK types: gateway.py builds the Anthropic
+# client with its timeout and retries, errors.py classifies the SDKs' exceptions.
+ignore_imports = [
+    "app.llm.** -> langchain",
+    "app.llm.core.openai_embeddings -> openai",
+    "app.llm.maf.** -> agent_framework",
+    "app.llm.maf.errors -> openai",
+    "app.llm.maf.errors -> anthropic",
+    "app.llm.maf.gateway -> anthropic",
+]
 # The gateway is optional (#29): without the database it is not there, and the ignores match
 # nothing. "none" also hides a stale ignore in a project with the database (if
 # app.llm.core.openai_embeddings is renamed, say): update the ignores whenever the gateway's modules
