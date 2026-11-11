@@ -155,6 +155,7 @@ KNOWN_MISSES: tuple[tuple[str, str], ...] = (
     ("a third party's name", "The previous tenant, Gerald Pike, left a forwarding note."),
     ("a free-form address", "Post goes to 41 Quarry Lane, Otley."),
     ("a NINO without its last letter", "NI QQ123456 on the form."),
+    ("a date of birth under a neutral field name", '{"ref": "12/03/1980"}'),
 )
 
 # Property text that looks like personal data and is not. Redaction must leave all of it alone.

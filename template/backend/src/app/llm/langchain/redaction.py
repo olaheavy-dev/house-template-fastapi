@@ -60,7 +60,7 @@ from langchain_core.callbacks import (
     BaseCallbackManager,
 )
 from langchain_core.language_models import BaseChatModel, LanguageModelInput
-from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_core.runnables import (
     Runnable,
@@ -123,71 +123,190 @@ class RedactionUnavailable(RuntimeError):
 
 # --- walking the strings of a message ----------------------------------------------------------
 
-_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+# A dict that pairs a label with a `value` ("label": "Date of birth", "value": "12/03/1980").
+_LABEL_KEYS = ("label", "name", "field", "key", "title")
 
 
 def _field_context(key: Any) -> str:
-    """A field name as words in front of its value: `date_of_birth` and `dateOfBirth` both become
-    "date of birth: ", so a rule that needs the words "date of birth", "account", "sort code" or
-    "NHS" before a value finds them when the value is in a field of that name."""
+    """A field name as words in front of its value: `date_of_birth`, `dateOfBirth` and
+    `NHSNumber` become "date of birth: " and "NHS Number: ", so a rule that needs a word before the
+    value ("date of birth", "account", "sort code", "NHS") finds it when the value sits in a field
+    of that name."""
     if not isinstance(key, str) or not key:
         return ""
     words = _CAMEL.sub(" ", key).replace("_", " ").replace("-", " ").replace(".", " ")
     return " ".join(words.split())[-40:] + ": "
 
 
+def _label_of(pairs: Any) -> str | None:
+    """The text that labels a `value` in a dict of (key, value) pairs, if there is one."""
+    for key, value in pairs:
+        text = value.value if isinstance(value, _Str) else value
+        if key in _LABEL_KEYS and isinstance(text, str) and text.strip():
+            return text
+    return None
+
+
+def _value_context(key: Any, label: str | None) -> str:
+    return _field_context(label) if key == "value" and label else _field_context(key)
+
+
 def _walk_data(obj: Any, leaf: Leaf, context: str = "") -> Any:
     """Every string value in plain data (tool arguments, a parsed answer), keys untouched. A value
-    carries its field name as context (a list item, its list's), and a string that is JSON text is
-    decoded and walked."""
+    carries its field name as context (a list item, its list's; a `value` its label's), and a
+    string that is JSON text is walked as JSON text."""
     if isinstance(obj, str):
         return _walk_text(obj, leaf, context)
     if isinstance(obj, dict):
-        return {key: _walk_data(value, leaf, _field_context(key)) for key, value in obj.items()}
+        label = _label_of(obj.items())
+        return {
+            key: _walk_data(value, leaf, _value_context(key, label)) for key, value in obj.items()
+        }
     if isinstance(obj, list | tuple):
         return [_walk_data(value, leaf, context) for value in obj]
     return obj
 
 
+class _Str:
+    """A JSON string token: where it is in the text, and what it says."""
+
+    __slots__ = ("end", "start", "value")
+
+    def __init__(self, start: int, end: int, value: str) -> None:
+        self.start, self.end, self.value = start, end, value
+
+
+class _Obj:
+    __slots__ = ("members",)
+
+    def __init__(self, members: list[tuple[str, Any]]) -> None:
+        self.members = members  # in order, duplicate keys kept
+
+
+class _Arr:
+    __slots__ = ("items",)
+
+    def __init__(self, items: list[Any]) -> None:
+        self.items = items
+
+
+def _scan(text: str) -> Any:
+    """The structure of JSON text that has already been parsed by json.loads (so it is valid),
+    with the position of every string token. A number, true, false or null is not kept: it is never
+    changed, and the text around a replaced string is never rewritten."""
+    position = 0
+
+    def skip() -> None:
+        nonlocal position
+        while text[position] in " \t\r\n":
+            position += 1
+
+    def string() -> _Str:
+        nonlocal position
+        start = position
+        position += 1
+        while text[position] != '"':
+            position += 2 if text[position] == "\\" else 1
+        position += 1
+        return _Str(start, position, json.loads(text[start:position]))
+
+    def value() -> Any:
+        nonlocal position
+        skip()
+        char = text[position]
+        if char == '"':
+            return string()
+        if char == "{":
+            position += 1
+            members: list[tuple[str, Any]] = []
+            skip()
+            if text[position] == "}":
+                position += 1
+                return _Obj(members)
+            while True:
+                skip()
+                key = string().value
+                skip()
+                position += 1  # the colon
+                members.append((key, value()))
+                skip()
+                char = text[position]
+                position += 1
+                if char == "}":
+                    return _Obj(members)
+        if char == "[":
+            position += 1
+            items: list[Any] = []
+            skip()
+            if text[position] == "]":
+                position += 1
+                return _Arr(items)
+            while True:
+                items.append(value())
+                skip()
+                char = text[position]
+                position += 1
+                if char == "]":
+                    return _Arr(items)
+        while position < len(text) and text[position] not in ",]} \t\r\n":
+            position += 1  # a number or a literal
+        return None
+
+    return value()
+
+
+def _visit(node: Any, leaf: Leaf, context: str, edits: list[tuple[int, int, str]]) -> None:
+    if isinstance(node, _Str):
+        new = _walk_text(node.value, leaf, context)
+        if new != node.value:
+            edits.append((node.start, node.end, json.dumps(new, ensure_ascii=False)))
+    elif isinstance(node, _Obj):
+        label = _label_of(node.members)
+        for key, child in node.members:
+            _visit(child, leaf, _value_context(key, label), edits)
+    elif isinstance(node, _Arr):
+        for child in node.items:
+            _visit(child, leaf, context, edits)
+
+
 def _walk_text(text: str, leaf: Leaf, context: str = "") -> str:
-    """One string. JSON text (an object or array: a provider's argument string, a tool result, a
-    streamed fragment that is whole) is decoded, its string values walked with their field names,
-    and the text is written again only when one changed, so an untouched string is sent byte for
-    byte. Decoding matters: a value with a quote or a backslash is escaped in JSON text and would
-    not match as it is. Anything else is one string."""
+    """One string. JSON text (an object or array: an argument string, a tool result) is read, its
+    string values are walked with their field names, and only those string tokens that changed are
+    written again, so numbers, whitespace, key order and duplicate keys stay exactly as they were.
+    Reading matters: a value with a quote or a backslash is escaped in JSON text and would not match
+    as it is. JSON nested too deeply to read raises RecursionError, which prepare turns into a
+    refusal. Anything else is one string."""
     if text.lstrip()[:1] in ("{", "["):
         try:
             parsed = json.loads(text)
         except ValueError:
             return leaf(text, context)
         if isinstance(parsed, dict | list):
-            changed = False
-
-            def track(value: str, field: str) -> str:
-                nonlocal changed
-                out = leaf(value, field)
-                changed = changed or out != value
-                return out
-
-            rebuilt = _walk_data(parsed, track, context)
-            return (
-                json.dumps(rebuilt, ensure_ascii=False, separators=(",", ":")) if changed else text
-            )
+            edits: list[tuple[int, int, str]] = []
+            _visit(_scan(text), leaf, context, edits)
+            for start, end, replacement in reversed(edits):
+                text = text[:start] + replacement + text[end:]
+            return text
     return leaf(text, context)
 
 
 _walk_raw = _walk_text  # the older name: raw JSON argument strings
 
 
-def _walk_block(block: dict[str, Any], leaf: Leaf) -> dict[str, Any]:
+def _walk_block(
+    block: dict[str, Any], leaf: Leaf, tools: Mapping[str, str], context: str = ""
+) -> dict[str, Any]:
     if block.get("type") in _MEDIA or block.get("type") in _UNTOUCHED:
         return block
+    if block.get("type") == "tool_result":  # the answer of the tool named by its tool_use
+        context = _field_context(tools.get(str(block.get("tool_use_id"))))
     out: dict[str, Any] = {}
     for key, value in block.items():
         if isinstance(value, str):
-            out[key] = value if key in _STRUCTURAL else _walk_text(value, leaf)
+            out[key] = value if key in _STRUCTURAL else _walk_text(value, leaf, context)
         elif key in ("content", "summary") and isinstance(value, list):
-            out[key] = _walk_content(value, leaf)
+            out[key] = _walk_content(value, leaf, tools, context)
         elif isinstance(value, dict | list | tuple):
             out[key] = _walk_data(value, leaf)
         else:
@@ -195,14 +314,14 @@ def _walk_block(block: dict[str, Any], leaf: Leaf) -> dict[str, Any]:
     return out
 
 
-def _walk_content(content: Any, leaf: Leaf) -> Any:
+def _walk_content(content: Any, leaf: Leaf, tools: Mapping[str, str], context: str = "") -> Any:
     if isinstance(content, str):
-        return _walk_text(content, leaf)
+        return _walk_text(content, leaf, context)
     if isinstance(content, list):
         return [
-            _walk_text(item, leaf)
+            _walk_text(item, leaf, context)
             if isinstance(item, str)
-            else _walk_block(item, leaf)
+            else _walk_block(item, leaf, tools, context)
             if isinstance(item, dict)
             else item
             for item in content
@@ -210,10 +329,33 @@ def _walk_content(content: Any, leaf: Leaf) -> Any:
     return content
 
 
-def _walk_message(message: BaseMessage, leaf: Leaf) -> BaseMessage:
+def _tool_names(messages: Sequence[BaseMessage]) -> dict[str, str]:
+    """tool call id -> tool name, from the tool calls and tool_use blocks in the history, so the
+    result of a tool can be read with the tool's name in front ("get_date_of_birth": 12/03/1980)."""
+    names: dict[str, str] = {}
+    for message in messages:
+        if not isinstance(message, AIMessage):
+            continue
+        for call in message.tool_calls:
+            if call.get("id"):
+                names[str(call["id"])] = call["name"]
+        if isinstance(message.content, list):
+            for block in message.content:
+                if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("id"):
+                    names[str(block["id"])] = str(block.get("name", ""))
+    return names
+
+
+def _walk_message(
+    message: BaseMessage, leaf: Leaf, tools: Mapping[str, str] | None = None
+) -> BaseMessage:
     """The message with `leaf` applied to every string the provider will read: the content (str or
     blocks), a tool call's arguments, and the older raw argument strings in additional_kwargs."""
-    update: dict[str, Any] = {"content": _walk_content(message.content, leaf)}
+    tools = tools or {}
+    context = ""
+    if isinstance(message, ToolMessage):  # a bare result is read with its tool's name in front
+        context = _field_context(message.name or tools.get(message.tool_call_id))
+    update: dict[str, Any] = {"content": _walk_content(message.content, leaf, tools, context)}
     if isinstance(message, AIMessage):
         if message.tool_calls:
             update["tool_calls"] = [
@@ -296,8 +438,9 @@ def prepare(redactor: Redactor, messages: Sequence[BaseMessage]) -> _Prepared:
             contexts.append(context)
             return text
 
+        tools = _tool_names(messages)
         for message in messages:
-            _walk_message(message, collect)
+            _walk_message(message, collect, tools)
         names = [m.name for m in messages if m.name]
         if names and redactor.redact(names).texts != tuple(names):
             # A provider accepts only plain names there, so no placeholder fits: refuse.
@@ -305,7 +448,7 @@ def prepare(redactor: Redactor, messages: Sequence[BaseMessage]) -> _Prepared:
         result = redactor.redact(strings, contexts=contexts)
         replacements = iter(result.texts)
         rebuilt = [
-            _walk_message(message, lambda _text, _context: next(replacements))
+            _walk_message(message, lambda _text, _context: next(replacements), tools)
             for message in messages
         ]
         if next(replacements, None) is not None:  # the two walks disagree: a bug, send nothing

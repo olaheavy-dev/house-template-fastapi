@@ -67,6 +67,8 @@ INTENDED: dict[str, str] = {
         "the llm.redactions counter (#78)",
     "backend/src/app/llm/core/redaction.py":
         "choose_detectors (LLM_REDACT_KINDS) (#78)",
+    "backend/src/app/llm/redaction_rules.py":
+        "context words for birth date, account, NHS and sort code under common field names (#78)",
     "backend/src/app/llm/langchain/callbacks.py":
         "BudgetGuard reads redacted_count from the call metadata (#78)",
     "backend/src/app/llm/langchain/gateway.py":

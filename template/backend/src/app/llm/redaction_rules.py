@@ -112,12 +112,12 @@ DETECTORS: tuple[Detector, ...] = (
     RegexDetector(
         "SORT_CODE",
         r"(?<!\d)(?<!\d[ -])\d{2}[- ]?\d{2}[- ]?\d{2}(?![ -]?\d)",
-        before=context(r"sort[ -]?code"),
+        before=context(r"sort[\s_-]*codes?"),
     ),
     RegexDetector(
         "ACCOUNT",
         r"(?<!\d)(?<!\d[ -])\d{4}[ ]?\d{4}(?![ -]?\d)",
-        before=context(r"\bacc(?:ount)?\b"),
+        before=context(r"\bacc(?:ount)?(?:s|[\s_-]*(?:no|num\w*))?\b|\bacct\b"),
     ),
     # 13 to 19 digits in one run, or the usual groupings (4-4-4-4, Amex 4-6-5), passing Luhn and
     # starting like an issuer's range. Other groupings (3-3-3-3-3, 4-4-4-4-4) are not cards. A
@@ -143,13 +143,15 @@ DETECTORS: tuple[Detector, ...] = (
         "NHS",
         r"(?<!\d)\d{3}[ -]?\d{3}[ -]?\d{4}(?!\d)",
         check=nhs_valid,
-        before=context(r"\bNHS\b"),
+        before=context(r"\bNHS\b|\bnhs[\s_-]*(?:no|num\w*)\b"),
     ),
     RegexDetector(
         "DOB",
         r"(?<!\d)(?:\d{1,2}([/.-])\d{1,2}\1(?:\d{4}|\d{2})"
         r"|\d{4}-\d{2}-\d{2}"
         r"|\d{1,2}(?:st|nd|rd|th)?[ ]+(?i:" + _MONTH + r")[ ]+\d{4})(?!\d)",
-        before=context(r"date\s+of\s+birth|\bdob\b|\bborn\b"),
+        before=context(
+            r"date\s+of\s+birth|\bdob\b|\bd[.\s]o[.\s]b\b|\bborn\b|birth[\s_-]*(?:date|day)"
+        ),
     ),
 )

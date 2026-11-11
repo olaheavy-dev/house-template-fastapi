@@ -7,6 +7,7 @@ found in its decoded form, not hidden by escaping."""
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -280,3 +281,155 @@ def test_one_context_for_each_text_is_required() -> None:
 
     with pytest.raises(RedactionFailed):
         REDACTOR.redact(["a", "b"], contexts=["only one"])
+
+
+# --- the same kinds under other field names (schema.org, FHIR, common API names) ------------------
+
+UK_DATE = "12/03/1980"
+ISO_DATE = "1980-03-12"
+
+
+def redacted_args(args: dict[str, Any]) -> Any:
+    out = sent(AIMessage("", tool_calls=[{"name": "n", "args": args, "id": "1"}]))
+    assert isinstance(out, AIMessage)
+    return out.tool_calls[0]["args"]
+
+
+def redacted_json(value: Any) -> Any:
+    out = sent(ToolMessage(json.dumps(value), tool_call_id="1"))
+    assert isinstance(out.content, str)
+    return json.loads(out.content)
+
+
+DOB_NAMES = [
+    "dob", "DOB", "d.o.b", "birthDate", "birth_date", "birthdate", "BirthDate", "dateOfBirth",
+    "date_of_birth", "date-of-birth", "patientBirthDate", "birthday",
+]  # fmt: skip
+
+
+@pytest.mark.parametrize("value", [UK_DATE, ISO_DATE])
+@pytest.mark.parametrize("name", DOB_NAMES)
+def test_a_date_of_birth_is_found_under_the_common_field_names(name: str, value: str) -> None:
+    assert redacted_args({name: value}) == {name: "[DOB_1]"}
+    assert redacted_json({"patient": {name: value}}) == {"patient": {name: "[DOB_1]"}}
+
+
+ACCOUNT_NAMES = ["account", "accounts", "bank_accounts", "bankAccount", "accountNumber",
+                 "accountNo", "account_no", "account_num", "AccountNumbers", "acct",
+                 "accountnumber"]  # fmt: skip
+NHS_NAMES = ["nhs", "NHS", "nhsNumber", "NHSNumber", "nhs_number", "nhs_no", "nhsnumber",
+             "patient_nhs_number"]  # fmt: skip
+SORT_NAMES = ["sort_code", "sortCode", "sortcode", "SortCode", "sort-code", "sortCodes"]
+
+
+@pytest.mark.parametrize("name", ACCOUNT_NAMES)
+def test_an_account_number_is_found_under_the_common_field_names(name: str) -> None:
+    assert redacted_args({name: "12345678"}) == {name: "[ACCOUNT_1]"}
+
+
+@pytest.mark.parametrize("name", NHS_NAMES)
+def test_an_nhs_number_is_found_under_the_common_field_names(name: str) -> None:
+    assert redacted_args({name: "943 476 5919"}) == {name: "[NHS_1]"}
+
+
+@pytest.mark.parametrize("name", SORT_NAMES)
+def test_a_sort_code_is_found_under_the_common_field_names(name: str) -> None:
+    assert redacted_args({name: "20-45-67"}) == {name: "[SORT_CODE_1]"}
+
+
+def test_field_names_that_only_look_similar_do_not_make_a_match() -> None:
+    plain = {
+        "account_type": "premium",
+        "birth_place": "Leeds",
+        "update_date": UK_DATE,
+        "created": ISO_DATE,
+        "birthplace_ref": "12345678",
+        "dobson_ref": "12345678",
+        "nhs_trust_code": "12345678",
+    }
+    assert redacted_args(plain) == plain
+    assert redacted_json(plain) == plain
+
+
+def test_a_list_under_a_field_name_takes_the_field_name_for_each_item() -> None:
+    assert redacted_args({"account": ["12345678", "87654321"]}) == {
+        "account": ["[ACCOUNT_1]", "[ACCOUNT_2]"]
+    }
+    assert redacted_args({"dob": [UK_DATE]}) == {"dob": ["[DOB_1]"]}
+    assert redacted_json({"accounts": ["12345678"]}) == {"accounts": ["[ACCOUNT_1]"]}
+
+
+# --- label and value, and the name of the tool ------------------------------------------------
+
+
+@pytest.mark.parametrize("label_key", ["label", "name", "field", "key", "title"])
+@pytest.mark.parametrize("order", ["label first", "value first"])
+def test_a_value_takes_its_label_as_context(label_key: str, order: str) -> None:
+    pair = (
+        {label_key: "Date of birth", "value": UK_DATE}
+        if order == "label first"
+        else {"value": UK_DATE, label_key: "Date of birth"}
+    )
+    expected = {**pair, "value": "[DOB_1]"}
+    assert redacted_args({"fields": [pair]}) == {"fields": [expected]}
+    assert redacted_json([pair]) == [expected]
+
+
+def test_a_value_with_a_neutral_label_is_unchanged() -> None:
+    pair = {"label": "Reference", "value": UK_DATE}
+    assert redacted_json([pair]) == [pair]
+
+
+def tool_result_after(name: str, content: str) -> Any:
+    call = AIMessage("", tool_calls=[{"name": name, "args": {}, "id": "c1"}])
+    return redaction.prepare(
+        REDACTOR, [HumanMessage("go"), call, ToolMessage(content, tool_call_id="c1")]
+    ).messages[-1]
+
+
+def test_a_bare_tool_result_takes_the_tool_name_as_context() -> None:
+    assert tool_result_after("get_date_of_birth", UK_DATE).content == "[DOB_1]"
+    assert tool_result_after("getAccountNumber", "12345678").content == "[ACCOUNT_1]"
+    assert tool_result_after("lookup_nhs_number", "943 476 5919").content == "[NHS_1]"
+    assert tool_result_after("get_reference", UK_DATE).content == UK_DATE
+    named = sent(ToolMessage(UK_DATE, tool_call_id="x", name="get_date_of_birth"))
+    assert named.content == "[DOB_1]"
+
+
+def test_an_anthropic_tool_result_takes_the_name_of_the_tool_use_it_answers() -> None:
+    use = AIMessage(
+        content=[{"type": "tool_use", "id": "t1", "name": "get_date_of_birth", "input": {}}]
+    )
+    result = HumanMessage(
+        content=[{"type": "tool_result", "tool_use_id": "t1", "content": UK_DATE}]
+    )
+    out = redaction.prepare(REDACTOR, [HumanMessage("go"), use, result]).messages[-1]
+    assert isinstance(out.content, list)
+    block = out.content[0]
+    assert isinstance(block, dict)
+    assert block["content"] == "[DOB_1]"
+
+
+# --- untouched parts of JSON text stay exactly as they were ---------------------------------------
+
+
+def test_json_text_is_changed_only_where_a_value_was_replaced() -> None:
+    text = (
+        '{ "rent": 1250.10, "big": 12345678901234567890, "a": 1, "a": 2,\n'
+        '  "dob" : "12/03/1980", "x": 1e3 }'
+    )
+    expected = text.replace('"12/03/1980"', '"[DOB_1]"')
+    assert sent(ToolMessage(text, tool_call_id="1")).content == expected
+    # Nested JSON text inside a string is written back as a string, the rest untouched.
+    inner = '{"dob":"12/03/1980","n":1.50}'
+    outer = json.dumps({"payload": inner, "n": 2.0})
+    out = sent(ToolMessage(outer, tool_call_id="1")).content
+    assert out == json.dumps({"payload": '{"dob":"[DOB_1]","n":1.50}', "n": 2.0})
+
+
+def test_json_nested_too_deep_to_read_is_refused_rather_than_sent() -> None:
+    from app.llm.core.redaction import RedactionFailed
+
+    deep = "[" * 5000 + "]" * 5000
+    with pytest.raises(RedactionFailed):
+        sent(ToolMessage(deep, tool_call_id="1"))
