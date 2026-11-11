@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.9.0](https://github.com/olaheavy-dev/house-template-fastapi/compare/v0.8.0...v0.9.0) (2026-11-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* tool-call arguments in a stream now arrive whole at the end of the stream, one chunk per call per place (not as fragments), so a UI that shows them live sees them only at the end, and held arguments are dropped if the consumer stops or is cancelled.
+* text sent for embeddings is now redacted by default (`LLM_REDACTION=on`), one way and each text on its own, so the vector of a text that holds a matching value or a value named in `redaction_scope` changes and stored vectors must be re-embedded (embed documents and their queries under the same scope); a text that cannot be cleaned is a new 503 with nothing sent and no `llm_call` row, and a placeholder longer than its original can push a text over the price's `max_prompt_tokens` into the existing 422; and `redactor` is a required keyword-only argument of `GatewayEmbeddings` and `app.llm.core.embeddings.embed` (pass `gateway.redactor`, or `None` for off).
+* `gateway.model()` now returns a `RedactingChatModel` instead of the provider's chat model, so `isinstance(gateway.model(), ChatOpenAI)` (and `ChatAnthropic`, `BaseChatOpenAI`) is False and the provider model is `gateway.model().inner`; personal-data redaction is on by default (`LLM_REDACTION=off` restores the old behaviour), so prompts that hold matching values reach the provider as placeholders; a request that cannot be redacted is now a 503 with nothing sent; and migration 0006 adds `llm_call.redacted_count`, so run `make migrate` (a database stamped at 0006 while the gateway was off needs `alembic stamp 0005` first).
+
+### Features
+
+* redact personal data before LangChain model calls and mask LangSmith traces ([#78](https://github.com/olaheavy-dev/house-template-fastapi/issues/78), part 2) ([#101](https://github.com/olaheavy-dev/house-template-fastapi/issues/101)) ([f1c8159](https://github.com/olaheavy-dev/house-template-fastapi/commit/f1c81592bae9094e2e1e784d11edb9244ac48cb0))
+* redact text sent for embeddings, one way, and finish the redaction docs ([#78](https://github.com/olaheavy-dev/house-template-fastapi/issues/78), part 3) ([#108](https://github.com/olaheavy-dev/house-template-fastapi/issues/108)) ([48479f5](https://github.com/olaheavy-dev/house-template-fastapi/commit/48479f5f9ab1f26e551e0860f37245171f480255))
+
+
+### Bug Fixes
+
+* restore streamed tool arguments at their JSON nesting level ([#102](https://github.com/olaheavy-dev/house-template-fastapi/issues/102)) ([#109](https://github.com/olaheavy-dev/house-template-fastapi/issues/109)) ([9178ffa](https://github.com/olaheavy-dev/house-template-fastapi/commit/9178ffadd92f72252c12f22a72a00eaebda2a6b6))
+
 ## [0.8.0](https://github.com/olaheavy-dev/house-template-fastapi/compare/v0.7.1...v0.8.0) (2026-11-10)
 
 
