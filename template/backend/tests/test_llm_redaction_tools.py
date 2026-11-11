@@ -5,12 +5,14 @@ arguments, and the app gets the originals back, whichever shape the provider use
 from __future__ import annotations
 
 import json
-from typing import Any
+from collections.abc import AsyncGenerator
+from contextlib import aclosing
+from typing import Any, cast
 from unittest import mock
 
 import pytest
 from langchain_core.language_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableBinding, RunnableLambda
 from langchain_core.tools import tool
 
@@ -207,6 +209,20 @@ async def test_streamed_arguments_with_json_text_inside_are_restored_at_their_le
         total = total + chunk
     [call] = total.tool_calls
     assert unwrap(json.dumps(call["args"]), levels) == expected
+    # The merged message carries the restored string once, in the block the provider uses for it,
+    # with no stray block beside it (a tail without its index would add one).
+    if provider == "anthropic":
+        [block] = total.content
+        assert block["type"] == "tool_use"
+        assert block["partial_json"] == strings["partial_json"]
+        assert unwrap(block["partial_json"], levels) == expected
+    elif provider == "openai-responses":
+        [block] = total.content
+        assert block["type"] == "function_call"
+        assert block["arguments"] == strings["arguments"]
+        assert unwrap(block["arguments"], levels) == expected
+    else:
+        assert total.content in ("", [])
 
 
 @pytest.mark.parametrize("levels", [0, 1, 2])
@@ -227,7 +243,7 @@ async def test_ainvoke_with_a_streaming_handler_restores_nested_arguments_too(
     assert unwrap(json.dumps(call["args"]), levels) == {"who": HARD}
 
 
-async def test_a_plain_streamed_argument_is_restored_exactly_and_text_streams_as_before() -> None:
+async def test_a_plain_streamed_argument_is_restored_exactly_and_keeps_its_name_and_id() -> None:
     pieces = ['{"who": "[NA', 'ME_1]", "mail": "[EMAIL', '_1]"}']
     _, model = wire.wrapped("openai")
     bound = model.bind_tools([lookup])
@@ -240,6 +256,125 @@ async def test_a_plain_streamed_argument_is_restored_exactly_and_text_streams_as
     # and id from the first chunk.
     first = chunks[0].tool_call_chunks[0]
     assert (first["name"], first["id"], first["args"]) == ("lookup", "call_1", "")
+
+
+async def test_text_before_a_streamed_tool_call_arrives_before_the_held_arguments() -> None:
+    pieces = ['{"who": "[NAME_1]"}']
+    text_start = {"type": "text", "text": ""}
+    text_deltas = [{"type": "text_delta", "text": "Looking up [NAME_1]. "}]
+    tool_start = {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {}}
+    tool_deltas = [{"type": "input_json_delta", "partial_json": p} for p in pieces]
+    data = wire.anthropic_stream([(text_start, text_deltas), (tool_start, tool_deltas)])
+    _, model = wire.wrapped("anthropic")
+    bound = model.bind_tools([lookup])
+    async with redaction_scope(known={"NAME": [TRICKY]}):
+        with wire.captured(lambda _b: data):
+            chunks = [c async for c in bound.astream([HumanMessage(f"Find {TRICKY}")])]
+    with_text = [i for i, c in enumerate(chunks) if TRICKY in c.text]
+    with_args = [i for i, c in enumerate(chunks) if any(x["args"] for x in c.tool_call_chunks)]
+    assert with_text
+    assert with_args
+    assert with_text[0] < with_args[0]
+
+
+def parallel_stream() -> bytes:
+    """An OpenAI stream of two tool calls (index 0 and 1) whose fragments are interleaved."""
+    first = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "index": 0,
+                "id": "call_a",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": ""},
+            },
+            {
+                "index": 1,
+                "id": "call_b",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": ""},
+            },
+        ],
+    }
+
+    def piece(index: int, text: str) -> tuple[str | None, Any]:
+        call = {"index": index, "function": {"arguments": text}}
+        return (None, wire._chunk({"tool_calls": [call]}))
+
+    events: list[tuple[str | None, Any]] = [(None, wire._chunk(first))]
+    events += [
+        piece(0, '{"who": "[NA'),
+        piece(1, '{"who": "pl'),
+        piece(0, 'ME_1]"}'),
+        piece(1, 'ain"}'),
+        (None, wire._chunk({}, "tool_calls")),
+        (None, wire._usage_chunk()),
+        (None, "[DONE]"),
+    ]
+    return wire.sse(events)
+
+
+async def test_two_interleaved_parallel_tool_calls_each_keep_their_own_arguments() -> None:
+    _, model = wire.wrapped("openai")
+    bound = model.bind_tools([lookup])
+    async with redaction_scope(known={"NAME": [TRICKY]}):
+        with wire.captured(lambda _b: parallel_stream()):
+            chunks = [c async for c in bound.astream([HumanMessage(f"Find {TRICKY}")])]
+    total = chunks[0]
+    for chunk in chunks[1:]:
+        total = total + chunk
+    calls = {c["id"]: c["args"] for c in total.tool_calls}
+    assert calls == {"call_a": {"who": TRICKY}, "call_b": {"who": "plain"}}
+    assert not total.invalid_tool_calls
+
+
+def test_whole_tool_calls_without_an_index_each_keep_their_own_restored_arguments() -> None:
+    """Ollama, Gemini, Bedrock and OpenAI-compatible endpoints send whole calls with no index:
+    LangChain never merges them, so they must not share one buffer."""
+    from app.llm.langchain.redaction import _StreamRestorers
+
+    restorers = _StreamRestorers({"[NAME_1]": TRICKY}, json_text=False)
+
+    def call(call_id: str, args: str) -> dict[str, Any]:
+        return {
+            "name": "lookup",
+            "id": call_id,
+            "args": args,
+            "index": None,
+            "type": "tool_call_chunk",
+        }
+
+    chunk = AIMessageChunk(
+        content="",
+        tool_call_chunks=[call("c1", '{"who": "[NAME_1]"}'), call("c2", '{"who": "y"}')],
+    )
+    out = restorers.chunk(chunk)
+    assert [(c["id"], json.loads(c["args"] or "")) for c in out.tool_call_chunks] == [
+        ("c1", {"who": TRICKY}),
+        ("c2", {"who": "y"}),
+    ]
+    assert restorers.flush() == []  # no phantom call at the end
+
+
+async def test_a_consumer_that_stops_mid_tool_call_is_given_no_arguments() -> None:
+    pieces = ['{"who": "[NAME_1]", "mail": "[EMAIL_', '1]"}']
+    _, model = wire.wrapped("openai")
+    bound = model.bind_tools([lookup])
+    seen: list[AIMessageChunk] = []
+    async with redaction_scope(known={"NAME": [TRICKY]}):
+        with wire.captured(lambda _b: wire.openai_stream_tool("lookup", pieces)):
+            stream = cast(
+                AsyncGenerator[AIMessageChunk, None],
+                bound.astream([HumanMessage(f"Find {TRICKY}")]),
+            )
+            async with aclosing(stream) as chunks:
+                async for chunk in chunks:
+                    seen.append(chunk)
+                    break
+    assert seen
+    assert not any(c["args"] for chunk in seen for c in chunk.tool_call_chunks)
+    assert "[NAME_1]" not in repr(seen)
 
 
 async def test_an_argument_with_a_placeholder_the_model_invented_stays_and_is_counted() -> None:
