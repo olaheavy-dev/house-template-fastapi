@@ -332,7 +332,7 @@ async def test_abandoning_a_call_the_meter_does_not_know_changes_nothing(
     assert m._started == {}
 
 
-# --- embed(): redaction, one way (#78 part 3) -----------------------------------------------------
+# --- embed(): redaction, one way (#78) -----------------------------------------------------
 #
 # The values below are worked out by hand. A placeholder is [KIND_n]: "[EMAIL_1]" is 9 bytes, the
 # email a@example.com is 13, and "[NAME_1]" is 8 bytes. "one" charges 1 micro-USD per token, so a

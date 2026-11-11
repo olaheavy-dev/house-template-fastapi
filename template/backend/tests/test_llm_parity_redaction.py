@@ -1,4 +1,4 @@
-"""What every model framework must do with the text it sends for embeddings (#78, part 3): remove
+"""What every model framework must do with the text it sends for embeddings (#78): remove
 personal data first, one way, each text on its own, before the budget reserves anything. The
 database is real; OpenAI's embeddings endpoint is faked (tests/harness/), so each test runs once per
 framework the project chose and imports none.

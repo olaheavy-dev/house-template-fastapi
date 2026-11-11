@@ -1,4 +1,4 @@
-"""Redaction of embeddings, the parts that belong to LangChain and to the source tree (#78, part 3):
+"""Redaction of embeddings, the parts that belong to LangChain and to the source tree (#78):
 the bytes OpenAI's real SDK puts on the wire, a retriever run in a LangSmith trace, and two guards
 that fail the build if a second way to the embeddings API appears under app/ (it would skip both
 the budget and the redaction). What every framework does is in tests/test_llm_parity_redaction.py.

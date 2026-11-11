@@ -1027,7 +1027,7 @@ def test_importing_the_neutral_redaction_walkers_loads_no_framework() -> None:
     assert result.stdout.strip() == "[]"
 
 
-# --- redact_each: one result per text, numbered inside that text (#78 part 3) ----------------
+# --- redact_each: one result per text, numbered inside that text (#78) ----------------
 
 
 def test_redact_each_numbers_inside_each_text_so_neighbours_do_not_matter() -> None:

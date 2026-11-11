@@ -235,7 +235,7 @@ async def test_a_text_past_the_price_limit_refuses_the_call_before_any_batch_is_
     assert (await rows(db_session), await total(db_session)) == ([], None)
 
 
-# --- redaction (#78 part 3) -----------------------------------------------------------------------
+# --- redaction (#78) -----------------------------------------------------------------------
 
 
 async def test_the_redactor_is_a_required_keyword_of_the_class(

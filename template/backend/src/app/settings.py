@@ -132,7 +132,7 @@ class Settings(BaseSettings):
     # provider, contact, bank and ID numbers in common formats and the values the app names
     # (`redaction_scope`) are replaced by placeholders, and put back in the answer. Not complete,
     # and not anonymisation. "off" sends text as it is and records no count. With it on, LangSmith
-    # traces are masked the same way.
+    # traces are masked the same way, and the text sent for embeddings is cleaned one way.
     llm_redaction: Literal["on", "off"] = "on"
     # The detector kinds to run, from app/llm/redaction_rules.py (comma separated). A name no
     # detector has stops the app starting.
