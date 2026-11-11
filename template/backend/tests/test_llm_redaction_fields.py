@@ -433,3 +433,114 @@ def test_json_nested_too_deep_to_read_is_refused_rather_than_sent() -> None:
     deep = "[" * 5000 + "]" * 5000
     with pytest.raises(RedactionFailed):
         sent(ToolMessage(deep, tool_call_id="1"))
+
+
+# --- JSON keys are text too -----------------------------------------------------------------------
+
+EMAIL_KEY = "jo.bloggs@example.com"
+PHONE_KEY = "07700 900123"
+NAME_KEY = "Jo Bloggs"
+
+
+def test_an_email_key_in_a_json_tool_result_is_replaced_and_the_rest_is_untouched() -> None:
+    text = '{ "' + EMAIL_KEY + '" : "landlord",  "rent": 1250.10, "ok": true }'
+    out = sent(ToolMessage(text, tool_call_id="1")).content
+    assert out == text.replace(EMAIL_KEY, "[EMAIL_1]")
+
+
+async def test_a_known_name_used_as_a_key_is_replaced_in_json_text_and_in_human_json() -> None:
+    text = json.dumps({NAME_KEY: {"role": "tenant"}, "n": 1})
+    async with redaction_scope(known={"NAME": [NAME_KEY]}):
+        tool = sent(ToolMessage(text, tool_call_id="1")).content
+        human = sent(HumanMessage(text)).content
+    assert tool == human == text.replace(NAME_KEY, "[NAME_1]")
+
+
+def test_keys_in_tool_call_arguments_are_replaced_parsed_and_as_a_raw_string() -> None:
+    args = {PHONE_KEY: "mobile", "inner": {EMAIL_KEY: ["x"]}}
+    assert redacted_args(args) == {"[PHONE_1]": "mobile", "inner": {"[EMAIL_1]": ["x"]}}
+    raw = json.dumps(args)
+    call = {"id": "1", "type": "function", "function": {"name": "n", "arguments": raw}}
+    out = sent(AIMessage("", additional_kwargs={"tool_calls": [call]}))
+    arguments = out.additional_kwargs["tool_calls"][0]["function"]["arguments"]
+    assert PHONE_KEY not in arguments
+    assert EMAIL_KEY not in arguments
+    assert json.loads(arguments) == {"[PHONE_1]": "mobile", "inner": {"[EMAIL_1]": ["x"]}}
+
+
+def test_an_anthropic_tool_use_input_and_a_tool_result_replace_keys() -> None:
+    block = {"type": "tool_use", "id": "t1", "name": "n", "input": {EMAIL_KEY: "x"}}
+    out = sent(AIMessage(content=[block]))
+    assert isinstance(out.content, list)
+    first = out.content[0]
+    assert isinstance(first, dict)
+    assert first["input"] == {"[EMAIL_1]": "x"}
+    result = {"type": "tool_result", "tool_use_id": "t1", "content": json.dumps({EMAIL_KEY: 1})}
+    out2 = sent(HumanMessage(content=[result]))
+    assert isinstance(out2.content, list)
+    second = out2.content[0]
+    assert isinstance(second, dict)
+    assert json.loads(second["content"]) == {"[EMAIL_1]": 1}
+
+
+async def test_trace_masking_replaces_keys() -> None:
+    from app.llm.langchain.redaction import masking_anonymizer
+
+    masked = masking_anonymizer(REDACTOR)(
+        {"inputs": {EMAIL_KEY: "x"}, "outputs": {"n": [PHONE_KEY]}}
+    )
+    assert masked == {"inputs": {"[EMAIL_1]": "x"}, "outputs": {"n": ["[PHONE_1]"]}}
+
+
+async def test_the_tool_gets_the_original_keys_back() -> None:
+    from langchain_core.language_models import GenericFakeChatModel
+
+    from app.llm.langchain.redaction import RedactingChatModel
+
+    answer = AIMessage(
+        "",
+        tool_calls=[
+            {"name": "save", "args": {"[EMAIL_1]": "landlord", "n": {"[PHONE_1]": 1}}, "id": "1"}
+        ],
+    )
+    model = RedactingChatModel(GenericFakeChatModel(messages=iter([answer])), REDACTOR)
+    history = [
+        HumanMessage("save it"),
+        AIMessage(
+            "", tool_calls=[{"name": "s", "args": {EMAIL_KEY: "x", PHONE_KEY: 1}, "id": "0"}]
+        ),
+    ]
+    out = await model.ainvoke(history)
+    assert out.tool_calls[0]["args"] == {EMAIL_KEY: "landlord", "n": {PHONE_KEY: 1}}
+
+
+def test_keys_that_hold_nothing_personal_stay_byte_for_byte() -> None:
+    text = '{ "rent" : 1250.10,\n "b": {"c": [1, 2]}, "rent": 2 }'
+    assert sent(ToolMessage(text, tool_call_id="1")).content == text
+    args = {"rent": 1, "nested": {"c": "x"}}
+    assert redacted_args(args) == args
+
+
+# --- the rewrite is linear ------------------------------------------------------------------------
+
+
+def test_rewriting_json_text_with_many_changed_strings_is_fast() -> None:
+    import time
+
+    from app.llm.langchain.redaction import _walk_text
+
+    text = json.dumps([f"value {n} " + "x" * 70 for n in range(32_000)])  # about 3 MB
+    started = time.perf_counter()
+    out = _walk_text(text, lambda value, _context: value.upper())
+    took = time.perf_counter() - started
+    assert json.loads(out)[31_999].startswith("VALUE 31999")
+    assert took < 1.0, took  # the old rewrite, one slice per edit, took seconds
+
+
+def test_company_accounts_before_a_number_is_a_known_false_positive() -> None:
+    # Documented (#97): prose with "accounts" shortly before an 8-digit company number reads as an
+    # account number. The model loses the reference; the user still sees it restored.
+    text = "Companies House accounts filed, company No. 12345678"
+    assert REDACTOR.redact([text]).texts == (
+        "Companies House accounts filed, company No. [ACCOUNT_1]",
+    )

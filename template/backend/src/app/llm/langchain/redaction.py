@@ -142,6 +142,7 @@ def _field_context(key: Any) -> str:
 def _label_of(pairs: Any) -> str | None:
     """The text that labels a `value` in a dict of (key, value) pairs, if there is one."""
     for key, value in pairs:
+        key = key.value if isinstance(key, _Str) else key
         text = value.value if isinstance(value, _Str) else value
         if key in _LABEL_KEYS and isinstance(text, str) and text.strip():
             return text
@@ -160,9 +161,13 @@ def _walk_data(obj: Any, leaf: Leaf, context: str = "") -> Any:
         return _walk_text(obj, leaf, context)
     if isinstance(obj, dict):
         label = _label_of(obj.items())
-        return {
-            key: _walk_data(value, leaf, _value_context(key, label)) for key, value in obj.items()
-        }
+        out: dict[Any, Any] = {}
+        for key, value in obj.items():
+            # The key is text too (an email or a phone number can be a key): the key first, then
+            # its value, the same order the scanner uses for JSON text.
+            new_key = leaf(key, context) if isinstance(key, str) else key
+            out[new_key] = _walk_data(value, leaf, _value_context(key, label))
+        return out
     if isinstance(obj, list | tuple):
         return [_walk_data(value, leaf, context) for value in obj]
     return obj
@@ -180,8 +185,8 @@ class _Str:
 class _Obj:
     __slots__ = ("members",)
 
-    def __init__(self, members: list[tuple[str, Any]]) -> None:
-        self.members = members  # in order, duplicate keys kept
+    def __init__(self, members: list[tuple[_Str, Any]]) -> None:
+        self.members = members  # (key token, value), in order, duplicate keys kept
 
 
 class _Arr:
@@ -219,14 +224,14 @@ def _scan(text: str) -> Any:
             return string()
         if char == "{":
             position += 1
-            members: list[tuple[str, Any]] = []
+            members: list[tuple[_Str, Any]] = []
             skip()
             if text[position] == "}":
                 position += 1
                 return _Obj(members)
             while True:
                 skip()
-                key = string().value
+                key = string()
                 skip()
                 position += 1  # the colon
                 members.append((key, value()))
@@ -264,7 +269,10 @@ def _visit(node: Any, leaf: Leaf, context: str, edits: list[tuple[int, int, str]
     elif isinstance(node, _Obj):
         label = _label_of(node.members)
         for key, child in node.members:
-            _visit(child, leaf, _value_context(key, label), edits)
+            changed = leaf(key.value, context)  # the key is text too, with its parent's context
+            if changed != key.value:
+                edits.append((key.start, key.end, json.dumps(changed, ensure_ascii=False)))
+            _visit(child, leaf, _value_context(key.value, label), edits)
     elif isinstance(node, _Arr):
         for child in node.items:
             _visit(child, leaf, context, edits)
@@ -285,9 +293,16 @@ def _walk_text(text: str, leaf: Leaf, context: str = "") -> str:
         if isinstance(parsed, dict | list):
             edits: list[tuple[int, int, str]] = []
             _visit(_scan(text), leaf, context, edits)
-            for start, end, replacement in reversed(edits):
-                text = text[:start] + replacement + text[end:]
-            return text
+            # Edits are in document order (keys and values as the scanner meets them): one pass of
+            # slices, so many replacements stay linear.
+            pieces: list[str] = []
+            position = 0
+            for start, end, replacement in edits:
+                pieces.append(text[position:start])
+                pieces.append(replacement)
+                position = end
+            pieces.append(text[position:])
+            return "".join(pieces)
     return leaf(text, context)
 
 
@@ -524,9 +539,12 @@ class _Restorer:
             if obj.get("type") in _UNTOUCHED:
                 return obj
             return {
-                key: self.raw(value)
-                if key in _RAW_KEYS and isinstance(value, str)
-                else self.data(value)
+                # A key can hold a placeholder too (the model copied one into a field name).
+                (self.text(key) if isinstance(key, str) else key): (
+                    self.raw(value)
+                    if key in _RAW_KEYS and isinstance(value, str)
+                    else self.data(value)
+                )
                 for key, value in obj.items()
             }
         if isinstance(obj, list | tuple):
