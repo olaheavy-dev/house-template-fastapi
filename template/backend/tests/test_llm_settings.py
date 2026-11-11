@@ -77,3 +77,27 @@ def test_the_old_name_in_the_env_file_in_any_case_stops_the_app_starting(
     env_file.write_text(f"{key}=5\n")
     with pytest.raises(ValidationError, match="AGENT_MAX_STEPS"):
         Settings(_env_file=env_file)
+
+
+# --- personal-data redaction settings (#78) --------------------------------------------------
+
+
+def test_redaction_is_on_by_default_with_the_documented_kinds() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.llm_redaction == "on"
+    assert settings.llm_redact_kinds == "EMAIL,PHONE,NINO,IBAN,SORT_CODE,ACCOUNT,CARD,NHS,DOB"
+
+
+def test_the_environment_turns_redaction_off_and_narrows_the_kinds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LLM_REDACTION", "off")
+    monkeypatch.setenv("LLM_REDACT_KINDS", "EMAIL,PHONE")
+    settings = Settings(_env_file=None)
+    assert (settings.llm_redaction, settings.llm_redact_kinds) == ("off", "EMAIL,PHONE")
+
+
+@pytest.mark.parametrize("value", ["maybe", "ON ", "true", ""])
+def test_redaction_accepts_only_on_or_off(value: str) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, llm_redaction=value)

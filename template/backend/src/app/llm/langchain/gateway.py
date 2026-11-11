@@ -28,6 +28,7 @@ from collections.abc import Callable, Sequence
 from typing import Annotated, Any, cast
 
 import anyio
+import structlog
 from fastapi import Depends, Request
 from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
@@ -39,6 +40,7 @@ from langchain_core.tracers.langchain import LangChainTracer, wait_for_all_trace
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 from langsmith import Client
+from langsmith import configure as configure_langsmith
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -48,15 +50,20 @@ from app.llm.core import registry
 from app.llm.core.openai_embeddings import openai_client
 from app.llm.core.prices import MICRO_USD
 from app.llm.core.prompts import Prompt
+from app.llm.core.redaction import Redactor, choose_detectors
 from app.llm.core.steps import StepLimit
 from app.llm.langchain.callbacks import BudgetGuard
 from app.llm.langchain.embeddings import GatewayEmbeddings
 from app.llm.langchain.prompts import prompt_config
+from app.llm.langchain.redaction import RedactingChatModel, masking_anonymizer
 from app.llm.langchain.steps import StepLimitMiddleware, recursion_limit
+from app.llm.redaction_rules import DETECTORS
 from app.problems import Problem
 from app.settings import Settings
 
 __all__ = ["Gateway", "GatewayDep", "get_gateway"]
+
+log = structlog.get_logger()
 
 
 class Gateway:
@@ -93,8 +100,25 @@ class Gateway:
             max_tokens=settings.llm_max_tokens,
             sessionmaker=sessionmaker,
         )
+        # Personal-data redaction (#78): None when LLM_REDACTION=off. An unknown kind raises here,
+        # so the app does not start.
+        self.redactor: Redactor | None = None
+        if settings.llm_redaction == "on":
+            detectors = choose_detectors(DETECTORS, settings.llm_redact_kinds)
+            self.redactor = Redactor(detectors)
+            log.info(
+                "llm_redaction", state="on", kinds=sorted({detector.kind for detector in detectors})
+            )
+        else:
+            log.info("llm_redaction", state="off", kinds=[])
         callbacks: list[BaseCallbackHandler] = [self.guard]
-        self.tracer = _tracer(settings)
+        # One LangSmith client for the process: it masks what traces carry whenever redaction is
+        # on, so it is also the client of tracing that starts from the environment or from a graph,
+        # not only of this gateway's tracer. (It is also what shutdown flushes.)
+        client = _langsmith_client(settings, self.redactor)
+        if client is not None and self.redactor is not None:
+            configure_langsmith(client=client)
+        self.tracer = _tracer(settings, client)
         if self.tracer:
             callbacks.append(self.tracer)
 
@@ -118,6 +142,7 @@ class Gateway:
         api_key: SecretStr | None = getattr(settings, registry.key_setting(llm_model))
         # Without a key there is no model, and calls get a 503 instead of reaching the provider.
         self._model: BaseChatModel | None = None
+        self._wrapped: RedactingChatModel | None = None
         if api_key is not None:
             self._model = init_chat_model(
                 llm_model,
@@ -130,9 +155,17 @@ class Gateway:
             )
 
     def model(self) -> BaseChatModel:
+        """The chat model. With redaction on (the default) it is a RedactingChatModel around the
+        provider's, so `isinstance(model, ChatOpenAI)` is False (app/llm/langchain/redaction.py)."""
         if self._model is None:
             raise Problem(503, detail="The language model isn't configured.")
-        return self._model
+        if self.redactor is None:
+            return self._model
+        # Wrapped around whatever _model is now (a test may swap it), and kept so every caller
+        # gets the same object.
+        if self._wrapped is None or self._wrapped.inner is not self._model:
+            self._wrapped = RedactingChatModel(self._model, self.redactor)
+        return self._wrapped
 
     def embeddings(self) -> GatewayEmbeddings:
         """Embeddings under the same daily budget; always await them:
@@ -205,24 +238,42 @@ class Gateway:
         return cast(RunnableConfig, merged)
 
     async def aclose(self) -> None:
-        if self.tracer:
+        if self.tracer or self.redactor is not None:
             # Traces are sent from a background thread; send what's left before the process ends.
+            # (It flushes the process-wide client, which is this gateway's own client when
+            # redaction is on.)
             await anyio.to_thread.run_sync(wait_for_all_tracers)
 
 
-def _tracer(settings: Settings) -> LangChainTracer | None:
+def _tracing_on(settings: Settings) -> bool:
     # Attaching a tracer also stops LangChain adding its own from LANGSMITH_* variables, so
     # tracing follows these settings alone.
-    if not settings.langsmith_tracing or settings.app_env == "test":
+    return settings.langsmith_tracing and settings.app_env != "test"
+
+
+def _langsmith_client(settings: Settings, redactor: Redactor | None) -> Client | None:
+    """The LangSmith client: with the masking anonymizer when redaction is on (also when tracing is
+    off, for tracing that starts from the environment), and with `hide_inputs`/`hide_outputs`,
+    which still win over masking. None when there is nothing to trace or mask. Batching, and its
+    background thread, only when this gateway traces."""
+    tracing = _tracing_on(settings)
+    if not tracing and redactor is None:
         return None
     api_key = settings.langsmith_api_key
-    client = Client(
+    return Client(
         api_url=settings.langsmith_endpoint,
         api_key=api_key.get_secret_value() if api_key else None,
         hide_inputs=settings.langsmith_hide_inputs,
         hide_outputs=settings.langsmith_hide_outputs,
         tracing_sampling_rate=settings.langsmith_tracing_sampling_rate,
+        anonymizer=masking_anonymizer(redactor) if redactor is not None else None,
+        auto_batch_tracing=tracing,
     )
+
+
+def _tracer(settings: Settings, client: Client | None) -> LangChainTracer | None:
+    if not _tracing_on(settings) or client is None:
+        return None
     return LangChainTracer(project_name=settings.langsmith_project, client=client)
 
 

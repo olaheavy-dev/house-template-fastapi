@@ -172,6 +172,30 @@ async def test_a_new_reservation_is_recorded_as_reserved_with_its_tags(
     assert (row.user_reserved, row.input_tokens, row.settled_at) == (False, None, None)
 
 
+async def test_a_reservation_records_how_many_values_were_redacted_and_defaults_to_null(
+    db_session: AsyncSession,
+) -> None:
+    counted, unknown = uuid.uuid4(), uuid.uuid4()
+    assert await reserve(
+        db_session, call_id=counted, day=DAY, model=MODEL, amount=1, cap=1_000, redacted_count=3
+    )
+    assert await reserve(db_session, call_id=unknown, day=DAY, model=MODEL, amount=1, cap=1_000)
+    by_id = {row.id: row.redacted_count for row in await rows(db_session)}
+    # Three replaced values; and None (NULL) when redaction did not run, not zero.
+    assert by_id == {counted: 3, unknown: None}
+
+
+async def test_a_reservation_that_found_nothing_records_zero_not_null(
+    db_session: AsyncSession,
+) -> None:
+    call_id = uuid.uuid4()
+    assert await reserve(
+        db_session, call_id=call_id, day=DAY, model=MODEL, amount=1, cap=1_000, redacted_count=0
+    )
+    [row] = await rows(db_session)
+    assert row.redacted_count == 0
+
+
 async def test_the_warning_fires_at_exactly_80_percent_and_not_below(
     db_session: AsyncSession,
 ) -> None:

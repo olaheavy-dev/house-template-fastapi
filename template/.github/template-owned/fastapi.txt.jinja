@@ -27,10 +27,13 @@ backend/migrations/versions/20261026_0002_llm_budget.py
 backend/migrations/versions/20261026_0003_agent_checkpoints.py
 backend/migrations/versions/20261026_0004_llm_call_details.py
 backend/migrations/versions/20261026_0005_per_user_llm_budget.py
+backend/migrations/versions/20261110_0006_llm_call_redacted_count.py
 backend/migrations/versions/20261026_app_project_root.py
 backend/tests/db.py
 {% endif %}{% if storage %}backend/tests/storage.py
 backend/src/app/storage.py
 {% endif %}{% if llm == 'langchain' %}backend/tests/evals/conftest.py
 backend/tests/evals/test_gateway_evals.py
+backend/tests/evals/redaction_corpus.py
+backend/tests/evals/test_redaction_evals.py
 {% endif %}

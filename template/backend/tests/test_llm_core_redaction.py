@@ -33,6 +33,7 @@ from app.llm.core.redaction import (
     Scope,
     Span,
     StreamRestorer,
+    choose_detectors,
     current_scope,
     redaction_scope,
     restore,
@@ -307,6 +308,19 @@ async def test_an_allowed_value_is_not_replaced_but_others_still_are() -> None:
         result = one("Agent 020 7946 0321, lettings@example.com. Mobile 07700 900123.")
     assert result.texts == ("Agent 020 7946 0321, lettings@example.com. Mobile [PHONE_1].",)
     assert result.counts == {"PHONE": 1}
+
+
+@pytest.mark.anyio
+async def test_the_conflict_log_can_be_switched_off_for_trace_masking() -> None:
+    # Trace masking redacts every run payload; it passes log_conflicts=False so one conflicting
+    # known value is not logged for each of them. The redaction itself is the same.
+    async with redaction_scope(
+        known={"EMAIL": ["priya.shah@example.com"]}, allow=["PRIYA.SHAH@example.com"]
+    ):
+        with capture_logs() as logs:
+            result = REDACTOR.redact(["Write to priya.shah@example.com"], log_conflicts=False)
+    assert result.texts == ("Write to [EMAIL_1]",)
+    assert [e for e in logs if e["event"] == "redaction_allow_conflict"] == []
 
 
 @pytest.mark.anyio
@@ -938,3 +952,31 @@ def test_known_values_run_in_linear_time_too() -> None:
     with capture_logs():
         REDACTOR.redact([text], scope=Scope(known={"NAME": ["a b"]}))
     assert time.perf_counter() - started < 2.0
+
+
+# --- choosing detectors by kind (LLM_REDACT_KINDS) ------------------------------------------
+
+
+def test_choose_detectors_keeps_only_the_named_kinds() -> None:
+    chosen = choose_detectors(DETECTORS, " EMAIL , PHONE,")
+    assert {d.kind for d in chosen} == {"EMAIL", "PHONE"}
+    assert Redactor(chosen).redact(["a@example.com 07700 900123 QQ123456C"]).texts == (
+        "[EMAIL_1] [PHONE_1] QQ123456C",
+    )
+
+
+def test_a_kind_with_two_detectors_keeps_both() -> None:
+    assert len([d for d in choose_detectors(DETECTORS, "CARD") if d.kind == "CARD"]) == 2
+
+
+def test_an_empty_list_chooses_no_detectors_so_only_known_values_are_replaced() -> None:
+    assert choose_detectors(DETECTORS, "") == ()
+    assert choose_detectors(DETECTORS, " , ") == ()
+
+
+def test_an_unknown_kind_is_refused_naming_it_and_the_available_kinds() -> None:
+    with pytest.raises(ValueError, match=r"names EMIAL, which no detector.*Available: .*EMAIL"):
+        choose_detectors(DETECTORS, "EMIAL,PHONE")
+    # Kinds are matched exactly: lower case is not a kind.
+    with pytest.raises(ValueError, match="email"):
+        choose_detectors(DETECTORS, "email")

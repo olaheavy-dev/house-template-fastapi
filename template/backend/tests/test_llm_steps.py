@@ -108,7 +108,11 @@ def config(thread_id: str) -> RunnableConfig:
 
 
 async def llm_calls(session: AsyncSession) -> list[LlmCall]:
-    return list((await session.scalars(select(LlmCall).order_by(LlmCall.created_at))).all())
+    # created_at is the transaction's start, the same for every row of a test, so it cannot order
+    # the calls. The tests expect settled calls first and the failed or reserved last, which is
+    # the order they are made in.
+    ordered = select(LlmCall).order_by(LlmCall.created_at, LlmCall.status != "settled")
+    return list((await session.scalars(ordered)).all())
 
 
 async def committed(session: AsyncSession) -> int | None:
