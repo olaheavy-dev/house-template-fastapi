@@ -95,9 +95,11 @@ class ScriptedBase(BaseChatClient[Any]):
     """The provider-level fake: answers (or fails) from a script, one item per call, and remembers
     the messages and options it was given."""
 
-    def __init__(self, script: Sequence[Reply | Failure], **kwargs: Any) -> None:
+    def __init__(
+        self, script: Sequence[Reply | Failure | ChatResponse[Any]], **kwargs: Any
+    ) -> None:
         super().__init__(**kwargs)
-        self.script: list[Reply | Failure] = list(script)
+        self.script: list[Reply | Failure | ChatResponse[Any]] = list(script)
         self.seen: list[list[Message]] = []
         self.seen_options: list[Mapping[str, Any]] = []
 
@@ -115,6 +117,8 @@ class ScriptedBase(BaseChatClient[Any]):
             self.seen.append(list(messages))
             self.seen_options.append(dict(options))
             item = self.script.pop(0)
+            if isinstance(item, ChatResponse):  # a test that needs tool calls or other contents
+                return item
             if isinstance(item, Failure):
                 raise error_of(item)
             response = ChatResponse(
@@ -134,6 +138,11 @@ class ScriptedClient(
     FunctionInvocationLayer[Any], ChatMiddlewareLayer[Any], ChatTelemetryLayer[Any], ScriptedBase
 ):
     """The layers of MAF's real clients, in their order, over the scripted base."""
+
+
+class PlainScriptedClient(ChatMiddlewareLayer[Any], ScriptedBase):
+    """Without the function-invocation layer: a tool call the model makes comes back to the caller
+    instead of being run, so a test can read what the middleware restored in it."""
 
 
 def to_maf(message: Neutral) -> Message:
@@ -187,6 +196,12 @@ class MafHarness:
         client = ScriptedClient(script=script, middleware=gateway.middleware)
         check_chain(client, gateway.middleware)
         gateway._client = client
+
+    def install_plain(self, gateway: Gateway, script: Sequence[Any]) -> PlainScriptedClient:
+        client = PlainScriptedClient(script=script, middleware=gateway.middleware)
+        check_chain(client, gateway.middleware)
+        gateway._client = client
+        return client
 
     def _scripted(self, gateway: Gateway) -> ScriptedClient:
         client = gateway._client

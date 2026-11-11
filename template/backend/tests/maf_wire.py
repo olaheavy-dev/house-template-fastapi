@@ -21,7 +21,7 @@ import anthropic
 import httpx2
 import openai
 
-__all__ = ["Attempt", "Fault", "FakeProviderHttp", "anthropic_message", "openai_response", "sse"]
+__all__ = ["Attempt", "FakeProviderHttp", "Fault", "anthropic_message", "openai_response", "sse"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,11 +93,19 @@ def sse(text: str, usage: dict[str, int]) -> bytes:
         ("message_start", {"type": "message_start", "message": start}),
         (
             "content_block_start",
-            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            },
         ),
         (
             "content_block_delta",
-            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": text},
+            },
         ),
         ("content_block_stop", {"type": "content_block_stop", "index": 0}),
         (

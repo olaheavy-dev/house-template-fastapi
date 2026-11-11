@@ -122,7 +122,11 @@ class Gateway:
             log.info("llm_redaction", state="off", kinds=[])
         # Redaction outside, budget inside: the budget sizes and records the redacted request.
         self.redaction = RedactionMiddleware(self.redactor)
-        self.budget = BudgetMiddleware(self.meter, max_tokens=settings.llm_max_tokens)
+        self.budget = BudgetMiddleware(
+            self.meter,
+            max_tokens=settings.llm_max_tokens,
+            sends_store=llm_model.startswith("openai:"),
+        )
         self.middleware: list[Any] = [self.redaction, self.budget]
 
         # Without OpenAI's key there are no embeddings, and asking for them gets a 503.

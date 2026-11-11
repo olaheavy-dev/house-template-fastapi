@@ -163,9 +163,13 @@ class BudgetMiddleware(ChatMiddleware):
     """Reserves before each call of the client it is attached to and settles after it, through its
     Meter. `max_tokens` is the gateway's output limit (LLM_MAX_TOKENS)."""
 
-    def __init__(self, meter: Meter, *, max_tokens: int) -> None:
+    def __init__(self, meter: Meter, *, max_tokens: int, sends_store: bool) -> None:
         self.meter = meter
         self.max_tokens = max_tokens
+        # Whether the provider's API has a `store` option to send False in: OpenAI's Responses API
+        # does (and stores by default); Anthropic's Messages API stores nothing and its SDK refuses
+        # the keyword.
+        self.sends_store = sends_store
 
     async def process(self, context: ChatContext, call_next: Callable[[], Awaitable[None]]) -> None:
         if context.stream:
@@ -182,7 +186,10 @@ class BudgetMiddleware(ChatMiddleware):
         output = bounds.output_bound(self.max_tokens, view)
         if not isinstance(options.get("max_tokens"), int):
             options["max_tokens"] = self.max_tokens
-        options["store"] = False
+        if self.sends_store:
+            options["store"] = False
+        else:
+            options.pop("store", None)
         payload, blocks = request_view(context.messages, options)
         given = bounds.request_bound(payload, blocks)
         counted = context.metadata.get(REDACTED_COUNT)
