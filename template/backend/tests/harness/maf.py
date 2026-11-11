@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.llm.core.budget import CallTags, Meter
 from app.llm.core.errors import ProviderError
 from app.llm.core.redaction import Redactor
-from app.llm.maf.gateway import Gateway, check_chain
+from app.llm.maf.gateway import Gateway, NoExtraChatMiddleware, check_chain
 from app.llm.maf.middleware import tagged
 from app.settings import Settings
 from tests.harness import Failure, FakeEmbeddingsApi, Reply
@@ -135,12 +135,16 @@ class ScriptedBase(BaseChatClient[Any]):
 
 
 class ScriptedClient(
-    FunctionInvocationLayer[Any], ChatMiddlewareLayer[Any], ChatTelemetryLayer[Any], ScriptedBase
+    NoExtraChatMiddleware,
+    FunctionInvocationLayer[Any],
+    ChatMiddlewareLayer[Any],
+    ChatTelemetryLayer[Any],
+    ScriptedBase,
 ):
     """The layers of MAF's real clients, in their order, over the scripted base."""
 
 
-class PlainScriptedClient(ChatMiddlewareLayer[Any], ScriptedBase):
+class PlainScriptedClient(NoExtraChatMiddleware, ChatMiddlewareLayer[Any], ScriptedBase):
     """Without the function-invocation layer: a tool call the model makes comes back to the caller
     instead of being run, so a test can read what the middleware restored in it."""
 
@@ -195,7 +199,11 @@ class MafHarness:
     def install_scripted(
         self, gateway: Gateway, script: Sequence[Reply | Failure | ChatResponse[Any]]
     ) -> None:
-        client = ScriptedClient(script=script, middleware=gateway.middleware)
+        client = ScriptedClient(
+            script=script,
+            middleware=gateway.middleware,
+            function_invocation_configuration=gateway.tool_loop,
+        )
         check_chain(client, gateway.middleware)
         gateway._client = client
 

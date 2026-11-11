@@ -53,7 +53,9 @@ from app.llm.maf.redaction import REDACTED_COUNT, StreamingNotSupported
 from app.llm.maf.usage import from_maf
 
 __all__ = [
+    "ALLOWED_OPTIONS",
     "BudgetMiddleware",
+    "OptionNotAllowed",
     "StoreNotAllowed",
     "current_tags",
     "params_view",
@@ -65,6 +67,38 @@ log = structlog.get_logger()
 
 _tags: ContextVar[CallTags | None] = ContextVar("llm_call_tags", default=None)
 _MEDIA = frozenset({"data", "uri", "hosted_file"})
+
+
+# The options a call may carry. Anything else is refused: an unknown option is forwarded to the
+# provider's SDK as it is (`extra_body` can override `store` and send text that redaction never
+# saw, `conversation_id` and `previous_response_id` use provider-side history that no reservation
+# covers, `user` and `metadata` are free text that is not scanned). `store` and `max_tokens` are
+# handled below, `tools`, `service_tier` and `response_format` are sized and checked.
+ALLOWED_OPTIONS = frozenset(
+    {
+        "model",
+        "instructions",
+        "temperature",
+        "top_p",
+        "max_tokens",
+        "max_completion_tokens",
+        "stop",
+        "seed",
+        "frequency_penalty",
+        "presence_penalty",
+        "logit_bias",
+        "tools",
+        "tool_choice",
+        "allow_multiple_tool_calls",
+        "response_format",
+        "service_tier",
+        "store",
+    }
+)
+
+
+class OptionNotAllowed(ValueError):
+    """A call carried an option the gateway does not allow (only the option's name is said)."""
 
 
 class StoreNotAllowed(ValueError):
@@ -88,10 +122,10 @@ def current_tags() -> CallTags:
 
 
 def _tool_view(tool: Any) -> Any:
-    """A tool as the budget's check wants to see it: a dict with a `type` for a tool the provider
-    runs (a mapping MAF passes through), `function` for a tool the app runs, and an unknown object
-    as its class name, which check_priced refuses (an object it cannot recognise is not assumed to
-    be free)."""
+    """A tool as check_priced wants to see it (the kind only, never its size: see _tool_spec): a
+    dict with a `type` for a tool the provider runs (a mapping MAF passes through), `function` for
+    a tool the app runs, and an unknown object as its class name, which check_priced refuses (an
+    object it cannot recognise is not assumed to be free)."""
     if isinstance(tool, Mapping):
         return dict(tool)
     if isinstance(tool, FunctionTool) or callable(tool):
@@ -111,6 +145,24 @@ def params_view(options: Mapping[str, Any]) -> dict[str, Any]:
     if tools is not None:
         view["tools"] = [_tool_view(tool) for tool in tools]
     return view
+
+
+def _tool_spec(tool: Any) -> Any:
+    """A tool as it is sent, for sizing: the whole definition (name, description, parameter
+    schema), so a long description or schema is reserved for. A tool of a type this code cannot
+    size is refused by check_priced before this is reached."""
+    if isinstance(tool, Mapping):
+        return dict(tool)
+    to_spec = getattr(tool, "to_json_schema_spec", None)
+    return to_spec() if callable(to_spec) else repr(tool)
+
+
+def _schema_of(response_format: Any) -> Any:
+    """An output schema as it is sent: a Pydantic model's JSON schema, a dict as given."""
+    schema = getattr(response_format, "model_json_schema", None)
+    if callable(schema):
+        return schema()
+    return response_format if isinstance(response_format, Mapping) else repr(response_format)
 
 
 def _content_view(content: Content) -> dict[str, Any]:
@@ -140,9 +192,9 @@ def _blocks(content: Content) -> list[dict[str, Any]]:
 def request_view(
     messages: Sequence[Message], options: Mapping[str, Any]
 ) -> tuple[Any, list[dict[str, Any]]]:
-    """(payload, media blocks) for bounds.request_bound: everything sent (the messages, the tools,
-    the instructions, the schema) as JSON-able data, and the media in it, which count at a fixed
-    size each however they are sent."""
+    """(payload, media blocks) for bounds.request_bound: everything sent (the messages, the
+    instructions, the whole tool definitions and the output schema) as JSON-able data, and the
+    media in it, which count at a fixed size each however they are sent."""
     payload = [
         [
             {
@@ -152,8 +204,9 @@ def request_view(
             }
             for message in messages
         ],
-        {key: value for key, value in options.items() if key != "tools"},
-        params_view(options).get("tools"),
+        {key: value for key, value in options.items() if key not in {"tools", "response_format"}},
+        [_tool_spec(tool) for tool in options.get("tools") or ()],
+        _schema_of(options["response_format"]) if options.get("response_format") else None,
     ]
     blocks = [block for message in messages for c in message.contents for block in _blocks(c)]
     return payload, blocks
@@ -175,6 +228,12 @@ class BudgetMiddleware(ChatMiddleware):
         if context.stream:
             raise StreamingNotSupported("streamed calls are not supported by this gateway yet")
         options = dict(context.options or {})
+        refused = sorted(str(key) for key in options if key not in ALLOWED_OPTIONS)
+        if refused:
+            raise OptionNotAllowed(f"options the gateway does not allow: {', '.join(refused)}")
+        wanted = options.get("model")
+        if wanted is not None and wanted != self.meter.model.split(":", 1)[1]:
+            raise OptionNotAllowed("options the gateway does not allow: model (another price)")
         if options.get("store") is True:
             raise StoreNotAllowed(
                 "store=True would keep the conversation at the provider; "
@@ -184,7 +243,8 @@ class BudgetMiddleware(ChatMiddleware):
         bounds.check_priced(view)
         # A caller may set a larger limit than the gateway's; reserve for whichever is larger.
         output = bounds.output_bound(self.max_tokens, view)
-        if not isinstance(options.get("max_tokens"), int):
+        limit = options.get("max_tokens")
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
             options["max_tokens"] = self.max_tokens
         if self.sends_store:
             options["store"] = False

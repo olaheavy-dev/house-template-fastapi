@@ -168,9 +168,28 @@ async def test_an_invalid_request_is_a_plain_500_logged_as_an_error(
             "log_level": "error",
             "kind": "BadRequestError",
             "path": "/bug",
-            "exc_info": error,
+            "chain": ["ProviderError"],
         }
     ]
+
+
+async def test_a_bug_logs_the_type_names_of_the_chain_never_the_text_in_it(
+    app: FastAPI, client: httpx.AsyncClient
+) -> None:
+    # A framework's wrapper embeds the provider's text, which can echo the prompt, in the messages
+    # of the chain a traceback prints: only the types are logged.
+    @app.get("/bug2")
+    async def bug() -> None:
+        try:
+            raise RuntimeError("the prompt said SECRET")
+        except RuntimeError as inner:
+            raise ProviderError(K.INVALID_REQUEST, source="BadRequestError") from inner
+
+    with capture_logs() as logs:
+        await client.get("/bug2")
+    [entry] = [e for e in logs if e["event"] == "llm_error"]
+    assert entry["chain"] == ["ProviderError", "RuntimeError"]
+    assert "SECRET" not in repr(logs)
 
 
 async def test_a_mapped_provider_error_logs_its_source_as_the_kind(

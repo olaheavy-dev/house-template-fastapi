@@ -112,6 +112,15 @@ class ProviderError(Exception):
         self.retry_after = retry_after
 
 
+def _type_names(error: BaseException) -> list[str]:
+    names: list[str] = []
+    current: BaseException | None = error
+    while current is not None and len(names) < 16:
+        names.append(type(current).__name__)
+        current = current.__cause__ or current.__context__
+    return names
+
+
 def failure_response(
     request: Request,
     kind: FailureKind | None,
@@ -125,7 +134,10 @@ def failure_response(
     path = request.url.path
     answer = outcome(kind)
     if answer is None:  # an invalid request the app built: a bug, handled like any other
-        log.error("llm_error", kind=source, path=path, exc_info=error)
+        # The type names of the error and of what it was raised from, never a traceback: a
+        # framework's wrapper (MAF's) embeds the provider's text, which can echo the prompt, in the
+        # messages of the chain a traceback prints.
+        log.error("llm_error", kind=source, path=path, chain=_type_names(error))
         return problem_response(500, instance=path)
     log.warning("llm_error", kind=source, status=answer.status, path=path)
     headers = {"Retry-After": retry_after or DEFAULT_RETRY_AFTER} if answer.retry else {}

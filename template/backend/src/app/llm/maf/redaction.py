@@ -16,12 +16,13 @@ logged). The messages the caller holds are never changed: the walkers build copi
 thread keeps its originals.
 
 What it does not do: find every kind of personal data, or anonymise (the mapping is the key, in
-memory for one call). Thinking and reasoning content is left as it is (a provider checks its
-signature), so it can show placeholders. Images and other media are not scanned (counted in
-`llm_unscanned_images`; a document, audio or video is refused by the budget). Other options that
-are sent as text (`user`, `metadata`) are not scanned: never put personal data there. An agent's
-own chat middleware, added per run, is appended after this client-level chain, so it runs closer to
-the provider than redaction and sees placeholders. A message's `author_name` cannot take a
+memory for one call). Thinking the provider signed is left as it is (it checks the signature), so
+it can show placeholders; thinking sent without a signature is cleaned like text. Images and other
+media are not scanned (counted in `llm_unscanned_images`; a document, audio or video is refused by
+the budget). Options outside a fixed list (ALLOWED_OPTIONS in middleware.py) are refused, so
+free-text ones (`user`, `metadata`, `extra_body`) never reach the provider. Chat middleware added
+per call or per agent is refused by the gateway's clients (it would run after redaction and the
+budget; see NoExtraChatMiddleware in gateway.py). A message's `author_name` cannot take a
 placeholder, so a call whose name matches a detector or a known value is refused. Streamed calls
 are not supported yet and are refused.
 """
@@ -62,7 +63,9 @@ REDACTED_COUNT = "app.llm.redacted_count"
 
 # Content types and what they hold. Anything else is refused (fail closed).
 _TEXT = "text"
-_UNTOUCHED = frozenset({"text_reasoning"})  # a provider checks its signature: never changed
+# Thinking the provider signed (`protected_data`) is never changed: it checks the signature. The
+# Anthropic client sends thinking WITHOUT one as plain text, so that is walked like any text.
+_REASONING = "text_reasoning"
 _MEDIA = frozenset({"data", "uri", "hosted_file"})  # counted, sent as they are
 _NOT_SENT = frozenset({"usage"})
 _APPROVALS = frozenset({"function_approval_request", "function_approval_response"})
@@ -119,10 +122,10 @@ def _walk_value(value: Any, leaf: Leaf, tools: Mapping[str, str], context: str) 
 def _walk_content(content: Content, leaf: Leaf, tools: Mapping[str, str], context: str = "") -> Any:
     """A copy of the content with `leaf` applied to every string the provider will read."""
     kind = content.type
-    if kind in _UNTOUCHED or kind in _MEDIA or kind in _NOT_SENT:
+    if kind in _MEDIA or kind in _NOT_SENT or (kind == _REASONING and content.protected_data):
         return content
     new = copy.copy(content)
-    if kind == _TEXT:
+    if kind in (_TEXT, _REASONING):
         new.text = walk_text(content.text or "", leaf, context)
     elif kind == "function_call":
         arguments = content.arguments
@@ -316,8 +319,21 @@ class RedactionMiddleware(ChatMiddleware):
             raise RedactionUnavailable("the model call returned something other than a response")
         restorer = _Restorer(prepared.mapping, json_text=_json_output(prepared.options))
         restorer.response(response)
+        _reparse(response, prepared.options)
         if restorer.unrestored:
             log.warning("llm_unrestored_placeholders", count=restorer.unrestored)
+
+
+def _reparse(response: ChatResponse[Any], options: Mapping[str, Any]) -> None:
+    """A structured answer's `value` is parsed from what the provider sent, which is the redacted
+    text (OpenAI's parse path sets it, and MAF caches it): forget it, so it is parsed again from
+    the restored text on first use. These attributes are private to agent-framework-core 1.25.0;
+    a test pins them, and a version bump that renames them fails it."""
+    schema = options.get("response_format")
+    if schema is not None:
+        response._response_format = schema
+        response._value = None
+        response._value_parsed = False
 
 
 def _json_output(options: Mapping[str, Any]) -> bool:

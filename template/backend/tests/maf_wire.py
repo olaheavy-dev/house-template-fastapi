@@ -1,5 +1,4 @@
-"""A fake provider HTTP API under the real provider SDKs, for the MAF tests (adapted from the
-founder's MAF learning lab, #35).
+"""A fake provider HTTP API under the real provider SDKs, for the MAF tests (#35).
 
 The real OpenAI and Anthropic SDK clients run in full (the Responses and Messages request bodies
 MAF builds, the SDK's retries, `retry-after` handling and timeouts) over an httpx2 MockTransport, so

@@ -62,6 +62,20 @@ INTENDED: dict[str, str] = {
         "hide_input_in_errors: a validation error never echoes the value given (#35)",
     "backend/tests/test_llm_parity_redaction.py":
         "shared chat redaction tests, run once per framework (#35)",
+    "backend/llm-contracts.toml":
+        "the core contract also forbids the MAF provider packages; the comment is accurate (#35)",
+    "backend/src/app/llm/core/errors.py":
+        "a bug is logged with the type names of its chain, not a traceback whose messages can hold provider text (#35)",
+    "backend/tests/test_llm_core_errors.py":
+        "the log field is the chain of type names; a test pins that no text from the chain is logged (#35)",
+    "backend/tests/test_llm_error_logs.py":
+        "the log field is the chain of type names (#35)",
+    "backend/tests/test_llm_prices.py":
+        "built on the neutral Usage, so it runs under every framework (#35)",
+    "backend/tests/test_llm_cost_pins.py":
+        "built on the neutral Usage, so it runs under every framework (#35)",
+    "backend/tests/test_llm_parity_budget.py":
+        "a shared test that a long tool definition is reserved for in full (#35)",
 }
 
 # DEPENDABOT_*: what Dependabot updates in this repository's rendered output

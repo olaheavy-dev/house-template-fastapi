@@ -13,10 +13,13 @@ name = "The framework-neutral core imports no model framework or provider SDK"
 type = "forbidden"
 source_modules = ["app.llm.core"]
 # Indirect imports count too, so the core can't reach a framework through the adapter or the
-# gateway modules either. agent_framework is not installed yet (0.8.0): import-linter 2.15 and 2.16
-# accept a forbidden external package that is not installed.
+# gateway modules either. A package the project did not install (LangChain's under `llm: maf`,
+# MAF's under `llm: langchain`) is fine: import-linter 2.15 and 2.16 accept a forbidden external
+# package that is not installed.
 forbidden_modules = [
     "agent_framework",
+    "agent_framework_anthropic",
+    "agent_framework_openai",
     "anthropic",
     "langchain",
     "langchain_anthropic",

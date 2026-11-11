@@ -153,13 +153,20 @@ async def test_a_quote_in_an_original_does_not_break_the_json_of_a_restored_argu
     assert json.loads(response.messages[0].contents[0].arguments) == {"who": 'Priya "PJ" Shah'}  # type: ignore[arg-type]
 
 
-async def test_thinking_is_left_as_it_is(gateway: Gateway) -> None:
+async def test_signed_thinking_is_left_as_it_is_and_unsigned_thinking_is_cleaned(
+    gateway: Gateway,
+) -> None:
     client = script(gateway)
-    thinking = Content.from_text_reasoning(text=f"Maybe {EMAIL}?")
-    await gateway.client().get_response(calls_of(thinking, Content.from_text(f"Mail {EMAIL}")))
+    signed = Content.from_text_reasoning(text=f"Maybe {EMAIL}?", protected_data="sig-abc")
+    unsigned = Content.from_text_reasoning(text=f"Perhaps {EMAIL}?")
+    await gateway.client().get_response(
+        calls_of(signed, unsigned, Content.from_text(f"Mail {EMAIL}"))
+    )
     sent = client.seen[0][0].contents
     assert sent[0].text == f"Maybe {EMAIL}?"  # a provider checks its signature
-    assert sent[1].text == "Mail [EMAIL_1]"
+    assert sent[1].text == "Perhaps [EMAIL_1]?"  # sent as plain text by the Anthropic client
+    assert sent[2].text == "Mail [EMAIL_1]"
+    assert unsigned.text == f"Perhaps {EMAIL}?"
 
 
 @pytest.mark.parametrize(

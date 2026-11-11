@@ -17,10 +17,11 @@ dependencies = [
 [project.optional-dependencies]
 # Optional parts, installed by name (`uv sync --extra db`). The Makefile and the image install the
 # ones the project answered for; all of them stay locked in uv.lock. The `database` answer installs
-# `db`, the `llm: langchain` answer installs `langchain`, and `storage` installs `storage`. The
-# extras are not tied together here: the model gateway keeps its budget and agent checkpoints in
-# PostgreSQL, so `llm: langchain` needs `database: true`, and the Makefile and the image always
-# install `db` with `langchain`.
+# `db`, the `llm: langchain` answer installs `langchain`, the `llm: maf` answer installs `maf`, and
+# `storage` installs `storage`. The extras are not tied together here: the model gateway keeps its
+# budget (and LangChain's agent checkpoints) in PostgreSQL, so `llm: langchain` and `llm: maf` need
+# `database: true`, and the Makefile and the image always install `db` with either. `langchain` and
+# `maf` conflict (see [tool.uv] below): a project installs one.
 db = [
     "alembic>=1.20.1",
     "pgvector>=0.5.1",

@@ -9,11 +9,13 @@ million (gpt-6-luna and claude-haiku-5-5 both: input 100,000, output 500,000):
 
 from __future__ import annotations
 
+import json
 from datetime import date
 from typing import Any
 
 import pytest
 from agent_framework import Message
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -184,3 +186,41 @@ async def test_closing_the_gateway_closes_the_sdk_client(make: Any) -> None:
     gateway = make(OPENAI, fake)
     await gateway.aclose()
     assert gateway._sdk.is_closed()
+
+
+class Contact(BaseModel):
+    email: str
+
+
+SCHEMA = {
+    "type": "object",
+    "properties": {"email": {"type": "string"}},
+    "required": ["email"],
+    "additionalProperties": False,
+}
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic"])
+@pytest.mark.parametrize("schema", [Contact, SCHEMA], ids=["pydantic", "dict"])
+async def test_a_structured_answer_is_restored_in_its_text_and_in_its_value(
+    make: Any, provider: str, schema: Any
+) -> None:
+    fake = FakeProviderHttp(provider, text='{"email": "[EMAIL_1]"}')
+    gateway = make(OPENAI if provider == "openai" else ANTHROPIC, fake)
+    response = await gateway.client().get_response(
+        [Message("user", [f"Mail {EMAIL}"])], options={"response_format": schema}
+    )
+    assert EMAIL not in str(fake.bodies)
+    assert json.loads(response.text) == {"email": EMAIL}
+    value = response.value
+    assert (value.email if isinstance(value, BaseModel) else value["email"]) == EMAIL
+
+
+def test_the_response_attributes_the_value_fix_resets_exist_in_the_pinned_core() -> None:
+    # redaction._reparse resets private attributes of agent-framework-core 1.25.0: a bump that
+    # renames them must fail here, not leave placeholders in `value`.
+    from agent_framework import ChatResponse
+
+    response: Any = ChatResponse(messages=[Message("assistant", ["{}"])], response_format=Contact)
+    for name in ("_value", "_value_parsed", "_response_format"):
+        assert hasattr(response, name), name

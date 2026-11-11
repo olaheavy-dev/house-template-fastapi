@@ -171,6 +171,27 @@ async def test_a_larger_bound_limit_is_reserved_for(
         )
 
 
+async def test_a_long_tool_definition_is_reserved_for_in_full(
+    framework: Harness, gateway: Any, db_session: AsyncSession
+) -> None:
+    # A tool's description and parameter schema are sent with the call: they count. 50,000
+    # characters are at least 50,000 bytes, which the reservation must cover at the lowest input
+    # rate it ever charges ($2 per million: 2 micro-USD a token).
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "look_up",
+            "description": "x" * 50_000,
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+    framework.install_scripted(gateway, [ANSWER, ANSWER])
+    await framework.ask(gateway, QUESTION)
+    await framework.ask(gateway, QUESTION, options=framework.params_for_tools(tools=[tool]))
+    plain, with_tool = [c.reserved_micro_usd for c in await calls(db_session)]
+    assert with_tool - plain >= 50_000 * 2
+
+
 async def test_images_are_reserved_at_their_maximum_however_they_are_sent(
     framework: Harness, gateway: Any, db_session: AsyncSession
 ) -> None:

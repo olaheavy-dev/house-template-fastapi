@@ -33,7 +33,11 @@ from typing import Annotated, Any
 
 import anthropic
 import structlog
-from agent_framework import SupportsChatGetResponse
+from agent_framework import FunctionInvocationConfiguration, SupportsChatGetResponse
+
+# Not exported by agent-framework-core 1.25.0; it is the function MAF itself sorts middleware with.
+# The pins move together by hand (decision 0002), and a test calls it, so a rename fails loudly.
+from agent_framework._middleware import categorize_middleware
 from agent_framework.anthropic import AnthropicClient
 from agent_framework.openai import OpenAIChatClient
 from fastapi import Depends, Request
@@ -60,10 +64,37 @@ __all__ = ["Gateway", "GatewayDep", "check_chain", "get_gateway"]
 log = structlog.get_logger()
 
 
+class NoExtraChatMiddleware:
+    """Mixed into the gateway's clients. MAF appends chat middleware that arrives per call
+    (`client_kwargs={"middleware": ...}`) or per agent (`Agent(..., middleware=[...])`) AFTER the
+    client's own chain, so it would run closer to the provider than redaction and the budget and
+    could add personal data or spend unmetered. The gateway's clients refuse it instead (fail
+    closed): add chat middleware to the gateway's chain, where it is deliberate. Function
+    middleware (around tools) is not affected."""
+
+    def _get_chat_middleware_pipeline(self, middleware: Any) -> Any:
+        if categorize_middleware(list(middleware or []))["chat"]:
+            raise RedactionUnavailable(
+                "chat middleware added per call or per agent would run after redaction and the "
+                "budget; add it to the gateway's own chain"
+            )
+        return super()._get_chat_middleware_pipeline(middleware)  # type: ignore[misc]
+
+
+class GatewayOpenAIChatClient(NoExtraChatMiddleware, OpenAIChatClient):
+    """MAF's OpenAI Responses client, refusing per-call and per-agent chat middleware."""
+
+
+class GatewayAnthropicClient(NoExtraChatMiddleware, AnthropicClient):
+    """MAF's Anthropic client, refusing per-call and per-agent chat middleware."""
+
+
 def check_chain(client: Any, expected: list[Any]) -> None:
     """Refuse a client whose chat middleware is not exactly `expected`, the gateway's own
-    redaction then budget middleware, in that order (fail closed: a client without them would send
-    personal data and spend without a reservation)."""
+    redaction then budget middleware, in that order, or one that would accept more (fail closed: a
+    client without them would send personal data and spend without a reservation)."""
+    if not isinstance(client, NoExtraChatMiddleware):
+        raise RedactionUnavailable("the chat client is not one the gateway built")
     chain = getattr(client, "chat_middleware", None)
     if not isinstance(chain, list) or len(chain) != len(expected):
         raise RedactionUnavailable("the chat client's middleware is not the gateway's")
@@ -98,6 +129,12 @@ class Gateway:
         price = registry.chat_price(llm_model, prices.PRICES)
         self.name = llm_model
         self.step_limit = StepLimit(settings.agent_max_model_calls)
+        # AGENT_MAX_MODEL_CALLS counts model calls, the last made without tools; MAF's
+        # `max_iterations` counts the tool rounds before that last call (and must be at least 1:
+        # with AGENT_MAX_MODEL_CALLS=1 an agent may make two calls).
+        self.tool_loop: FunctionInvocationConfiguration = {
+            "max_iterations": max(settings.agent_max_model_calls - 1, 1)
+        }
         self.meter = Meter(
             model=llm_model,
             price=price,
@@ -159,8 +196,11 @@ class Gateway:
                     max_retries=settings.llm_max_retries,
                     http_client=http_client,
                 )
-                self._client = AnthropicClient(
-                    model=model_id, anthropic_client=self._sdk, middleware=self.middleware
+                self._client = GatewayAnthropicClient(
+                    model=model_id,
+                    anthropic_client=self._sdk,
+                    middleware=self.middleware,
+                    function_invocation_configuration=self.tool_loop,
                 )
             else:
                 self._sdk = openai_client(
@@ -170,8 +210,11 @@ class Gateway:
                     http_client=http_client,
                 )
                 # OpenAI's Responses API; the middleware sends store=False on every call.
-                self._client = OpenAIChatClient(
-                    model=model_id, async_client=self._sdk, middleware=self.middleware
+                self._client = GatewayOpenAIChatClient(
+                    model=model_id,
+                    async_client=self._sdk,
+                    middleware=self.middleware,
+                    function_invocation_configuration=self.tool_loop,
                 )
             check_chain(self._client, self.middleware)
 

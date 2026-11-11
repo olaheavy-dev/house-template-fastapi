@@ -73,14 +73,15 @@ async def test_a_mapped_failure_logs_one_warning_with_its_class_status_and_path(
 async def test_an_unmapped_failure_logs_an_error_with_the_exception_and_no_status(
     app: FastAPI, client: httpx.AsyncClient, error: Exception, kind: str
 ) -> None:
-    # exc_info is the exception the route raised (structlog renders its traceback).
+    # The type names of the exception the route raised and of its causes: never a traceback, whose
+    # messages can hold the provider's text.
     assert await logged(app, client, error) == [
         {
             "event": "llm_error",
             "log_level": "error",
             "kind": kind,
             "path": "/fail",
-            "exc_info": error,
+            "chain": [type(error).__name__],
         }
     ]
 
