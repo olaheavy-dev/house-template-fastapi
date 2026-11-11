@@ -1,6 +1,6 @@
 # 0006. Personal data is replaced with reversible placeholders in the neutral core before any provider call
 
-Status: Accepted. The founder accepts the design and the eight answers recorded in issue [#78](https://github.com/olaheavy-dev/house-template-fastapi/issues/78) on 9 Nov 2026; this text was drafted by an agent and is merged by the founder. It builds on [0001](0001-framework-neutral-core-with-adapters.md) (a core with adapters) and [0005](0005-llm-answer-and-its-migrations.md) (the code exists only with `llm: langchain`). This record is the rule; the first pull request adds only the core and the project's detector list, and wires nothing. The adapters, settings, ledger column and trace masking follow in later pull requests of #78, so until then no text is changed on its way to a provider.
+Status: Accepted. The founder accepts the design and the eight answers recorded in issue [#78](https://github.com/olaheavy-dev/house-template-fastapi/issues/78) on 9 Nov 2026; this text was drafted by an agent and is merged by the founder. It builds on [0001](0001-framework-neutral-core-with-adapters.md) (a core with adapters) and [0005](0005-llm-answer-and-its-migrations.md) (the code exists only with `llm: langchain`). This record is the rule. It was built in three pull requests of #78: the core and the project's detector list; the LangChain adapter with its settings, ledger column and trace masking; and the embeddings (one way, in the core). The MAF adapter comes with [#35](https://github.com/olaheavy-dev/house-template-fastapi/issues/35).
 
 ## Context
 

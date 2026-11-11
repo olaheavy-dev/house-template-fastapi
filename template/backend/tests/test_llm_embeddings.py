@@ -59,6 +59,7 @@ def embeddings(
                 model=MODEL,
                 price=prices.EMBEDDING_PRICES[MODEL],
                 client=SimpleNamespace(embeddings=fake),
+                redactor=None,
                 cap_micro_usd=cap,
                 user_cap_micro_usd=user_cap,
                 sessionmaker=lambda: sessions,

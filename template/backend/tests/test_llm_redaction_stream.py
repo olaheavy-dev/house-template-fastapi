@@ -411,3 +411,38 @@ def test_a_tool_call_that_never_had_arguments_adds_no_tail_chunk() -> None:
     start = {"name": "ping", "id": "c1", "args": "", "index": 0, "type": "tool_call_chunk"}
     restorers.chunk(AIMessageChunk(content="", tool_call_chunks=[start]))
     assert restorers.flush() == []
+
+
+def test_legacy_raw_tool_calls_do_not_make_a_second_copy_of_the_arguments_when_merged() -> None:
+    """A chunk with `additional_kwargs["tool_calls"]` also gets `tool_call_chunks` derived from
+    them by langchain-core: the held arguments must come back once, not once per place."""
+    from app.llm.langchain.redaction import _StreamRestorers
+
+    restorers = _StreamRestorers({"[NAME_1]": TRICKY}, json_text=False)
+
+    def legacy(arguments: str) -> AIMessageChunk:
+        # langchain-core derives tool_call_chunks from a raw call that names its function.
+        call = {"index": 0, "id": "call_1", "function": {"name": "", "arguments": arguments}}
+        return AIMessageChunk(content="", additional_kwargs={"tool_calls": [call]})
+
+    pieces = [legacy('{"who": "[NA'), legacy('ME_1]"}')]
+    assert all(p.tool_call_chunks for p in pieces)  # derived by langchain-core
+    out = [restorers.chunk(p) for p in pieces]
+    tails = restorers.flush()
+    # One tail for the call: its explicit tool-call chunk and its raw kwargs travel together, so
+    # langchain-core has nothing to derive a second chunk from (it derives only when none is given,
+    # and what it reads from raw calls differs between versions).
+    [tail] = tails
+    assert tail.tool_call_chunks
+    assert tail.additional_kwargs["tool_calls"]
+    total = out[0]
+    for piece in [*out[1:], *tails]:
+        total = total + piece
+    expected = {"who": TRICKY}
+    [chunk] = total.tool_call_chunks
+    assert json.loads(chunk["args"] or "") == expected
+    [call] = total.tool_calls
+    assert call["args"] == expected
+    [raw] = total.additional_kwargs["tool_calls"]
+    assert raw["index"] == 0
+    assert json.loads(raw["function"]["arguments"]) == expected

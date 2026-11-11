@@ -19,6 +19,8 @@ Pieces:
 - Redactor.redact(texts): replaces across the whole message list, so a number is fixed by the first
   appearance and stays the same as the history grows (a provider's prompt cache keeps matching).
   Any failure raises RedactionFailed, and nothing is sent: it always fails closed.
+- Redactor.redact_each(texts): one-way, for text whose answer is not text (embeddings): each text
+  is numbered on its own, and no mapping is kept, so there is nothing to restore.
 - restore / StreamRestorer: put the originals back into an answer, or into a stream of chunks.
 
 Log events never carry a value: only a kind, a count or an error type name. An adapter calls the
@@ -45,6 +47,7 @@ from app.problems import Problem
 __all__ = [
     "Detector",
     "Redacted",
+    "RedactedEach",
     "RedactionFailed",
     "Redactor",
     "RegexDetector",
@@ -170,6 +173,17 @@ class Redacted:
     mapping: Mapping[str, str]
     # kind -> how many occurrences were replaced.
     counts: Mapping[str, int]
+
+
+@dataclass(frozen=True, slots=True)
+class RedactedEach:
+    """The result of Redactor.redact_each: one-way, so there is no mapping."""
+
+    texts: tuple[str, ...]
+    # How many values were replaced in each text, in the same order.
+    counts: tuple[int, ...]
+    # kind -> how many occurrences were replaced over all the texts.
+    kinds: Mapping[str, int]
 
 
 # --- building blocks for detectors ------------------------------------------------------------
@@ -305,6 +319,22 @@ def _touches(starts: list[int], ends: list[int], start: int, end: int) -> bool:
     return (at > 0 and ends[at - 1] > start) or (at < len(starts) and starts[at] < end)
 
 
+_Compiled = tuple[
+    list[re.Pattern[str]], list[tuple[str, str, re.Pattern[str]]]
+]  # the allow patterns, and the known values with theirs
+
+
+def _compile(scope: Scope) -> _Compiled:
+    allowed = [p for value in scope.allow for p in _value_patterns(value)]
+    named = [
+        (kind, value, pattern)
+        for kind, values in scope.known.items()
+        for value in values
+        for pattern in _value_patterns(value)
+    ]
+    return allowed, named
+
+
 @dataclass(frozen=True, slots=True)
 class _Found:
     span: Span
@@ -358,26 +388,54 @@ class Redactor:
         log.error("llm_redaction_failed", error_type=failure)
         raise RedactionFailed
 
+    def redact_each(self, texts: Sequence[str], scope: Scope | None = None) -> RedactedEach:
+        """Replaces the values in each text on its own, for text that is sent one way (embeddings):
+        placeholders are numbered inside each text, so what a text becomes depends only on the text
+        and the scope, not on the texts around it. The scope's patterns are built once for the
+        list, and an allow-list conflict is logged once. No mapping is kept. Raises TypeError for a
+        single str, and RedactionFailed if any text fails: the whole list fails closed."""
+        items = _check_strings(texts, "texts")
+        failure: str | None = None
+        try:
+            active = scope if scope is not None else current_scope()
+            compiled = _compile(active)
+            conflicts: set[str] = set()
+            results = [
+                self._redact([text], active, False, None, compiled=compiled, conflicts=conflicts)
+                for text in items
+            ]
+            for kind in sorted(conflicts):
+                log.warning("redaction_allow_conflict", kind=kind)
+            kinds: Counter[str] = Counter()
+            for result in results:
+                kinds.update(result.counts)
+            return RedactedEach(
+                texts=tuple(result.texts[0] for result in results),
+                counts=tuple(sum(result.counts.values()) for result in results),
+                kinds=dict(kinds),
+            )
+        except Exception as exc:  # fail closed, as redact() does
+            failure = type(exc).__name__
+        log.error("llm_redaction_failed", error_type=failure)
+        raise RedactionFailed
+
     def _redact(
         self,
         texts: list[str],
         scope: Scope,
         log_conflicts: bool = True,
         contexts: list[str] | None = None,
+        *,
+        compiled: _Compiled | None = None,
+        conflicts: set[str] | None = None,
     ) -> Redacted:
-        allowed = [p for value in scope.allow for p in _value_patterns(value)]
-        named = [
-            (kind, value, pattern)
-            for kind, values in scope.known.items()
-            for value in values
-            for pattern in _value_patterns(value)
-        ]
+        allowed, named = compiled if compiled is not None else _compile(scope)
         used = {(kind, int(number)) for text in texts for kind, number in _LITERAL.findall(text)}
         next_number: Counter[str] = Counter()
         placeholders: dict[tuple[str, str], str] = {}
         mapping: dict[str, str] = {}
         counts: Counter[str] = Counter()
-        conflicts: set[str] = set()
+        found_conflicts: set[str] = conflicts if conflicts is not None else set()
         checked_kinds: set[str] = set()
         out: list[str] = []
 
@@ -408,7 +466,7 @@ class Redactor:
             known_starts, known_ends = _union([(i.span.start, i.span.end) for i in found])
             for item in found:  # a known value beats the allow-list
                 if _touches(allow_starts, allow_ends, item.span.start, item.span.end):
-                    conflicts.add(item.span.kind)
+                    found_conflicts.add(item.span.kind)
             for detector in self._detectors:
                 for found_span in detector.find(seen):
                     if (
@@ -454,7 +512,7 @@ class Redactor:
                 position = end
             pieces.append(text[position:])
             out.append("".join(pieces))
-        for kind in sorted(conflicts) if log_conflicts else ():
+        for kind in sorted(found_conflicts) if log_conflicts else ():
             log.warning("redaction_allow_conflict", kind=kind)
         return Redacted(tuple(out), mapping, dict(counts))
 
