@@ -35,6 +35,9 @@ Limits worth knowing:
   refusals, and the parsed object of a structured answer in `additional_kwargs` are restored. What
   stays as the model wrote it: thinking and reasoning blocks (including `additional_kwargs`
   `reasoning`).
+  A tool call's argument string is shown to a stream consumer only once the stream has ended: its
+  fragments come out empty and the restored string arrives in one final chunk, restored at each
+  JSON nesting level exactly as a whole answer's would be (the text stream is not delayed).
 - Images and other media are not scanned (they are counted in `llm_unscanned_images`). A message's
   `name` field cannot take a placeholder (a provider accepts only plain names there), so a call
   whose `name` matches a detector or a known value is refused, nothing sent.
@@ -374,15 +377,21 @@ def _json_output(kwargs: Mapping[str, Any]) -> bool:
 
 
 class _StreamRestorers:
-    """Restores a stream of chunks for one call: a StreamRestorer for each stream of text that can
-    be cut anywhere (a text block, a tool call's argument fragments), so a placeholder split
-    across chunks is held back until it is whole. Made for one call."""
+    """Restores a stream of chunks for one call. Text (a text block, a refusal) goes through a
+    StreamRestorer for each stream, so a placeholder split across chunks is held back until it is
+    whole. A tool call's argument string (tool_call_chunks, the
+    Responses `function_call` arguments, Anthropic's `partial_json`, the older additional_kwargs
+    argument strings) is buffered per call index and restored whole at the end of the stream by
+    the same restorer as a complete answer, so JSON text inside a string value is restored at its
+    own nesting level (#102); its chunks come out with empty arguments and the restored string
+    arrives in one chunk at the end. Made for one call."""
 
     def __init__(self, mapping: Mapping[str, str], *, json_text: bool) -> None:
         self._plain = mapping
         self._escaped = escaped(mapping)
         self._json_text = json_text
         self._streams: dict[tuple[str, Any], StreamRestorer] = {}
+        self._held: dict[tuple[str, Any], list[str]] = {}
         self._whole_missed = 0
         self._values = _Restorer(mapping)
         self._undecided: dict[Any, str] = {}
@@ -394,6 +403,12 @@ class _StreamRestorers:
                 self._escaped if raw else self._plain
             )
         return stream
+
+    def _hold(self, kind: str, index: Any, fragment: str) -> str:
+        """Keep a fragment of a transport argument string until the stream ends; nothing is shown
+        yet."""
+        self._held.setdefault((kind, index), []).append(fragment)
+        return ""
 
     @property
     def unrestored(self) -> int:
@@ -429,9 +444,10 @@ class _StreamRestorers:
                 out[key] = self._stream("refusal", None, raw=False).feed(value)
             elif key == "function_call" and isinstance(value, dict):
                 arguments = value.get("arguments")
-                feed = self._stream("kwargs-function", None, raw=True).feed
                 out[key] = (
-                    {**value, "arguments": feed(arguments)} if isinstance(arguments, str) else value
+                    {**value, "arguments": self._hold("kwargs-function", None, arguments)}
+                    if isinstance(arguments, str)
+                    else value
                 )
             elif key == "tool_calls" and isinstance(value, list):
                 out[key] = [self._raw_call(call) for call in value]
@@ -442,8 +458,8 @@ class _StreamRestorers:
     def _raw_call(self, call: Any) -> Any:
         function = call.get("function") if isinstance(call, dict) else None
         if isinstance(function, dict) and isinstance(function.get("arguments"), str):
-            feed = self._stream("kwargs-call", call.get("index"), raw=True).feed
-            return {**call, "function": {**function, "arguments": feed(function["arguments"])}}
+            held = self._hold("kwargs-call", call.get("index"), function["arguments"])
+            return {**call, "function": {**function, "arguments": held}}
         return call
 
     def _whole(self, text: str) -> str:
@@ -465,15 +481,15 @@ class _StreamRestorers:
                         {**block, "text": self._feed_text(block.get("index"), block["text"])}
                     )
                 elif isinstance(block.get("partial_json"), str):
-                    feed = self._stream("json", block.get("index"), raw=True).feed
-                    blocks.append({**block, "partial_json": feed(block["partial_json"])})
+                    held = self._hold("json", block.get("index"), block["partial_json"])
+                    blocks.append({**block, "partial_json": held})
                 elif block.get("type") == "function_call" and isinstance(
                     block.get("arguments"), str
                 ):
                     # The Responses API repeats each argument fragment here, beside
                     # tool_call_chunks: a thread keeps these blocks, so they are restored too.
-                    feed = self._stream("args", block.get("index"), raw=True).feed
-                    blocks.append({**block, "arguments": feed(block["arguments"])})
+                    held = self._hold("args", block.get("index"), block["arguments"])
+                    blocks.append({**block, "arguments": held})
                 elif block.get("type") == "refusal" and isinstance(block.get("refusal"), str):
                     # A complete refusal text, not a fragment.
                     blocks.append({**block, "refusal": self._whole(block["refusal"])})
@@ -481,7 +497,7 @@ class _StreamRestorers:
                     blocks.append(block)
             content = blocks
         calls = [
-            {**call, "args": self._stream("call", call.get("index"), raw=True).feed(args)}
+            {**call, "args": self._hold("call", call.get("index"), args)}
             if isinstance(args := call.get("args"), str)
             else call
             for call in chunk.tool_call_chunks
@@ -494,6 +510,34 @@ class _StreamRestorers:
             name=chunk.name,
             tool_call_chunks=calls,
             usage_metadata=chunk.usage_metadata,
+        )
+
+    @staticmethod
+    def _transport_tail(kind: str, index: Any, arguments: str) -> AIMessageChunk:
+        """The restored argument string of one tool call, in the chunk shape its fragments had."""
+        if kind == "kwargs-function":
+            function = {"arguments": arguments}
+            return AIMessageChunk(content="", additional_kwargs={"function_call": function})
+        if kind == "kwargs-call":
+            call = {"index": index, "function": {"arguments": arguments}}
+            return AIMessageChunk(content="", additional_kwargs={"tool_calls": [call]})
+        if kind == "args":
+            block = {"type": "function_call", "arguments": arguments, "index": index}
+            return AIMessageChunk(content=[block])
+        if kind == "json":
+            block = {"type": "input_json_delta", "partial_json": arguments, "index": index}
+            return AIMessageChunk(content=[block])
+        return AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {
+                    "name": None,
+                    "id": None,
+                    "args": arguments,
+                    "index": index,
+                    "type": "tool_call_chunk",
+                }
+            ],
         )
 
     def flush(self) -> list[AIMessageChunk]:
@@ -518,40 +562,14 @@ class _StreamRestorers:
                 tails.append(
                     AIMessageChunk(content=[{"type": "text", "text": tail, "index": index}])
                 )
-            elif kind == "refusal":
+            else:  # refusal
                 tails.append(AIMessageChunk(content="", additional_kwargs={"refusal": tail}))
-            elif kind == "kwargs-function":
-                function = {"arguments": tail}
-                tails.append(
-                    AIMessageChunk(content="", additional_kwargs={"function_call": function})
-                )
-            elif kind == "kwargs-call":
-                call = {"index": index, "function": {"arguments": tail}}
-                tails.append(AIMessageChunk(content="", additional_kwargs={"tool_calls": [call]}))
-            elif kind == "args":
-                block = {"type": "function_call", "arguments": tail, "index": index}
-                tails.append(AIMessageChunk(content=[block]))
-            elif kind == "json":
-                tails.append(
-                    AIMessageChunk(
-                        content=[{"type": "input_json_delta", "partial_json": tail, "index": index}]
-                    )
-                )
-            else:
-                tails.append(
-                    AIMessageChunk(
-                        content="",
-                        tool_call_chunks=[
-                            {
-                                "name": None,
-                                "id": None,
-                                "args": tail,
-                                "index": index,
-                                "type": "tool_call_chunk",
-                            }
-                        ],
-                    )
-                )
+        for (kind, index), fragments in self._held.items():
+            whole = "".join(fragments)
+            if not whole:
+                continue
+            tails.append(self._transport_tail(kind, index, self._values.raw(whole)))
+        self._held.clear()
         return tails
 
 
