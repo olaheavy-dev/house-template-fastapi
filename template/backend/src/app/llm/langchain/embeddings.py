@@ -17,8 +17,10 @@ Ask the gateway for it and always await it:
 
     vectors = await gateway.embeddings().aembed_documents(texts, feature="ingest")
 
-Overriding `_embed` (or calling the provider another way) skips both the budget and the redaction:
-tests/test_llm_redaction_embeddings.py fails the build when anything under app/ does.
+Overriding `_embed` (or calling the provider another way) skips both the budget and the redaction.
+tests/test_llm_redaction_embeddings.py catches the usual ways (LangChain's own embeddings clients,
+the module's `create` under any import name, the SDK's `embeddings.create`, a second
+`openai_client`); it is a guard, not a proof.
 """
 
 from __future__ import annotations
@@ -131,6 +133,12 @@ class GatewayEmbeddings(Embeddings):
         self, text: str, *, feature: str | None = None, user_ref: str | None = None
     ) -> list[float]:
         return (await self._embed([text], CallTags(feature=feature, user_ref=user_ref)))[0]
+
+    async def aclose(self) -> None:
+        """Closes the OpenAI client this class was given (the gateway calls it on shutdown)."""
+        close = getattr(self._client, "close", None)
+        if close is not None:
+            await close()
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         raise RuntimeError("The budget can't stop a synchronous call: await aembed_documents().")

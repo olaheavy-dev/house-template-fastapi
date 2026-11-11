@@ -268,3 +268,22 @@ async def test_the_gateway_gives_its_embeddings_its_own_redactor_or_none_when_re
     assert on.embeddings()._redactor is on.redactor
     off = Gateway(settings.model_copy(update={"llm_redaction": "off"}), lambda: sessions)
     assert off.embeddings()._redactor is None
+
+
+async def test_closing_the_gateway_closes_the_embeddings_client(
+    settings: Settings, sessions: async_sessionmaker[AsyncSession]
+) -> None:
+    closed: list[bool] = []
+
+    async def close() -> None:
+        closed.append(True)
+
+    gateway = Gateway(settings, lambda: sessions)
+    gateway.embeddings()._client = SimpleNamespace(close=close)
+    await gateway.aclose()
+    assert closed == [True]
+    # A client with no close() (a fake) is left alone, and so is a gateway with no embeddings.
+    gateway.embeddings()._client = SimpleNamespace()
+    await gateway.aclose()
+    bare = Gateway(settings.model_copy(update={"openai_api_key": None}), lambda: sessions)
+    await bare.aclose()
