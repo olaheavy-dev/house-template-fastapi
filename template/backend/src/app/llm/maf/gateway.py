@@ -131,7 +131,8 @@ class Gateway:
         self.step_limit = StepLimit(settings.agent_max_model_calls)
         # AGENT_MAX_MODEL_CALLS counts model calls, the last made without tools; MAF's
         # `max_iterations` counts the tool rounds before that last call (and must be at least 1:
-        # with AGENT_MAX_MODEL_CALLS=1 an agent may make two calls).
+        # with AGENT_MAX_MODEL_CALLS=1 the budget middleware offers no tools on any call, so MAF
+        # returns after the one call). Measured on 1.25.0: model calls = max_iterations + 1.
         self.tool_loop: FunctionInvocationConfiguration = {
             "max_iterations": max(settings.agent_max_model_calls - 1, 1)
         }
@@ -163,6 +164,7 @@ class Gateway:
             self.meter,
             max_tokens=settings.llm_max_tokens,
             sends_store=llm_model.startswith("openai:"),
+            final_only=settings.agent_max_model_calls == 1,
         )
         self.middleware: list[Any] = [self.redaction, self.budget]
 

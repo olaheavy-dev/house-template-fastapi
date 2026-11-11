@@ -118,6 +118,9 @@ class ScriptedBase(BaseChatClient[Any]):
             self.seen_options.append(dict(options))
             item = self.script.pop(0)
             if isinstance(item, ChatResponse):  # a test that needs tool calls or other contents
+                if options.get("tool_choice") == "none":
+                    # Like a provider told to offer no tools: it answers in text.
+                    return ChatResponse(messages=[Message("assistant", ["done"])])
                 return item
             if isinstance(item, Failure):
                 raise error_of(item)

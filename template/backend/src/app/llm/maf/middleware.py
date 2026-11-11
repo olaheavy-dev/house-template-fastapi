@@ -93,6 +93,13 @@ ALLOWED_OPTIONS = frozenset(
         "response_format",
         "service_tier",
         "store",
+        # Reasoning settings carry no free text and need no provider-side history: OpenAI's
+        # `reasoning` and `verbosity`, and Anthropic's `thinking` (its budget must be under
+        # max_tokens, which also bounds the thinking tokens in the reservation). Anthropic's
+        # `top_k` is not here: MAF's Anthropic client drops it.
+        "reasoning",
+        "verbosity",
+        "thinking",
     }
 )
 
@@ -216,9 +223,15 @@ class BudgetMiddleware(ChatMiddleware):
     """Reserves before each call of the client it is attached to and settles after it, through its
     Meter. `max_tokens` is the gateway's output limit (LLM_MAX_TOKENS)."""
 
-    def __init__(self, meter: Meter, *, max_tokens: int, sends_store: bool) -> None:
+    def __init__(
+        self, meter: Meter, *, max_tokens: int, sends_store: bool, final_only: bool = False
+    ) -> None:
         self.meter = meter
         self.max_tokens = max_tokens
+        # AGENT_MAX_MODEL_CALLS=1: the only call is the final one, so no tools are offered on any
+        # call (`tool_choice="none"`). MAF's tool loop would otherwise make a second call after
+        # a tool round, which is two model calls where the limit says one.
+        self.final_only = final_only
         # Whether the provider's API has a `store` option to send False in: OpenAI's Responses API
         # does (and stores by default); Anthropic's Messages API stores nothing and its SDK refuses
         # the keyword.
@@ -246,6 +259,15 @@ class BudgetMiddleware(ChatMiddleware):
         limit = options.get("max_tokens")
         if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
             options["max_tokens"] = self.max_tokens
+        if self.final_only:
+            options["tool_choice"] = "none"
+        thinking = options.get("thinking")
+        if isinstance(thinking, Mapping):
+            budget = thinking.get("budget_tokens")
+            if isinstance(budget, int) and budget >= options["max_tokens"]:
+                raise OptionNotAllowed(
+                    "thinking budget_tokens must be below max_tokens (the provider rejects it)"
+                )
         if self.sends_store:
             options["store"] = False
         else:

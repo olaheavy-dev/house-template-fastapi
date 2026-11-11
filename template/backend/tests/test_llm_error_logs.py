@@ -4,6 +4,7 @@ LangChain exceptions only, so it runs unchanged before and after the move."""
 
 from __future__ import annotations
 
+import re
 from collections.abc import MutableMapping
 from typing import Any
 
@@ -75,7 +76,10 @@ async def test_an_unmapped_failure_logs_an_error_with_the_exception_and_no_statu
 ) -> None:
     # The type names of the exception the route raised and of its causes: never a traceback, whose
     # messages can hold the provider's text.
-    assert await logged(app, client, error) == [
+    entries = await logged(app, client, error)
+    # Where it was raised is logged as file:line, whatever the line (the test file moves).
+    assert all(re.fullmatch(r"[\w.]+\.py:\d+", where) for e in entries for where in e.pop("where"))
+    assert entries == [
         {
             "event": "llm_error",
             "log_level": "error",

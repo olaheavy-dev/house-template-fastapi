@@ -162,7 +162,9 @@ async def test_an_invalid_request_is_a_plain_500_logged_as_an_error(
         "status": 500,
         "instance": "/bug",
     }
-    assert [e for e in logs if e["event"] == "llm_error"] == [
+    entries = [e for e in logs if e["event"] == "llm_error"]
+    assert [w.split(":")[0] for e in entries for w in e.pop("where")] == ["test_llm_core_errors.py"]
+    assert entries == [
         {
             "event": "llm_error",
             "log_level": "error",
@@ -189,6 +191,8 @@ async def test_a_bug_logs_the_type_names_of_the_chain_never_the_text_in_it(
         await client.get("/bug2")
     [entry] = [e for e in logs if e["event"] == "llm_error"]
     assert entry["chain"] == ["ProviderError", "RuntimeError"]
+    # Where each was raised (file only here: the line moves), and no text from the chain.
+    assert [w.split(":")[0] for w in entry["where"]] == ["test_llm_core_errors.py"] * 2
     assert "SECRET" not in repr(logs)
 
 

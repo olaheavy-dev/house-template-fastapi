@@ -195,14 +195,15 @@ async def test_a_long_tool_description_and_a_long_schema_are_reserved_for_in_ful
     plain = await reserved(gateway, db_session)
     with_tool = await reserved(gateway, db_session, tools=[long_tool()])
     with_schema = await reserved(gateway, db_session, response_format=Contact)
-    # At least a micro-USD per two bytes of input at the dearest input rate ($4 per million).
-    assert with_tool - plain >= 50_000 * 4 // 1
-    assert with_schema - plain >= 40_000 * 4 // 1
+    # The reservation prices every input token at max(input, longer cache write) = $4 per million
+    # for this model: 4 micro-USD per byte-token, so 50,000 bytes reserve at least 200,000.
+    assert with_tool - plain >= 50_000 * 4
+    assert with_schema - plain >= 40_000 * 4
     # A schema given as a dict is sized as given.
     as_dict = await reserved(
         gateway, db_session, response_format={"type": "object", "description": "s" * 30_000}
     )
-    assert as_dict - plain >= 30_000 * 4 // 1
+    assert as_dict - plain >= 30_000 * 4
 
 
 async def test_a_prompt_that_only_its_tools_make_too_long_is_refused(
@@ -226,7 +227,7 @@ async def test_a_prompt_that_only_its_tools_make_too_long_is_refused(
 # --- the tool loop's limit ------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(("limit", "calls"), [(3, 3), (2, 2), (5, 5)])
+@pytest.mark.parametrize(("limit", "calls"), [(1, 1), (2, 2), (3, 3), (5, 5)])
 async def test_agent_max_model_calls_caps_the_tool_loop_of_the_client(
     make: Any, db_session: AsyncSession, limit: int, calls: int
 ) -> None:
@@ -245,7 +246,15 @@ async def test_agent_max_model_calls_caps_the_tool_loop_of_the_client(
 
     HARNESS.install_scripted(gateway, [asks_for_a_tool(n) for n in range(30)] + [Reply("done")])
     await gateway.client().get_response([Message("user", ["go"])], options={"tools": [tool]})
-    assert len(await rows(db_session)) == calls  # N model calls, the last made without tools
+    assert len(await rows(db_session)) == calls  # exactly N model calls (decision 0003)
+    client = gateway._client
+    assert isinstance(client, ScriptedClient)
+    choices = [options.get("tool_choice") for options in client.seen_options]
+    # The last call is made with tool_choice "none" (MAF's own final call); at a limit of 1 the
+    # only call is that one, so no tools are offered on any call.
+    assert choices[-1] == "none"
+    assert choices[:-1] == [None] * (calls - 1)
+    assert len(ran) == calls - 1
 
 
 # --- a cancelled call ------------------------------------------------------------------------
@@ -277,3 +286,81 @@ async def test_a_cancelled_call_stays_reserved_and_the_meter_forgets_it(
     # expire_stale closes it, and the meter no longer tracks it.
     assert row.status == "reserved"
     assert gateway.meter._started == {}
+
+
+# --- the tool loop's limit on the gateway's real clients -------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    [("openai:gpt-6-luna", "openai"), ("anthropic:claude-haiku-5-5", "anthropic")],
+)
+@pytest.mark.parametrize(("limit", "iterations"), [(1, 1), (2, 1), (3, 2), (13, 12)])
+async def test_the_real_clients_carry_the_tool_loop_limit(
+    make: Any, model: str, provider: str, limit: int, iterations: int
+) -> None:
+    gateway = make(model, FakeProviderHttp(provider).client, agent_max_model_calls=limit)
+    client = gateway._client
+    assert client is not None
+    assert client.function_invocation_configuration["max_iterations"] == iterations
+    assert gateway.budget.final_only is (limit == 1)
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic"])
+async def test_with_a_limit_of_one_the_real_client_sends_tool_choice_none(
+    make: Any, provider: str
+) -> None:
+    fake = FakeProviderHttp(provider)
+    model = "openai:gpt-6-luna" if provider == "openai" else "anthropic:claude-haiku-5-5"
+    gateway = make(model, fake.client, agent_max_model_calls=1)
+    tool = FunctionTool(name="lookup", description="d", func=lambda name: name)
+    await gateway.client().get_response([Message("user", ["go"])], options={"tools": [tool]})
+    [body] = fake.bodies
+    choice = body["tool_choice"]
+    assert choice == "none" or choice == {"type": "none"}, choice
+
+
+# --- reasoning options -------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("provider", "option"),
+    [
+        ("openai", {"reasoning": {"effort": "low"}}),
+        ("openai", {"verbosity": "low"}),
+        ("anthropic", {"thinking": {"type": "enabled", "budget_tokens": 1_024}}),
+    ],
+)
+async def test_reasoning_options_pass_for_the_provider_that_has_them(
+    make: Any, provider: str, option: dict[str, Any]
+) -> None:
+    fake = FakeProviderHttp(provider)
+    model = "openai:gpt-6-luna" if provider == "openai" else "anthropic:claude-haiku-5-5"
+    gateway = make(model, fake.client, llm_max_tokens=2_000)
+    await gateway.client().get_response([Message("user", ["hi"])], options=option)
+    assert len(fake.attempts) == 1
+    [value] = option.values()
+    assert str(value) in str(fake.bodies[0]).replace('"', "'")
+
+
+async def test_a_thinking_budget_the_provider_rejects_is_refused_and_thinking_stays_in_bound(
+    make: Any, db_session: AsyncSession
+) -> None:
+    fake = FakeProviderHttp("anthropic")
+    gateway = make("anthropic:claude-haiku-5-5", fake.client, llm_max_tokens=2_000)
+    for budget in (2_000, 5_000):
+        with pytest.raises(OptionNotAllowed, match="budget_tokens"):
+            await gateway.client().get_response(
+                [Message("user", ["hi"])],
+                options={"thinking": {"type": "enabled", "budget_tokens": budget}},
+            )
+    assert fake.attempts == []
+    # A budget under max_tokens passes, and the reservation covers max_tokens (thinking counts
+    # toward it), not max_tokens plus the budget.
+    await gateway.client().get_response(
+        [Message("user", ["hi"])],
+        options={"thinking": {"type": "enabled", "budget_tokens": 1_500}},
+    )
+    await gateway.client().get_response([Message("user", ["hi"])])
+    with_thinking, without = [row.reserved_micro_usd for row in await rows(db_session)]
+    assert abs(with_thinking - without) < 200  # the option's few bytes, not 1,500 tokens
