@@ -813,20 +813,25 @@ def test_updating_a_v0_7_1_project_with_defaults_records_the_llm_answer_and_dele
 
 
 @pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
-@pytest.mark.parametrize("database", [True, False], ids=["database-on", "database-off"])
+@pytest.mark.parametrize(
+    ("database", "llm"),
+    [(True, "langchain"), (True, "none"), (False, "none")],
+    ids=["database-langchain", "database-llm-none", "no-database"],
+)
 def test_updating_a_v0_8_0_project_with_defaults_deletes_nothing_and_adds_migration_0006(
-    tmp_path, database
+    tmp_path, database, llm
 ):
     # README "Upgrading to 0.9.0": `copier update --defaults`, then `make migrate` for the new
-    # revision 0006. v0.8.0 already records `llm`, so the answers file does not change, nothing is
-    # deleted, the user's file stays, and the project equals a fresh render at HEAD (its own
-    # lockfile aside: the user runs `make lock`). Goes when the README stops supporting 0.8.x.
-    dst = committed_baseline_project(tmp_path / "project", "v0.8.0", database=database)
-    llm = "langchain" if database else "none"
+    # revision 0006 (an empty one with `llm: none`, which keeps its place in the chain). v0.8.0
+    # already records `llm`, so the answers file does not change, nothing is deleted, the user's
+    # file stays, and the project equals a fresh render at HEAD (its own lockfile aside: the user
+    # runs `make lock`). Goes when the README stops supporting 0.8.x.
+    dst = committed_baseline_project(tmp_path / "project", "v0.8.0", database=database, llm=llm)
     assert yaml.safe_load((dst / ANSWERS_FILE).read_text())["llm"] == llm
     before = tracked(dst)
     lock = (dst / "backend" / "uv.lock").read_bytes()
     migration = "backend/migrations/versions/20261110_0006_llm_call_redacted_count.py"
+    assert migration not in before, "revision 0006 is new in 0.9.0"
 
     update_to_head(dst)
 
@@ -837,7 +842,7 @@ def test_updating_a_v0_8_0_project_with_defaults_deletes_nothing_and_adds_migrat
     assert (dst / "backend" / "user_added.txt").read_text() == "mine\n"
     assert not list(dst.rglob("*.rej"))
     assert [p for p, data in after.items() if b"<<<<<<<" in data] == []
-    fresh = files_of(render_at(tmp_path / "fresh", "HEAD", database=database))
+    fresh = files_of(render_at(tmp_path / "fresh", "HEAD", database=database, llm=llm))
     after.pop("backend/user_added.txt")
     assert after.pop("backend/uv.lock") == lock
     fresh.pop("backend/uv.lock")

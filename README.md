@@ -62,7 +62,7 @@ Projects made from v0.6.1 or earlier cannot `copier update` (their old version r
 
 ## Upgrading to 0.9.0 (personal-data redaction, #78)
 
-In order: 1. commit everything; 2. `copier update --trust --defaults -a .copier-answers.fastapi.yml`; 3. `make lock && make install`; 4. `make migrate` (new revision 0006); 5. `make check`. This part is for projects with `llm: langchain`; with `llm: none` the only change is an empty revision 0006 that keeps its place in the chain.
+In order: 1. commit everything; 2. `copier update --trust --defaults -a .copier-answers.fastapi.yml`; 3. `make lock && make install`; 4. `make migrate` (new revision 0006); 5. `make check`. This part is for projects with `llm: langchain`; with `llm: none` and the database, the changes are an empty revision 0006 (it keeps its place in the chain), the agent rules file and the template-owned list; without the database, nothing changes.
 
 **Breaking (`feat!`).** `gateway.model()` now returns a `RedactingChatModel` (`app/llm/langchain/redaction.py`), a chat model of its own around the provider's, with redaction on by default, and the text `gateway.embeddings()` sends is cleaned the same way (item 7). Decision [0006](docs/decisions/0006-personal-data-redaction-in-the-core.md) has the design and the sources.
 
