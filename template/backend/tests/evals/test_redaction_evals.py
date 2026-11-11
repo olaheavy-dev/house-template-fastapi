@@ -135,3 +135,53 @@ async def test_redaction_leak_corpus(short_gateway: Gateway, tmp_path: Path) -> 
     assert len(sent) >= len(LEAK_CORPUS)
     assert leaked == []
     assert PLACEHOLDER.search(wire_text) is not None  # placeholders really went instead
+
+
+# Five synthetic chunks, two of them from people with the same kind of details: once cleaned, those
+# two read the same apart from the problem they describe, so only the rest of the text can pick one.
+CHUNKS = (
+    "Tenant Priya Shah (priya.shah@example.com, 07700 900123) reports a dripping kitchen tap. The "
+    "landlord has booked a plumber for Thursday.",
+    "The tenancy deposit of five weeks' rent is protected in a government-approved scheme within "
+    "30 days of payment.",
+    "The boiler was serviced in October and the gas safety certificate is valid for twelve months.",
+    "Tenant Sam Okafor (sam.okafor@example.com, 07700 900456) asks to end the contract early. The "
+    "break clause allows this after six months with two months' notice.",
+    "Council tax band D. Broadband up to 900 Mbps. One parking space is included with the flat.",
+)
+# (a question, the index of the chunk that answers it)
+QUESTIONS = (
+    ("What did Priya Shah (priya.shah@example.com) report about the kitchen tap?", 0),
+    ("Sam Okafor wants to leave early: what does the break clause say?", 3),
+    ("Is my deposit protected, and how soon?", 1),
+    ("When does the gas safety certificate run out?", 2),
+)
+
+
+def cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    norms: float = sum(x * x for x in a) ** 0.5 * sum(y * y for y in b) ** 0.5
+    return float(dot / norms)
+
+
+@pytest.mark.langsmith
+async def test_redacted_embeddings_still_find_the_right_chunk(gateway: Gateway) -> None:
+    # Documents and questions are embedded under the same scope, as the docs say to. The vectors
+    # are of the cleaned text (no name, email or phone), and the right chunk must still rank first
+    # for every question.
+    embeddings = gateway.embeddings()
+    scope = {"NAME": ["Priya Shah", "Sam Okafor"]}
+    with capture_logs():
+        async with redaction_scope(known=scope):
+            documents = await embeddings.aembed_documents(list(CHUNKS), feature="eval")
+            questions = [
+                await embeddings.aembed_query(question, feature="eval") for question, _ in QUESTIONS
+            ]
+    first = [
+        max(range(len(CHUNKS)), key=lambda i: cosine(vector, documents[i])) for vector in questions
+    ]
+    t.log_inputs({"chunks": len(CHUNKS), "questions": len(QUESTIONS)})
+    t.log_outputs({"first_ranked": first})
+    right = sum(found == want for found, (_, want) in zip(first, QUESTIONS, strict=True))
+    t.log_feedback(key="questions_answered_first", score=right)
+    assert first == [want for _, want in QUESTIONS]
