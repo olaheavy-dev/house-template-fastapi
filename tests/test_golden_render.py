@@ -95,6 +95,10 @@ INTENDED: dict[str, str] = {
         "new: the recorded call of the wire test, redacted body only (#78)",
     "backend/tests/conftest.py":
         "restores the process-wide LangSmith client after each test (#78)",
+    "backend/tests/test_llm_redaction_fields.py":
+        "new: field names as context and JSON text decoded before matching (#78)",
+    "backend/tests/test_llm_steps.py":
+        "the llm_call rows of the step tests sort deterministically (#78)",
     "backend/tests/test_llm_redaction_context.py":
         "new: the caller's context reaches the inner run on streamed calls (#78)",
     "backend/tests/test_llm_redaction_corpus.py":
