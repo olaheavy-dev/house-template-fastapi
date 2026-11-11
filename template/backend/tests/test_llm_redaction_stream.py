@@ -369,9 +369,12 @@ def test_additional_kwargs_fragments_are_restored_and_reasoning_is_left_alone() 
     out = [restorers.chunk(c).additional_kwargs for c in chunks]
     assert "".join(k.get("refusal", "") for k in out) == f"No, {TRICKY}."
     assert out[0]["reasoning"] == reasoning
-    function = "".join(k.get("function_call", {}).get("arguments", "") for k in out)
+    # Argument strings are held until the stream ends (#102), then restored whole, in one chunk.
+    assert all(k.get("function_call", {}).get("arguments", "") == "" for k in out)
+    tails = [t.additional_kwargs for t in restorers.flush()]
+    function = "".join(k["function_call"]["arguments"] for k in tails if "function_call" in k)
     assert json.loads(function) == {"who": TRICKY}
-    calls = "".join(c["function"]["arguments"] for k in out for c in k.get("tool_calls", []))
+    calls = "".join(c["function"]["arguments"] for k in tails for c in k.get("tool_calls", []))
     assert json.loads(calls) == {"m": EMAIL}
     assert restorers.flush() == []
 
