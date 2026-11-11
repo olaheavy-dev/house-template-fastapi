@@ -26,6 +26,7 @@ from pydantic import Field
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.llm.core.budget import Meter
+from app.llm.core.redaction import Redactor
 from app.llm.langchain.gateway import Gateway
 from app.settings import Settings
 from tests.harness import Failure, FakeEmbeddingsApi, Message, Reply
@@ -154,6 +155,11 @@ class LangChainHarness:
 
     def install_embeddings(self, gateway: Gateway, api: FakeEmbeddingsApi) -> None:
         gateway.embeddings()._client = SimpleNamespace(embeddings=api)
+
+    def set_redactor(self, gateway: Gateway, redactor: Redactor | None) -> None:
+        gateway.redactor = redactor
+        gateway.embeddings()._redactor = redactor
+        gateway._wrapped = None  # the chat model is wrapped again with the new redactor
 
     def embedding_meter(self, gateway: Gateway) -> Meter:
         return gateway.embeddings().meter
