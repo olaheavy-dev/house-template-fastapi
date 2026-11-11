@@ -16,10 +16,14 @@ The tests use the default detectors in app/llm/redaction_rules.py, the project's
 
 from __future__ import annotations
 
+import ast
 import random
 import re
+import subprocess
+import sys
 import time
 from collections.abc import Iterable
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
@@ -980,3 +984,44 @@ def test_an_unknown_kind_is_refused_naming_it_and_the_available_kinds() -> None:
     # Kinds are matched exactly: lower case is not a kind.
     with pytest.raises(ValueError, match="email"):
         choose_detectors(DETECTORS, "email")
+
+
+# --- the neutral walkers and restorer import no framework (redaction_data.py) ---------------------
+
+
+def test_the_neutral_redaction_walkers_import_only_stdlib_pydantic_and_the_core() -> None:
+    from app.llm.core import redaction_data
+
+    tree = ast.parse(Path(redaction_data.__file__).read_text(encoding="utf-8"))
+    roots: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            roots.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            assert node.level == 0
+            roots.add((node.module or "").split(".")[0])
+    allowed = set(sys.stdlib_module_names) | {"pydantic", "app"}
+    assert roots <= allowed, roots - allowed
+
+
+def test_importing_the_neutral_redaction_walkers_loads_no_framework() -> None:
+    # A fresh interpreter: the test process has LangChain loaded already.
+    frameworks = (
+        "langchain",
+        "langchain_core",
+        "langchain_openai",
+        "langchain_anthropic",
+        "langgraph",
+        "langsmith",
+        "openai",
+        "anthropic",
+        "agent_framework",
+    )
+    code = (
+        "import sys, app.llm.core.redaction_data\n"
+        f"print(sorted(m for m in sys.modules if m.split('.')[0] in {frameworks!r}))"
+    )
+    result = subprocess.run(  # noqa: S603 - this interpreter, running code written above
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True
+    )
+    assert result.stdout.strip() == "[]"

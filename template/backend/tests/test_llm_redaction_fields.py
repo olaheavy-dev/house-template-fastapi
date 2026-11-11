@@ -527,11 +527,11 @@ def test_keys_that_hold_nothing_personal_stay_byte_for_byte() -> None:
 def test_rewriting_json_text_with_many_changed_strings_is_fast() -> None:
     import time
 
-    from app.llm.langchain.redaction import _walk_text
+    from app.llm.core.redaction_data import walk_text
 
     text = json.dumps([f"value {n} " + "x" * 70 for n in range(32_000)])  # about 3 MB
     started = time.perf_counter()
-    out = _walk_text(text, lambda value, _context: value.upper())
+    out = walk_text(text, lambda value, _context: value.upper())
     took = time.perf_counter() - started
     assert json.loads(out)[31_999].startswith("VALUE 31999")
     assert took < 1.0, took  # the old rewrite, one slice per edit, took seconds
