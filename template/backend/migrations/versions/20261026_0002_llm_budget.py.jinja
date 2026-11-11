@@ -1,4 +1,4 @@
-{% if llm == 'langchain' %}"""Model budget: daily spend and one row per model call
+{% if llm != 'none' %}"""Model budget: daily spend and one row per model call
 
 The tables are new, so no existing rows are affected. Downgrading drops the spend history.
 

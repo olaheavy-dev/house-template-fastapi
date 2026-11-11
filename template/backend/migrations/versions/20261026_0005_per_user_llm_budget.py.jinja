@@ -1,4 +1,4 @@
-{% if llm == 'langchain' %}"""Per-user model budget: each user's reserved plus settled spend per UTC day
+{% if llm != 'none' %}"""Per-user model budget: each user's reserved plus settled spend per UTC day
 
 A new table, so no existing rows are affected; llm_call.user_reserved is false for calls made
 before it (none of them reserved against a user's cap). Rows appear only for calls tagged with a

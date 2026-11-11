@@ -38,8 +38,10 @@ def downgrade() -> None:
         op.drop_table(table)
 {% else %}"""Agent checkpoints (not used here)
 
-This project has no model code, so this revision does nothing. It keeps its place in the
-chain, so a project that adds model code later (or ran it before) follows the same history.
+{% if llm == 'maf' %}This project's framework (MAF) keeps no LangGraph checkpoint tables, so this
+revision does nothing. It keeps its place in the chain, so a project that adds model code later
+(or ran it before) follows the same history.{% else %}This project has no model code, so this revision does nothing. It keeps its place in the
+chain, so a project that adds model code later (or ran it before) follows the same history.{% endif %}
 
 Revision ID: 0003
 Revises: 0002

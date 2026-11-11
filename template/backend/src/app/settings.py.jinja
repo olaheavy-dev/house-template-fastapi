@@ -8,9 +8,9 @@ with a safe value.
 from __future__ import annotations
 
 import os
-{% if llm == 'langchain' %}from decimal import Decimal
+{% if llm != 'none' %}from decimal import Decimal
 {% endif %}from functools import lru_cache
-from typing import {% if llm == 'langchain' %}Any, {% endif %}Literal
+from typing import {% if llm != 'none' %}Any, {% endif %}Literal
 
 from pydantic import Field{% if database or storage %}, SecretStr, model_validator{% endif %}
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -29,8 +29,12 @@ LOCAL_STORAGE_SECRET = "app-storage-secret"  # noqa: S105 - the local RustFS's, 
 class Settings(BaseSettings):
     # ENV_FILE="" turns the file off: the tests set it before any app code loads, so a
     # developer's backend/.env (real keys included) never reaches them.
+    # hide_input_in_errors: a validation error must never echo the raw input, which may hold a key.
     model_config = SettingsConfigDict(
-        env_file=os.environ.get("ENV_FILE", ".env") or None, extra="ignore", frozen=True
+        env_file=os.environ.get("ENV_FILE", ".env") or None,
+        extra="ignore",
+        frozen=True,
+        hide_input_in_errors=True,
     )
 
     app_env: Literal["local", "test", "production"] = "local"
@@ -101,7 +105,7 @@ class Settings(BaseSettings):
         }
     )
 {%- endif %}
-{%- if llm == 'langchain' %}
+{%- if llm != 'none' %}
 
     # The model the gateway calls, "provider:model id", with its prices in app/llm/prices.py. No
     # default: models and prices change, so you choose one. Unset, the gateway refuses to start with
@@ -130,6 +134,7 @@ class Settings(BaseSettings):
     # model writes a final answer (app/llm/core/steps.py). The old AGENT_MAX_STEPS counted
     # LangGraph steps: its default of 25 allowed 13 calls.
     agent_max_model_calls: int = Field(default=13, gt=0)
+{%- if llm == 'langchain' %}
     # Connections for agent checkpoints (LangGraph), opened only while agents run.
     agent_pool_size: int = Field(default=4, gt=0)
 
@@ -143,11 +148,13 @@ class Settings(BaseSettings):
     # Leave prompts and answers out of traces when they may hold personal data.
     langsmith_hide_inputs: bool = False
     langsmith_hide_outputs: bool = False
+{%- endif %}
     # Personal-data redaction (#78, docs/decisions/0006): before a request goes to the model
     # provider, contact, bank and ID numbers in common formats and the values the app names
     # (`redaction_scope`) are replaced by placeholders, and put back in the answer. Not complete,
-    # and not anonymisation. "off" sends text as it is and records no count. With it on, LangSmith
-    # traces are masked the same way, and the text sent for embeddings is cleaned one way.
+    # and not anonymisation. "off" sends text as it is and records no count.{% if llm == 'langchain' %} With it on, LangSmith
+    # traces are masked the same way, and the text sent for embeddings is cleaned one way.{% else %} With it on, the text
+    # sent for embeddings is cleaned one way.{% endif %}
     llm_redaction: Literal["on", "off"] = "on"
     # The detector kinds to run, from app/llm/redaction_rules.py (comma separated). A name no
     # detector has stops the app starting.
@@ -155,7 +162,7 @@ class Settings(BaseSettings):
 {%- endif %}
 {%- if database or storage %}
 
-{%- if llm == 'langchain' %}
+{%- if llm != 'none' %}
 
     @model_validator(mode="before")
     @classmethod

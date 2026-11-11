@@ -1,4 +1,4 @@
-{% if llm == 'langchain' %}"""The product's tables. Import every model module here: Alembic's autogenerate reads Base.metadata
+{% if llm != 'none' %}"""The product's tables. Import every model module here: Alembic's autogenerate reads Base.metadata
 after importing this module, so a model it can't see gets no migration.
 
     class Course(Base):

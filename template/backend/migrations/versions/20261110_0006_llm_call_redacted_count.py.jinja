@@ -1,4 +1,4 @@
-{% if llm == 'langchain' %}"""Redaction count: how many values personal-data redaction replaced in each model call (#78)
+{% if llm != 'none' %}"""Redaction count: how many values personal-data redaction replaced in each model call (#78)
 
 One new nullable column. Calls recorded before it keep NULL, which also means "redaction was
 off"; 0 means redaction ran and found nothing. It is a count, never a value. Downgrading drops

@@ -38,6 +38,16 @@ langchain = [
     "langgraph-checkpoint-postgres>=3.2.0",
     "langsmith>=0.14.12",
 ]
+# Microsoft Agent Framework (docs/decisions/0002). Pinned exactly and moved together by hand: the
+# Anthropic package is a beta whose releases need a matching core, and Dependabot never merges
+# these (`.github/dependabot.yml` groups them for review). msgspec comes in with the framework.
+# Cannot be installed with `langchain` (see [tool.uv] conflicts below).
+maf = [
+    "agent-framework-anthropic==1.0.0b261106",
+    "agent-framework-core==1.25.0",
+    "agent-framework-openai==1.18.1",
+    "msgspec==0.22.0",
+]
 storage = [
     "boto3>=1.43.118",
 ]
@@ -58,6 +68,11 @@ dev = [
     # 8.2 added httpx2, which the openai and anthropic SDKs use; 9.2 adds filter_sensitive_data.
     "vcrpy>=9.2.0",
 ]
+
+[tool.uv]
+# One lockfile holds both frameworks, but a project installs one: `llm: langchain` or `llm: maf`.
+# `uv sync --extra langchain --extra maf` (or --all-extras) is refused.
+conflicts = [[{ extra = "langchain" }, { extra = "maf" }]]
 
 [build-system]
 requires = ["uv_build>=0.11,<0.14"]

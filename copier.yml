@@ -59,13 +59,59 @@ _exclude:
   - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/tests/recording.py{% endif %}"
   - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/tests/test_llm_*.py{% endif %}"
   - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/tests/harness{% endif %}"
-  # Each framework's test harness exists only with that framework (tests/harness/__init__.py is the
-  # shared protocol).
+  # Each framework's adapter, harness and tests exist only with that framework (tests/harness/
+  # __init__.py is the shared protocol; the app/llm core and the shared tests are the same for both).
+  # `llm is defined` as above. The list of LangChain's own test files is LANGCHAIN_ONLY in this
+  # repository's tests/test_parity_guards.py, which checks it against these patterns.
+  - "{% if llm is defined and llm != 'langchain' %}backend/src/app/llm/langchain{% endif %}"
+  - "{% if llm is defined and llm != 'maf' %}backend/src/app/llm/maf{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/src/app/llm/checkpoint_types.py{% endif %}"
   - "{% if llm is defined and llm != 'langchain' %}backend/tests/harness/langchain.py{% endif %}"
+  - "{% if llm is defined and llm != 'maf' %}backend/tests/harness/maf.py{% endif %}"
+  - "{% if llm is defined and llm != 'maf' %}backend/tests/test_llm_maf_*.py{% endif %}"
+  - "{% if llm is defined and llm != 'maf' %}backend/tests/maf_*.py{% endif %}"
+  - "{% if llm is defined and llm != 'maf' %}backend/tests/cassettes/test_llm_maf_*{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/cassettes/test_llm_gateway{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/cassettes/test_llm_redaction_wire{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_agents.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_budget.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_checkpoints.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_core_prompts.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_cost_pins.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_embeddings.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_error_logs.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_fakes.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_gateway.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_langchain_callbacks.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_langchain_embeddings.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_langchain_errors.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_ledger.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_migrations.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_prices.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_redaction_agents.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_redaction_context.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_redaction_corpus.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_redaction_embeddings.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_redaction_fields.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_redaction_ledger.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_redaction_logs.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_redaction_model.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_redaction_observability.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_redaction_restore.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_redaction_stream.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_redaction_structured.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_redaction_tools.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_redaction_traces.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_redaction_wire.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_report_cli.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_settings.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_steps.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_surface.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_usage.py{% endif %}"
   - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/tests/test_recording_keys.py{% endif %}"
-  - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/tests/test_observability.py{% endif %}"
-  - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/tests/wire.py{% endif %}"
-  - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/tests/evals{% endif %}"
+  - "{% if (database is defined and not database) or (llm is defined and llm != 'langchain') %}backend/tests/test_observability.py{% endif %}"
+  - "{% if (database is defined and not database) or (llm is defined and llm != 'langchain') %}backend/tests/wire.py{% endif %}"
+  - "{% if (database is defined and not database) or (llm is defined and llm != 'langchain') %}backend/tests/evals{% endif %}"
   - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/tests/cassettes{% endif %}"
   # storage: false removes the S3-compatible object storage. `is defined`: `copier update` also
   # renders these patterns for the OLD copy of a project made before the question existed, whose
@@ -134,7 +180,9 @@ llm:
   type: str
   help: >-
     The model gateway. none leaves it out; langchain is LangChain and LangGraph with the daily
-    budget, prompts and agent checkpoints in PostgreSQL (needs database: true)
+    budget, prompts and agent checkpoints in PostgreSQL; maf is Microsoft Agent Framework with the
+    same daily budget, prompts and personal-data redaction (both need database: true; a project
+    installs one framework, never both)
   choices:
     "none (no model gateway)": "none"
     "langchain (LangChain and LangGraph; needs the database)":
@@ -142,6 +190,11 @@ llm:
       validator: >-
         {% if not database %}langchain needs database: true (the gateway keeps its budget and
         agent checkpoints in PostgreSQL). Answer database=true, or llm=none{% endif %}
+    "maf (Microsoft Agent Framework; needs the database)":
+      value: maf
+      validator: >-
+        {% if not database %}maf needs database: true (the gateway keeps its budget in
+        PostgreSQL). Answer database=true, or llm=none{% endif %}
   default: "{{ 'langchain' if database else 'none' }}"
 
 storage:
