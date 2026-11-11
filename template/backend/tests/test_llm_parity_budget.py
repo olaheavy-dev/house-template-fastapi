@@ -149,16 +149,22 @@ async def test_a_call_without_usage_keeps_its_reservation(
 async def test_a_larger_bound_limit_is_reserved_for(
     framework: Harness, gateway: Any, db_session: AsyncSession
 ) -> None:
-    # The cap is set from what a plain call reserves (plus one micro-USD of room), so the only
-    # difference between the two asks is the bound: the plain one fits, the 5,000-token one must
-    # not slip through. It cannot go vacuous if the input bound changes.
+    # Before each ask the cap is set to what is already spent plus what a plain call reserves
+    # (plus one micro-USD of room), so the only difference between the asks is the bound: the
+    # plain one fits, the 5,000-token one must not slip through. It cannot go vacuous if the
+    # input bound changes, and the control call's own spend is counted before the final ask.
     framework.install_scripted(gateway, [ANSWER, ANSWER, ANSWER])
     await framework.ask(gateway, QUESTION)
     [probe] = await calls(db_session)
-    settled = await committed(db_session)
-    assert settled is not None
-    framework.meter(gateway).cap = settled + probe.reserved_micro_usd + 1
+
+    async def room_for_one_plain_call() -> None:
+        spent = await committed(db_session)
+        assert spent is not None
+        framework.meter(gateway).cap = spent + probe.reserved_micro_usd + 1
+
+    await room_for_one_plain_call()
     await framework.ask(gateway, QUESTION)  # control: the same ask without options is allowed
+    await room_for_one_plain_call()
     with pytest.raises(BudgetExhausted):
         await framework.ask(
             gateway, QUESTION, options=framework.params_for_tools(max_output_tokens=5_000)
