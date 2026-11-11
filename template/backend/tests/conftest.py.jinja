@@ -54,7 +54,7 @@ def anyio_backend() -> str:
 {% if llm != 'none' %}
 
 def is_eval_run() -> bool:
-    """{% if llm == 'langchain' %}`make eval` (LLM_EVAL=1){% else %}LLM_EVAL=1 (LangChain's `make eval`; this project has no evals){% endif %}: the evals call the project's own model, so they follow the
+    """{% if llm == 'langchain' %}`make eval` (LLM_EVAL=1): the evals call the project's own model, so they follow the{% else %}LLM_EVAL=1 (LangChain's evals; this project has none): they follow the{% endif %}
     LLM_MODEL and EMBEDDING_MODEL it set (shell or backend/.env). `make check` unsets LLM_EVAL, so
     a shell that exports it cannot turn the normal tests live. Recording does not follow them: it
     uses the models pinned in tests/models.py, so replay keeps matching what was recorded."""

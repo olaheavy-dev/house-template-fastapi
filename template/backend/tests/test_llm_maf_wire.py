@@ -213,7 +213,7 @@ async def test_a_structured_answer_is_restored_in_its_text_and_in_its_value(
     assert EMAIL not in str(fake.bodies)
     assert json.loads(response.text) == {"email": EMAIL}
     value = response.value
-    assert (value.email if isinstance(value, BaseModel) else value["email"]) == EMAIL
+    assert (getattr(value, "email", None) or value["email"]) == EMAIL
 
 
 def test_the_response_attributes_the_value_fix_resets_exist_in_the_pinned_core() -> None:

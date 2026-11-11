@@ -70,7 +70,7 @@ async def rows(session: AsyncSession) -> list[LlmCall]:
 
 @chat_middleware
 async def adds_memory(context: ChatContext, call_next: Callable[[], Awaitable[None]]) -> None:
-    context.messages.append(Message("user", [f"memory: {EMAIL}"]))
+    context.messages = [*context.messages, Message("user", [f"memory: {EMAIL}"])]
     await call_next()
 
 
@@ -139,7 +139,7 @@ async def test_an_option_the_gateway_does_not_allow_is_refused_before_anything_i
     fake = FakeProviderHttp("openai")
     gateway = make("openai:gpt-6-luna", fake.client)
     with pytest.raises(OptionNotAllowed) as raised:
-        await gateway.client().get_response([Message("user", ["hi"])], options=option)  # type: ignore[arg-type]
+        await gateway.client().get_response([Message("user", ["hi"])], options=option)
     assert fake.attempts == []
     assert await rows(db_session) == []
     assert EMAIL not in str(raised.value)  # the name of the option, never its value
@@ -150,7 +150,7 @@ async def test_the_options_the_gateway_allows_pass_and_another_model_is_refused(
 ) -> None:
     gateway = make("openai:gpt-6-luna")
     for name, value in (("temperature", 0.2), ("top_p", 0.9), ("seed", 3), ("model", "gpt-6-luna")):
-        await gateway.client().get_response([Message("user", ["hi"])], options={name: value})  # type: ignore[arg-type]
+        await gateway.client().get_response([Message("user", ["hi"])], options={name: value})
     with pytest.raises(OptionNotAllowed):
         await gateway.client().get_response(
             [Message("user", ["hi"])], options={"model": "gpt-6.1-sol"}

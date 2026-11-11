@@ -29,7 +29,6 @@ from app.llm.core import prices as core_prices
 from app.llm.core.prices import Price, Rates
 from app.llm.core.usage import Usage
 
-
 cost = core_prices.cost
 ceiling = core_prices.ceiling
 token_details = core_prices.token_details
@@ -63,7 +62,9 @@ def usage(
     return neutral(input_tokens, output_tokens, input_details or {}, output_details or {})
 
 
-def neutral(input_tokens: int, output_tokens: int, given: dict[str, Any], out: dict[str, Any]) -> Usage:
+def neutral(
+    input_tokens: int, output_tokens: int, given: dict[str, Any], out: dict[str, Any]
+) -> Usage:
     """The neutral Usage a framework's adapter makes: a detail that is missing or None is 0. The
     keys are the ones LangChain's usage_metadata uses (the names these cases were written with),
     mapped by hand, so the cases hold for any framework's adapter."""

@@ -17,7 +17,9 @@ def usage(input_tokens: int, output_tokens: int, **details: Any) -> Usage:
     return neutral(input_tokens, output_tokens, details, {})
 
 
-def neutral(input_tokens: int, output_tokens: int, given: dict[str, Any], out: dict[str, Any]) -> Usage:
+def neutral(
+    input_tokens: int, output_tokens: int, given: dict[str, Any], out: dict[str, Any]
+) -> Usage:
     """The neutral Usage a framework's adapter makes: a detail that is missing or None is 0. The
     keys are the ones LangChain's usage_metadata uses (the names these cases were written with),
     mapped by hand, so the cases hold for any framework's adapter."""
