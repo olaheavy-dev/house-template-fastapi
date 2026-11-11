@@ -262,3 +262,21 @@ async def test_the_core_matches_a_known_value_written_as_json_escapes() -> None:
         )
     assert result.texts == ("a [ADDRESS_1] b",) * 3
     assert result.mapping == {"[ADDRESS_1]": ADDRESS}
+
+
+def test_a_match_that_starts_in_the_field_name_is_not_a_value_and_is_ignored() -> None:
+    from app.llm.core.redaction import RegexDetector
+
+    detector = RegexDetector("TOKEN", r"secret: \d+")
+    redactor = Redactor([detector])
+    # The pattern needs the field name AND the digits, so it begins in the context: not replaced.
+    assert redactor.redact(["1234"], contexts=["secret: "]).texts == ("1234",)
+    # The same text written in the value itself is a match inside the value.
+    assert redactor.redact(["secret: 1234"], contexts=[""]).texts == ("[TOKEN_1]",)
+
+
+def test_one_context_for_each_text_is_required() -> None:
+    from app.llm.core.redaction import RedactionFailed
+
+    with pytest.raises(RedactionFailed):
+        REDACTOR.redact(["a", "b"], contexts=["only one"])
