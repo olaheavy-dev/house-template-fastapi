@@ -43,9 +43,17 @@ updates:
       prefix: fix
       prefix-development: chore
       include: scope
+    # The Microsoft Agent Framework packages are pinned with == and move together, so Dependabot
+    # proposes them as one pull request (this group matches first), which is reviewed by hand and
+    # never merged as a small dependency update: read each package's release notes ([BREAKING]
+    # changes are marked there; the Anthropic package is a beta) and run `make check` on a project
+    # rendered with `llm: maf` first (decision 0002). msgspec comes in with them.
     groups:
+      maf-packages:
+        patterns: ["agent-framework-*", "msgspec"]
       backend-minor-and-patch:
         update-types: [minor, patch]
+        exclude-patterns: ["agent-framework-*", "msgspec"]
 
   # The images the layer's compose files pin by digest (PostgreSQL with pgvector, RustFS), one plain
   # file per optional part under compose/ (backend/compose.yaml is a template). The Dockerfile is a

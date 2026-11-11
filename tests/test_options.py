@@ -33,9 +33,9 @@ import yaml
 
 from conftest import BASE_ANSWERS, TEMPLATE
 
-# The valid triples (#30): `llm: langchain` needs the database, and `database: false` always means
-# `llm: none`. Three shapes, each with storage on or off.
-SHAPES = [(True, "langchain"), (True, "none"), (False, "none")]
+# The valid triples (#30, #35): `llm: langchain` and `llm: maf` need the database, and `database:
+# false` always means `llm: none`. Four shapes, each with storage on or off.
+SHAPES = [(True, "langchain"), (True, "maf"), (True, "none"), (False, "none")]
 TRIPLES = [(d, s, llm) for d, llm in SHAPES for s in (True, False)]
 ANSWERS = pytest.mark.parametrize(
     ("database", "storage", "llm"), TRIPLES,
@@ -67,21 +67,42 @@ LLM_PATTERNS = [
 ]
 # One file from each pattern that must be absent without the gateway.
 LLM_FILES = [
-    "backend/src/app/llm/langchain/gateway.py",
     "backend/src/app/prompts/README.md",
     "backend/llm-contracts.toml",
     "backend/tests/models.py",
     "backend/tests/recording.py",
-    "backend/tests/test_llm_gateway.py",
     "backend/tests/test_llm_errors.py",
     "backend/tests/test_recording_keys.py",
     "backend/tests/test_observability.py",
     "backend/tests/wire.py",
     "backend/tests/harness/__init__.py",
-    "backend/tests/harness/langchain.py",
     "backend/tests/test_llm_parity_budget.py",
+    "backend/tests/evals/redaction_corpus.py",
+]
+# LangChain's own files: only the langchain answer renders them.
+LANGCHAIN_FILES = [
+    "backend/src/app/llm/langchain/gateway.py",
+    "backend/src/app/llm/checkpoint_types.py",
+    "backend/tests/test_llm_gateway.py",
+    "backend/tests/harness/langchain.py",
     "backend/tests/evals/conftest.py",
+    "backend/tests/wire.py",
+    "backend/tests/test_observability.py",
     "backend/tests/cassettes/test_llm_gateway/test_a_replayed_call_is_answered_and_its_cost_settled.yaml",
+]
+# Files only the MAF answer renders, and files either framework's answer renders (LLM_FILES above
+# are LangChain's own, or hold for either: the check there is "exists with langchain").
+MAF_ONLY_FILES = [
+    "backend/src/app/llm/maf/gateway.py",
+    "backend/tests/harness/maf.py",
+    "backend/tests/test_llm_maf_usage.py",
+    "backend/tests/maf_wire.py",
+]
+GATEWAY_FILES = [
+    "backend/src/app/llm/core/budget.py",
+    "backend/src/app/llm/prices.py",
+    "backend/tests/test_llm_parity_redaction.py",
+    "backend/tests/test_llm_settings.py",
 ]
 # The paths `database: false` removes besides the gateway's.
 DATABASE_PATTERNS = [
@@ -110,6 +131,7 @@ DATABASE_FILES = [
 # Files that exist in both renders (or in every render with the database) but change with the
 # answer, each with an all-on plain twin: with the gateway, the rendered file equals the plain one.
 TWINS = [
+    "backend/src/app/llm/__init__.py",
     "backend/src/app/main.py",
     "backend/src/app/settings.py",
     "backend/src/app/log.py",
@@ -140,7 +162,13 @@ def test_render_matrix(render, database, storage, llm):
     for path in DATABASE_FILES:
         assert (project / path).exists() is database, path
     for path in LLM_FILES:
+        assert (project / path).exists() is (llm != "none"), path
+    for path in LANGCHAIN_FILES:
         assert (project / path).exists() is (llm == "langchain"), path
+    for path in MAF_ONLY_FILES:
+        assert (project / path).exists() is (llm == "maf"), path
+    for path in GATEWAY_FILES:
+        assert (project / path).exists() is (llm != "none"), path
     for path in STORAGE_FILES:
         assert (project / path).exists() is storage, path
     # Always there, whatever the answers.
@@ -164,7 +192,7 @@ def test_the_llm_import_contracts_exist_only_with_a_gateway(render, database, st
     # The core's contract names app.llm.core, which import-linter refuses when the module is not
     # there, so it lives in its own file that exists only with the gateway (#33). The one
     # contract in pyproject.toml stays for every project (import-linter 2.16 exits 1 with none).
-    gateway = llm == "langchain"
+    gateway = llm != "none"
     project = render(database=database, storage=storage, llm=llm)
     contracts = project / "backend/llm-contracts.toml"
     assert contracts.exists() is gateway
@@ -180,6 +208,11 @@ def test_the_llm_import_contracts_exist_only_with_a_gateway(render, database, st
         assert contract["source_modules"] == ["app.llm.core"]
         assert {"langchain", "langchain_core", "openai", "anthropic", "agent_framework"} <= set(
             contract["forbidden_modules"])
+    # Every project's own contract keeps the model SDKs and both frameworks inside app/llm.
+    own = pyproject["tool"]["importlinter"]["contracts"][0]
+    assert {"agent_framework", "agent_framework_openai", "agent_framework_anthropic"} <= set(
+        own["forbidden_modules"])
+    assert "app.llm.maf.** -> agent_framework" in own["ignore_imports"]
 
 
 def render_other(render, tmp_path: Path, **answers) -> Path:
@@ -270,7 +303,7 @@ def test_env_example_matches_settings(render, database, storage, llm):
     assert any(f.startswith("STORAGE_") for f in fields) is storage
     assert ("DATABASE_URL" in fields) is database
     # The model, embedding, key, agent and tracing settings exist only with the gateway.
-    gateway = llm == "langchain"
+    gateway = llm != "none"
     assert any(f.startswith(("LLM_", "LANGSMITH_", "AGENT_")) for f in fields) is gateway
     assert bool(fields & {"EMBEDDING_MODEL", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"}) is gateway
     assert bool(listed & {"EMBEDDING_MODEL", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"}) is gateway
@@ -301,7 +334,7 @@ def test_conftest_fixtures_follow_the_answers(render, database, storage, llm):
     with_llm = {"test_models", "live_runs_need_models_and_a_key", "vcr_config", "allowed_hosts",
                 "is_eval_run", "is_recording", "framework"}
     with_storage = {"storage_endpoint", "storage_settings"}
-    gateway = llm == "langchain"
+    gateway = llm != "none"
     assert always <= defined
     assert (with_database <= defined) is database
     assert not (with_database & defined) or database
@@ -396,8 +429,11 @@ def test_no_rendered_python_file_has_an_unused_import(render, database, storage,
 LLM_OWNED = [
     "backend/src/app/llm/__init__.py",
     "backend/src/app/llm/core/*.py",
-    "backend/src/app/llm/langchain/*.py",
     "backend/llm-contracts.toml",
+]
+MAF_OWNED = ["backend/src/app/llm/maf/*.py"]
+LANGCHAIN_OWNED = [
+    "backend/src/app/llm/langchain/*.py",
     "backend/tests/evals/conftest.py",
     "backend/tests/evals/test_gateway_evals.py",
     "backend/tests/evals/redaction_corpus.py",
@@ -428,6 +464,10 @@ def test_every_template_owned_entry_exists(render, database, storage, llm):
         assert any(fnmatch.fnmatch(f, pattern) for f in existing), pattern
     # And the reverse for the parts that switch: a file is listed exactly when it exists.
     for path in LLM_OWNED:
+        assert (path in patterns) is (llm != "none"), path
+    for path in MAF_OWNED:
+        assert (path in patterns) is (llm == "maf"), path
+    for path in LANGCHAIN_OWNED:
         assert (path in patterns) is (llm == "langchain"), path
     for path in DATABASE_OWNED:
         assert (path in patterns) is database, path
@@ -519,7 +559,7 @@ DATABASE_WORDS = re.compile(
 # switch on. They are the only allowances, and each must be there exactly once (a stale allowance
 # would hide nothing, a duplicated one could hide a leftover).
 EXTRAS_SENTENCE = ("`db` comes with the `database` answer, `langchain` with `llm: langchain`, "
-                   "`storage` with the `storage` answer")
+                   "`maf` with `llm: maf`, `storage` with the `storage` answer")
 # The command that turns the gateway on. With no database it only adds to the database's own.
 SWITCH_ON_WITH_DATABASE = "(add `-d llm=langchain` for the model gateway too: it needs the database)"
 STAYS_OFF = "(the gateway stays off once the answers file records `llm`, which the first 0.8.0 update does)"
@@ -566,7 +606,7 @@ def test_rules_switch_names_every_extra_and_the_flag_that_changes_each_part(
     rules = (render(database=database, storage=storage, llm=llm) / ".claude/rules/fastapi.md").read_text()
     bullet = next(ln for ln in rules.splitlines() if ln.startswith("- Dependencies:"))
     assert EXTRAS_SENTENCE in bullet
-    gateway = llm == "langchain"
+    gateway = llm != "none"
     for part, on in (("database", database), ("storage", storage), ("llm", gateway)):
         # The command turns the part to the other state: off when it is on, on when it is off.
         off_flag = "-d llm=none" if part == "llm" else f"-d {part}=false"
@@ -606,7 +646,7 @@ def test_no_part_left_behind_check_catches_a_leftover(render, part):
 def extras_flags(database: bool, storage: bool, llm: str) -> str:
     # `langchain` always comes with `db` (the gateway keeps its budget and checkpoints in PostgreSQL).
     return " ".join(
-        (["--extra db"] if database else []) + (["--extra langchain"] if llm == "langchain" else [])
+        (["--extra db"] if database else []) + ([f"--extra {llm}"] if llm != "none" else [])
         + (["--extra storage"] if storage else []))
 
 
@@ -614,7 +654,7 @@ def extras_flags(database: bool, storage: bool, llm: str) -> str:
 def test_the_image_installs_the_answered_extras(render, database, storage, llm):
     project = render(database=database, storage=storage, llm=llm)
     flags = extras_flags(database, storage, llm)
-    gateway = llm == "langchain"
+    gateway = llm != "none"
     dockerfile = (project / "backend/Dockerfile").read_text()
     syncs = [ln for ln in dockerfile.splitlines() if "uv sync" in ln]
     assert len(syncs) == 2
@@ -650,15 +690,17 @@ def test_the_image_installs_the_answered_extras(render, database, storage, llm):
 ALWAYS_TARGETS = {"install-fastapi", "check-fastapi", "check-fast-fastapi", "lock", "dev", "test",
                   "image", "up"}
 DATABASE_TARGETS = {"db-up", "migrate", "migration"}
-LLM_TARGETS = {"llm-report", "record-llm", "eval"}
+LLM_TARGETS = {"llm-report", "record-llm"}
+LANGCHAIN_TARGETS = {"eval"}  # the evals run on LangSmith
 
 
 @ANSWERS
 def test_make_targets_follow_the_answers(render, database, storage, llm):
-    gateway = llm == "langchain"
+    gateway = llm != "none"
     mk = (render(database=database, storage=storage, llm=llm) / "mk/fastapi.mk").read_text()
     want = (ALWAYS_TARGETS | (DATABASE_TARGETS if database else set())
-            | (LLM_TARGETS if gateway else set()) | ({"storage-up"} if storage else set()))
+            | (LLM_TARGETS if gateway else set()) | (LANGCHAIN_TARGETS if llm == "langchain" else set())
+            | ({"storage-up"} if storage else set()))
     defined = set(re.findall(r"^([a-z][a-z0-9-]*):", mk, flags=re.MULTILINE))
     phony = set(re.search(r"^\.PHONY: (.*)$", mk, flags=re.MULTILINE).group(1).split())
     assert defined == want
@@ -697,12 +739,18 @@ def test_dependencies_live_in_the_answered_extras():
         return {re.split(r"[\[<>=]", r)[0] for r in requirements}
     assert names(pyproject["project"]["dependencies"]) == {"fastapi", "pydantic-settings", "structlog"}
     extras = pyproject["project"]["optional-dependencies"]
-    assert set(extras) == {"db", "langchain", "storage"}
+    assert set(extras) == {"db", "langchain", "maf", "storage"}
     assert names(extras["db"]) == {"alembic", "sqlalchemy", "psycopg", "psycopg-pool", "pgvector"}
     assert names(extras["langchain"]) == {
         "langgraph-checkpoint-postgres", "langchain", "langchain-core", "langchain-openai",
         "langchain-anthropic", "langgraph", "langsmith"}
+    # Exact pins, moved together by hand (decision 0002); msgspec comes in with the framework.
+    assert sorted(extras["maf"]) == [
+        "agent-framework-anthropic==1.0.0b261106", "agent-framework-core==1.25.0",
+        "agent-framework-openai==1.18.1", "msgspec==0.22.0"]
     assert names(extras["storage"]) == {"boto3"}
+    # One lockfile holds both frameworks; installing both is refused.
+    assert pyproject["tool"]["uv"]["conflicts"] == [[{"extra": "langchain"}, {"extra": "maf"}]]
     dev = names(pyproject["dependency-groups"]["dev"])
     assert {"testcontainers", "types-boto3", "langsmith", "vcrpy", "pytest-recording"} <= dev
     # The import contract names the gateway, which a project without the database lacks.
@@ -781,13 +829,14 @@ def test_make_targets_are_separated_by_one_blank_line(render, database, storage,
     mk = (render(database=database, storage=storage, llm=llm) / "mk/fastapi.mk").read_text()
     assert "\n\n\n" not in mk
     assert mk.endswith("\n") and not mk.endswith("\n\n")
-    assert ("\n\nllm-report:" in mk) is (llm == "langchain")
+    assert ("\n\nllm-report:" in mk) is (llm != "none")
     assert ("\n\ndb-up:" in mk) is database
     assert ("\n\nstorage-up:" in mk) is storage
     assert ("\n\nimage:" in mk)
 
 
-# The `llm` answer (#30): none or langchain; langchain needs the database. database: false means none.
+# The `llm` answer (#30, #35): none, langchain or maf; the last two need the database. database:
+# false means none.
 @pytest.mark.parametrize(
     ("database", "llm"), [(True, "langchain"), (False, "none")], ids=["database-on", "database-off"])
 def test_llm_defaults_follow_the_database(render, database, llm):
@@ -798,9 +847,10 @@ def test_llm_defaults_follow_the_database(render, database, llm):
     assert answers["llm"] == llm
 
 
-def test_llm_without_database_is_refused(render):
-    with pytest.raises(ValueError, match="langchain needs database: true"):
-        render(database=False, llm="langchain")
+@pytest.mark.parametrize("llm", ["langchain", "maf"])
+def test_llm_without_database_is_refused(render, llm):
+    with pytest.raises(ValueError, match=f"{llm} needs database: true"):
+        render(database=False, llm=llm)
 
 
 def test_llm_none_is_allowed_with_the_database(render):
@@ -858,7 +908,7 @@ def test_migration_chain_is_linear_in_every_variant(render, database, storage, l
     assert sorted(rev for rev, m in migrations.items() if m["down"] is None) == ["0001", "app_root"]
     for rev in ("0002", "0003", "0004", "0005", "0006"):
         assert migrations[rev]["labels"] is None, rev
-    gateway = llm == "langchain"
+    gateway = llm != "none"
     for rev in GATEWAY_REVISIONS:
         # Without the gateway the revision stays and does nothing: no table, no app.llm import.
         assert migrations[rev]["empty"] is not gateway, rev
@@ -905,6 +955,21 @@ def test_llm_none_autogenerate_ignores_every_table_the_gateway_made(render, tmp_
     assert "LEFTOVER_TABLES" not in (langchain / "backend/migrations/env.py").read_text()
 
 
+def test_maf_autogenerate_ignores_only_the_langgraph_tables_it_never_made(render, tmp_path):
+    # MAF keeps its budget tables in app/models.py, so autogenerate must see them, and it keeps no
+    # LangGraph tables: a project that moved from LangChain keeps those four, and env.py ignores
+    # exactly them (the same four as the LangChain adapter's TABLES).
+    langchain = render(database=True, storage=True, llm="langchain")
+    four = _string_set(
+        ast.parse((langchain / "backend/src/app/llm/langchain/checkpoints.py").read_text()), "TABLES")
+    maf = render_other(render, tmp_path, database=True, storage=True, llm="maf")
+    env = ast.parse((maf / "backend/migrations/env.py").read_text())
+    assert _string_set(env, "LEFTOVER_TABLES") == four
+    models = (maf / "backend/src/app/models.py").read_text()
+    assert "LlmCall" in models and "LlmSpendDay" in models
+
+
+
 # The old import paths of the model gateway (#33) were removed in 0.8.0. The module names, and the
 # names that stayed behind in prices.py only as warning forwards.
 OLD_LLM_MODULES = ("budget", "checkpoints", "embeddings", "errors", "gateway", "metrics",
@@ -918,7 +983,8 @@ OLD_PATH = re.compile(
 
 
 @pytest.mark.parametrize(("database", "llm"), SHAPES,
-                         ids=["database-on-llm-langchain", "database-on-llm-none", "database-off"])
+                         ids=["database-on-llm-langchain", "database-on-llm-maf",
+                              "database-on-llm-none", "database-off"])
 def test_a_rendered_project_has_no_old_llm_import_path_and_no_shim_module(render, database, llm):
     project = render(database=database, llm=llm)
     rendered = files(project)
@@ -934,7 +1000,7 @@ def test_a_rendered_project_has_no_old_llm_import_path_and_no_shim_module(render
             hits[rel] = found
     assert hits == {}
     # The new homes are there when the gateway is.
-    assert (("backend/src/app/llm/core/budget.py" in rendered) is (llm == "langchain"))
+    assert (("backend/src/app/llm/core/budget.py" in rendered) is (llm != "none"))
 
 
 def test_the_old_path_pattern_finds_each_old_path():

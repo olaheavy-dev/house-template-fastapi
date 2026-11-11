@@ -159,7 +159,7 @@ def test_the_skip_guard_allows_a_name_that_only_contains_skip():
     assert not skip_problems(source)
 
 
-# The files as of #35 PR 1. A new test_llm_*.py is a parity test (name it test_llm_parity_*.py), or
+# The files as of #35 PR 2. A new test_llm_*.py is a parity test (name it test_llm_parity_*.py), or
 # is added to CORE (framework-free: it runs whichever framework the project chose, and the test
 # below checks it imports none) or to LANGCHAIN_ONLY / MAF_ONLY (one framework's own adapter).
 CORE = {
@@ -170,6 +170,9 @@ CORE = {
     "test_llm_core_steps.py",
     "test_llm_core.py",
     "test_llm_errors.py",
+    "test_llm_redaction_corpus.py",
+    "test_llm_report_cli.py",
+    "test_llm_settings.py",
 }
 LANGCHAIN_ONLY = {
     "test_llm_agents.py",
@@ -189,7 +192,6 @@ LANGCHAIN_ONLY = {
     "test_llm_prices.py",
     "test_llm_redaction_agents.py",
     "test_llm_redaction_context.py",
-    "test_llm_redaction_corpus.py",
     "test_llm_redaction_embeddings.py",
     "test_llm_redaction_fields.py",
     "test_llm_redaction_ledger.py",
@@ -202,13 +204,19 @@ LANGCHAIN_ONLY = {
     "test_llm_redaction_tools.py",
     "test_llm_redaction_traces.py",
     "test_llm_redaction_wire.py",
-    "test_llm_report_cli.py",
-    "test_llm_settings.py",
     "test_llm_steps.py",
     "test_llm_surface.py",
     "test_llm_usage.py",
 }
-MAF_ONLY: set[str] = set()
+MAF_ONLY = {
+    "test_llm_maf_cassettes.py",
+    "test_llm_maf_errors.py",
+    "test_llm_maf_gateway.py",
+    "test_llm_maf_redaction.py",
+    "test_llm_maf_surface.py",
+    "test_llm_maf_usage.py",
+    "test_llm_maf_wire.py",
+}
 
 
 def test_core_files_import_no_framework():
@@ -225,3 +233,22 @@ def test_every_llm_test_file_is_classified():
     assert found <= classified, f"classify: {sorted(found - classified)}"
     assert classified - {p.name for p in PARITY} <= found, "stale entry"
     assert not CORE & (LANGCHAIN_ONLY | MAF_ONLY), "a file is in two sets"
+
+
+def test_copier_excludes_exactly_the_langchain_only_tests_from_other_frameworks():
+    # copier.yml lists LangChain's own test files one by one (`llm != 'langchain'`), and MAF's by
+    # pattern: the lists must agree with these sets, or a test file would reach a project whose
+    # framework it cannot import.
+    import yaml
+
+    from conftest import ROOT
+
+    excluded = yaml.safe_load((ROOT / "copier.yml").read_text())["_exclude"]
+    pattern = re.compile(
+        r"\{% if llm is defined and llm != 'langchain' %\}backend/tests/(test_llm_\w+\.py)\{% endif %\}"
+    )
+    listed = {m.group(1) for entry in excluded if (m := pattern.fullmatch(entry))}
+    # test_llm_redaction_observability.py and test_llm_redaction_wire.py are in the same list.
+    assert listed == LANGCHAIN_ONLY
+    assert "{% if llm is defined and llm != 'maf' %}backend/tests/test_llm_maf_*.py{% endif %}" in excluded
+    assert {p.name for p in TESTS.glob("test_llm_maf_*.py")} == MAF_ONLY

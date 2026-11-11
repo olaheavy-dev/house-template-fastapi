@@ -51,7 +51,18 @@ REMOVED_FILES = {
 # entry hides a second, accidental change to the same file until the next baseline move.
 # Not compared: file modes, symlinks and empty directories (the template has no tracked
 # executables today).
-INTENDED: dict[str, str] = {}
+INTENDED: dict[str, str] = {
+    ".claude/rules/fastapi.md":
+        "names the maf extra and the `llm: maf` answer in the extras sentence (#35)",
+    "backend/pyproject.toml":
+        "the maf extra with exact pins, [tool.uv] conflicts, the MAF packages in the import contract (#35)",
+    "backend/src/app/llm/core/openai_embeddings.py":
+        "openai_client takes an optional http_client, a test seam for the MAF gateway's SDK client (#35)",
+    "backend/src/app/settings.py":
+        "hide_input_in_errors: a validation error never echoes the value given (#35)",
+    "backend/tests/test_llm_parity_redaction.py":
+        "shared chat redaction tests, run once per framework (#35)",
+}
 
 # DEPENDABOT_*: what Dependabot updates in this repository's rendered output
 # (.github/dependabot.yml). Its PRs must pass this test unchanged, so these are normalised away
@@ -164,12 +175,14 @@ def test_default_render_matches_baseline(tmp_path):
 
 
 def test_database_off_render_matches_baseline(tmp_path):
-    # Without the database there is no gateway, and the answers file records `llm: none`. Nothing
-    # differs from the baseline on purpose, so this comparison has no entries of its own.
+    # Without the database there is no gateway, and the answers file records `llm: none`. Only the
+    # files every render shares differ on purpose (a subset of INTENDED).
     require_ref(BASELINE_REF)
     baseline = files_of(render_at(tmp_path / "baseline", BASELINE_REF, database=False))
     head = files_of(render_at(tmp_path / "head", "HEAD", database=False))
-    problems = compare(baseline, head, {})
+    shared = {path: INTENDED[path] for path in (".claude/rules/fastapi.md", "backend/pyproject.toml",
+                                                "backend/src/app/settings.py")}
+    problems = compare(baseline, head, shared)
     assert not problems, (f"The database-off render differs from BASELINE_REF {BASELINE_REF[:7]}:\n"
                           + "\n".join(problems))
     assert b"llm: none\n" in head[ANSWERS_FILE]

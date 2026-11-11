@@ -8,7 +8,7 @@ A project that uses LangChain should not install MAF, and the other way round. T
 
 ## Decision
 
-Dependencies are optional extras in the one plain `backend/pyproject.toml`. Today there are three extras, `db`, `langchain` and `storage`, and **no `conflicts` declaration and no `maf` extra** (checked in `template/backend/pyproject.toml`). When `maf` is added ([#35](https://github.com/olaheavy-dev/house-template-fastapi/issues/35)), `langchain` and `maf` will be declared as conflicting, so they lock together in one `uv.lock` but cannot be installed together. Make targets and the image install only the extras the project answered for. Progress is tracked on #35 and [#30](https://github.com/olaheavy-dev/house-template-fastapi/issues/30), not here.
+Dependencies are optional extras in the one plain `backend/pyproject.toml`. There are four extras, `db`, `langchain`, `maf` and `storage`. `langchain` and `maf` are declared as conflicting (`[tool.uv] conflicts` in `template/backend/pyproject.toml`, added with the `llm: maf` answer in [#35](https://github.com/olaheavy-dev/house-template-fastapi/issues/35) part 2), so they lock together in one `uv.lock` but cannot be installed together. The `maf` extra pins `agent-framework-core`, `agent-framework-openai`, `agent-framework-anthropic` (a beta) and `msgspec` with `==`; they move together, by hand, and Dependabot groups them in one pull request that is never merged unreviewed. Make targets and the image install only the extras the project answered for. Progress is tracked on #35 and [#30](https://github.com/olaheavy-dev/house-template-fastapi/issues/30), not here.
 
 ## What the spike found
 
