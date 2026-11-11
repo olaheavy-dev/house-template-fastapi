@@ -171,12 +171,18 @@ async def test_redacted_embeddings_still_find_the_right_chunk(gateway: Gateway) 
     # for every question.
     embeddings = gateway.embeddings()
     scope = {"NAME": ["Priya Shah", "Sam Okafor"]}
-    with capture_logs():
-        async with redaction_scope(known=scope):
-            documents = await embeddings.aembed_documents(list(CHUNKS), feature="eval")
-            questions = [
-                await embeddings.aembed_query(question, feature="eval") for question, _ in QUESTIONS
-            ]
+    try:
+        with capture_logs():
+            async with redaction_scope(known=scope):
+                documents = await embeddings.aembed_documents(list(CHUNKS), feature="eval")
+                questions = [
+                    await embeddings.aembed_query(question, feature="eval")
+                    for question, _ in QUESTIONS
+                ]
+    finally:
+        # The gateway does not close the OpenAI client it made for embeddings; an unclosed socket
+        # would fail the run at exit.
+        await embeddings._client.close()
     first = [
         max(range(len(CHUNKS)), key=lambda i: cosine(vector, documents[i])) for vector in questions
     ]
