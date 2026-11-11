@@ -36,8 +36,9 @@ Limits worth knowing:
   stays as the model wrote it: thinking and reasoning blocks (including `additional_kwargs`
   `reasoning`).
   A tool call's argument string is shown to a stream consumer only once the stream has ended: its
-  fragments come out empty and the restored string arrives in one final chunk, restored at each
-  JSON nesting level exactly as a whole answer's would be (the text stream is not delayed).
+  fragments come out empty and the restored string arrives in one chunk per call (per place where
+  the provider carries it), restored at each JSON nesting level exactly as a whole answer's would
+  be (the text stream is not delayed). Held arguments are dropped if the consumer stops early.
 - Images and other media are not scanned (they are counted in `llm_unscanned_images`). A message's
   `name` field cannot take a placeholder (a provider accepts only plain names there), so a call
   whose `name` matches a detector or a known value is refused, nothing sent.
@@ -406,7 +407,12 @@ class _StreamRestorers:
 
     def _hold(self, kind: str, index: Any, fragment: str) -> str:
         """Keep a fragment of a transport argument string until the stream ends; nothing is shown
-        yet."""
+        yet. A call with no index is a whole call that LangChain never merges (Ollama, Gemini,
+        Bedrock, OpenAI-compatible endpoints), so its string is complete: restored at once, or
+        calls would share one buffer. The legacy single `function_call` is the one exception.
+        Held strings are bounded by the output token cap."""
+        if index is None and kind != "kwargs-function":
+            return self._values.raw(fragment)
         self._held.setdefault((kind, index), []).append(fragment)
         return ""
 
@@ -434,8 +440,9 @@ class _StreamRestorers:
     def _kwargs(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         """A chunk's additional_kwargs, restored the way `_Restorer.message` restores a whole
         answer's: complete values (a parsed schema object, structured-output fields) as they come;
-        a refusal and the older raw tool-call arguments, which may arrive in fragments, through a
-        restorer per stream; `reasoning` untouched."""
+        a refusal, which may arrive in fragments, through a restorer; the older raw tool-call
+        arguments, held and restored whole at the end of the stream (see `_hold`); `reasoning`
+        untouched."""
         out: dict[str, Any] = {}
         for key, value in kwargs.items():
             if key == "reasoning":
