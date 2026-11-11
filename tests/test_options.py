@@ -61,6 +61,7 @@ LLM_PATTERNS = [
     "backend/tests/test_recording_keys.py",
     "backend/tests/test_observability.py",
     "backend/tests/wire.py",
+    "backend/tests/harness/*",
     "backend/tests/evals/*",
     "backend/tests/cassettes/*",
 ]
@@ -76,6 +77,9 @@ LLM_FILES = [
     "backend/tests/test_recording_keys.py",
     "backend/tests/test_observability.py",
     "backend/tests/wire.py",
+    "backend/tests/harness/__init__.py",
+    "backend/tests/harness/langchain.py",
+    "backend/tests/test_llm_parity_budget.py",
     "backend/tests/evals/conftest.py",
     "backend/tests/cassettes/test_llm_gateway/test_a_replayed_call_is_answered_and_its_cost_settled.yaml",
 ]
@@ -295,7 +299,7 @@ def test_conftest_fixtures_follow_the_answers(render, database, storage, llm):
               "expected_readiness_checks", "database_settings"}
     with_database = {"database_url", "db_session", "db_client"}
     with_llm = {"test_models", "live_runs_need_models_and_a_key", "vcr_config", "allowed_hosts",
-                "is_eval_run", "is_recording"}
+                "is_eval_run", "is_recording", "framework"}
     with_storage = {"storage_endpoint", "storage_settings"}
     gateway = llm == "langchain"
     assert always <= defined

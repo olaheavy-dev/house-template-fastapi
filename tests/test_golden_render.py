@@ -47,14 +47,32 @@ REMOVED_FILES = {
 }
 
 # {rendered path: "reason (#NN)"}. Starts empty after each baseline move; the entries below are the
-# changes of #78 part 2 (personal-data redaction in the LangChain adapter). The test fails for a
-# path that differs without an entry here, and for an entry whose path no longer differs. A
-# path-level entry hides a second, accidental change to the same file until the next baseline move.
+# changes of #78 part 2 (personal-data redaction in the LangChain adapter) and of #35 PR 1 (the
+# shared parity harness and the framework-neutral redaction walkers; "#35:" marks its reasons). The
+# test fails for a path that differs without an entry here, and for an entry whose path no longer
+# differs. A path-level entry hides a second, accidental change to the same file until the next
+# baseline move.
 # Not compared: file modes, symlinks and empty directories (the template has no tracked
 # executables today).
 INTENDED: dict[str, str] = {
+    "backend/src/app/llm/core/redaction_data.py":
+        "new: the framework-neutral redaction walkers and restorer, moved from langchain (#35)",
+    "backend/src/app/llm/core/__init__.py":
+        "docstring names redaction_data.py (#35)",
+    "backend/tests/harness/__init__.py":
+        "new: the harness protocol the shared parity tests run through (#35)",
+    "backend/tests/harness/langchain.py":
+        "new: the LangChain harness (#35)",
+    "backend/tests/test_llm_parity_budget.py":
+        "new: the budget cases moved here, run once per framework (#35)",
+    "backend/tests/test_llm_budget.py":
+        "the budget cases that hold for every framework moved to test_llm_parity_budget.py (#35)",
+    "backend/tests/test_llm_embeddings.py":
+        "the shared embedding budget cases moved to test_llm_parity_budget.py (#35)",
+    "backend/tests/test_llm_errors.py":
+        "the failure-to-problem cases moved to test_llm_parity_budget.py (#35)",
     ".claude/rules/fastapi.md":
-        "rules text for personal-data redaction, and migrations 0002 to 0006 (#78)",
+        "rules text for personal-data redaction, and migrations 0002 to 0006 (#78); #35: names the core redaction module and the parity harness",
     ".github/template-owned/fastapi.txt":
         "owns migration 0006 and the redaction evals (#78)",
     "backend/.env.example":
@@ -74,7 +92,7 @@ INTENDED: dict[str, str] = {
     "backend/src/app/llm/langchain/gateway.py":
         "gateway.model() returns the redacting wrapper; LangSmith masking client (#78)",
     "backend/src/app/llm/langchain/redaction.py":
-        "new: RedactingChatModel and masking_anonymizer (#78)",
+        "new: RedactingChatModel and masking_anonymizer (#78); #35: the framework-free walkers and restorer moved to core/redaction_data.py; _Restorer subclasses it",
     "backend/src/app/settings.py":
         "LLM_REDACTION and LLM_REDACT_KINDS settings (#78)",
     "backend/tests/evals/redaction_corpus.py":
@@ -82,7 +100,7 @@ INTENDED: dict[str, str] = {
     "backend/tests/evals/test_redaction_evals.py":
         "new: live redaction evals (#78)",
     "backend/tests/test_llm_core_redaction.py":
-        "tests for choose_detectors (#78)",
+        "tests for choose_detectors (#78); #35: a test pins the imports of redaction_data.py",
     "backend/tests/test_llm_gateway.py":
         "tests for the redaction start-up log and kinds (#78)",
     "backend/tests/test_llm_langchain_callbacks.py":
@@ -96,11 +114,11 @@ INTENDED: dict[str, str] = {
     "backend/tests/cassettes/test_llm_redaction_wire/test_nothing_unredacted_reaches_the_wire.yaml":
         "new: the recorded call of the wire test, redacted body only (#78)",
     "backend/tests/conftest.py":
-        "restores the process-wide LangSmith client after each test (#78)",
+        "restores the process-wide LangSmith client after each test (#78); #35: the `framework` fixture, run once per framework",
     "backend/tests/test_llm_redaction_restore.py":
         "new: restoring by position, nested JSON text and data of any shape (#78)",
     "backend/tests/test_llm_redaction_fields.py":
-        "new: field names as context and JSON text decoded before matching (#78)",
+        "new: field names as context and JSON text decoded before matching (#78); #35: imports walk_text and opens_json from the core module",
     "backend/tests/test_llm_steps.py":
         "the llm_call rows of the step tests sort deterministically (#78)",
     "backend/tests/test_llm_redaction_context.py":
@@ -116,19 +134,19 @@ INTENDED: dict[str, str] = {
     "backend/tests/test_llm_redaction_observability.py":
         "new: the llm.redactions metric and unscanned media (#78)",
     "backend/tests/test_llm_redaction_stream.py":
-        "new: streaming through the wrapper (#78)",
+        "new: streaming through the wrapper (#78); #35: imports from the core module; patch target walk_data",
     "backend/tests/test_llm_redaction_structured.py":
         "new: structured output through the wrapper (#78)",
     "backend/tests/test_llm_redaction_tools.py":
         "new: tool calls through the wrapper (#78)",
     "backend/tests/test_llm_redaction_traces.py":
-        "new: masked LangSmith traces (#78)",
+        "new: masked LangSmith traces (#78); #35: imports from the core module",
     "backend/tests/test_llm_redaction_wire.py":
         "new: nothing unredacted on the wire (cassette test) (#78)",
     "backend/tests/test_llm_settings.py":
         "tests for the redaction settings (#78)",
     "backend/tests/test_llm_surface.py":
-        "the llm_call column pin includes redacted_count (#78)",
+        "the llm_call column pin includes redacted_count (#78); #35: a comment points at test_llm_parity_budget.py",
     "backend/tests/wire.py":
         "new: a fake provider wire for the redaction tests (#78)",
 }

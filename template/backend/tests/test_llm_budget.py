@@ -12,7 +12,6 @@ from fastapi import FastAPI
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.exceptions import (
     ModelAPIError,
-    ModelConnectionError,
     ModelInvalidRequestError,
     ModelRateLimitError,
     ModelTimeoutError,
@@ -21,26 +20,22 @@ from langchain_core.language_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage
 from langchain_core.messages.ai import UsageMetadata
 from langchain_core.outputs import ChatGenerationChunk, ChatResult
-from langchain_core.runnables import RunnableConfig
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.llm import prices
-from app.llm.core import bounds, budget, report
-from app.llm.core.bounds import PromptTooLong, UnboundedMedia, UnpricedRequest
+from app.llm.core import budget, report
 from app.llm.core.budget import (
-    BudgetExhausted,
     LlmCall,
     LlmSpendDay,
     LlmSpendUserDay,
-    UserBudgetExhausted,
     expire_stale,
     reserve,
     reserve_for,
     settle,
 )
-from app.llm.langchain.callbacks import BudgetGuard, input_bound
+from app.llm.langchain.callbacks import BudgetGuard
 
 pytestmark = pytest.mark.anyio
 
@@ -130,40 +125,6 @@ async def committed(session: AsyncSession) -> int | None:
     )
 
 
-async def test_a_call_is_settled_at_its_real_cost(
-    guard: Callable[..., BudgetGuard], db_session: AsyncSession
-) -> None:
-    model = GenericFakeChatModel(messages=iter([answer("4")]), callbacks=[guard()])
-    assert (await model.ainvoke(QUESTION)).text == "4"
-
-    [call] = await calls(db_session)
-    assert (call.status, call.cost_micro_usd) == ("settled", 7_000)  # 1,000 x $2/M + 500 x $10/M
-    assert (call.input_tokens, call.output_tokens) == (1_000, 500)
-    assert call.reserved_micro_usd >= (call.cost_micro_usd or 0)
-    assert await committed(db_session) == 7_000
-
-
-async def test_prompt_metadata_is_recorded_with_the_call(
-    guard: Callable[..., BudgetGuard], db_session: AsyncSession
-) -> None:
-    model = GenericFakeChatModel(messages=iter([answer("4")]), callbacks=[guard()])
-    await model.ainvoke(QUESTION, config={"metadata": {"prompt": "sums", "prompt_sha": "abc"}})
-    [call] = await calls(db_session)
-    assert (call.prompt, call.prompt_sha) == ("sums", "abc")
-
-
-async def test_a_call_that_could_cross_the_cap_is_never_sent(
-    guard: Callable[..., BudgetGuard], db_session: AsyncSession
-) -> None:
-    sent = iter([answer("4")])
-    model = GenericFakeChatModel(messages=sent, callbacks=[guard(cap=1_000)])
-    with pytest.raises(BudgetExhausted):
-        await model.ainvoke(QUESTION)
-    assert next(sent).text == "4"  # the model never answered
-    assert await calls(db_session) == []
-    assert await committed(db_session) is None
-
-
 async def test_a_streamed_call_is_settled_from_its_final_usage(
     guard: Callable[..., BudgetGuard], db_session: AsyncSession
 ) -> None:
@@ -172,34 +133,6 @@ async def test_a_streamed_call_is_settled_from_its_final_usage(
     assert text == "four"
     [call] = await calls(db_session)
     assert (call.status, call.cost_micro_usd) == ("settled", 7_000)
-
-
-async def test_a_call_the_provider_rejected_releases_its_reservation(
-    guard: Callable[..., BudgetGuard], db_session: AsyncSession
-) -> None:
-    model = FailingModel(
-        messages=iter([]), error=ModelRateLimitError("slow down"), callbacks=[guard()]
-    )
-    with pytest.raises(ModelRateLimitError):
-        await model.ainvoke(QUESTION)
-    [call] = await calls(db_session)
-    assert (call.status, call.cost_micro_usd) == ("failed", 0)
-    assert await committed(db_session) == 0
-
-
-@pytest.mark.parametrize(
-    "error", [ModelTimeoutError("timed out"), ModelConnectionError("reset"), RuntimeError("?")]
-)
-async def test_a_call_that_may_have_been_processed_keeps_its_reservation(
-    guard: Callable[..., BudgetGuard], db_session: AsyncSession, error: Exception
-) -> None:
-    # A timeout or a dropped connection can come after the provider generated (and billed).
-    model = FailingModel(messages=iter([]), error=error, callbacks=[guard()])
-    with pytest.raises(type(error)):
-        await model.ainvoke(QUESTION)
-    [call] = await calls(db_session)
-    assert call.status == "failed"
-    assert call.cost_micro_usd == call.reserved_micro_usd == await committed(db_session)
 
 
 class ApiAndInvalid(ModelAPIError, ModelInvalidRequestError):
@@ -249,48 +182,6 @@ async def test_a_stream_that_breaks_midway_keeps_its_reservation(
     assert call.cost_micro_usd == call.reserved_micro_usd == await committed(db_session)
 
 
-async def test_a_call_without_usage_keeps_its_reservation(
-    guard: Callable[..., BudgetGuard], db_session: AsyncSession
-) -> None:
-    model = GenericFakeChatModel(messages=iter([AIMessage("4")]), callbacks=[guard()])
-    await model.ainvoke(QUESTION)
-    [call] = await calls(db_session)
-    assert call.status == "settled"
-    assert call.cost_micro_usd == call.reserved_micro_usd == await committed(db_session)
-
-
-async def test_a_larger_bound_limit_is_reserved_for(guard: Callable[..., BudgetGuard]) -> None:
-    # 500 output tokens fit a $0.01 cap; a caller binding 5,000 must not slip through.
-    model = GenericFakeChatModel(messages=iter([answer("4")]), callbacks=[guard(cap=10_000)])
-    with pytest.raises(BudgetExhausted):
-        await model.bind(max_tokens=5_000).ainvoke(QUESTION)
-
-
-async def test_images_are_reserved_at_their_maximum_however_they_are_sent(
-    guard: Callable[..., BudgetGuard], db_session: AsyncSession
-) -> None:
-    image = {"type": "image", "url": "https://example.com/chart.png"}
-    model = GenericFakeChatModel(messages=iter([answer("4"), answer("4")]), callbacks=[guard()])
-    await model.ainvoke(QUESTION)
-    await model.ainvoke([HumanMessage(content=[image, {"type": "text", "text": "What is 2 + 2?"}])])
-    text_only, with_image = sorted(c.reserved_micro_usd for c in await calls(db_session))
-    # At least IMAGE_TOKENS more input at the highest input rate ($4/M for 1h cache writes).
-    assert with_image - text_only >= bounds.IMAGE_TOKENS * 4
-
-
-async def test_media_the_budget_cant_bound_is_refused_before_sending(
-    guard: Callable[..., BudgetGuard], db_session: AsyncSession
-) -> None:
-    pdf = {"type": "file", "url": "https://example.com/report.pdf", "mime_type": "application/pdf"}
-    sent = iter([answer("4")])
-    model = GenericFakeChatModel(messages=sent, callbacks=[guard()])
-    with pytest.raises(UnboundedMedia) as refused:
-        await model.ainvoke([HumanMessage(content=[pdf])])
-    assert (refused.value.status, refused.value.kind) == (422, "file")
-    assert next(sent).text == "4"
-    assert await calls(db_session) == []
-
-
 async def test_settling_twice_changes_nothing(db_session: AsyncSession) -> None:
     call_id = uuid.uuid4()
     assert await reserve(db_session, call_id=call_id, day=DAY, model=MODEL, amount=900, cap=1_000)
@@ -305,31 +196,6 @@ async def user_total(session: AsyncSession, user_ref: str) -> int | None:
             LlmSpendUserDay.day == DAY, LlmSpendUserDay.user_ref == user_ref
         )
     )
-
-
-async def test_one_users_cap_refuses_only_that_user(
-    db_session: AsyncSession, guard: Callable[..., BudgetGuard]
-) -> None:
-    capped = guard()
-    capped.user_cap = 1_000_000
-    as_user: RunnableConfig = {"metadata": {"user_ref": "u_1"}}
-    first = GenericFakeChatModel(messages=iter([answer("4"), answer("4")]), callbacks=[capped])
-    await first.ainvoke(QUESTION, config=as_user)
-    # The first call settled at 7,000; a cap just short of 7,000 plus a fresh reservation
-    # leaves no room for a second call.
-    reservation = await db_session.scalar(select(LlmCall.reserved_micro_usd))
-    assert reservation is not None
-    capped.user_cap = 7_000 + reservation - 1
-    with pytest.raises(UserBudgetExhausted) as refused:
-        await first.ainvoke(QUESTION, config=as_user)
-    assert (refused.value.status, int(refused.value.headers["Retry-After"]) > 0) == (429, True)
-    # Someone else is unaffected, and the refusal left the day's total as it was.
-    before = await committed(db_session)
-    other = GenericFakeChatModel(messages=iter([answer("4")]), callbacks=[capped])
-    await other.ainvoke(QUESTION, config={"metadata": {"user_ref": "u_2"}})
-    assert await user_total(db_session, "u_1") == 7_000
-    assert await user_total(db_session, "u_2") == 7_000
-    assert await committed(db_session) == (before or 0) + 7_000
 
 
 async def test_a_refusal_by_the_day_cap_leaves_the_users_total_alone(
@@ -368,54 +234,6 @@ async def test_a_call_that_never_reserved_against_the_user_leaves_their_total_al
     assert await user_total(db_session, "u_4") == 900
     await settle(db_session, call_id=capped, status="settled", cost=100)
     assert await user_total(db_session, "u_4") == 100
-
-
-async def test_a_prompt_exactly_at_the_priced_length_is_allowed_and_one_more_is_refused(
-    db_session: AsyncSession, guard: Callable[..., BudgetGuard]
-) -> None:
-    # The limit applies to the budget's input bound b (an over-estimate of tokens, see
-    # input_bound), and a call is refused only when b > max_prompt_tokens. So a limit equal to b
-    # lets the call through, and a limit of b - 1 (the prompt being one more than allowed) refuses
-    # it. For OpenAI the shipped limit is 272,000 (see test_llm_prices): a prompt whose input
-    # bound is 272,000 is allowed, one whose bound is 272,001 is refused. The bound is a byte-based
-    # over-estimate (UTF-8 bytes of the JSON payload plus a 1,024 margin), so real refusals start
-    # near ~68K English tokens. That reads the page's "272K" as 1,000s.
-    prompt: list[BaseMessage] = [*QUESTION]
-    bound = input_bound(prompt, {})
-
-    def limited(max_prompt_tokens: int) -> BudgetGuard:
-        g = guard()
-        g.price = prices.Price(
-            PRICE.rates,
-            checked="2026-11-06",
-            source="https://example.com/pricing",
-            max_prompt_tokens=max_prompt_tokens,
-        )
-        return g
-
-    await limited(bound).on_chat_model_start({}, [prompt], run_id=uuid.uuid4())
-    assert [call.status for call in await calls(db_session)] == ["reserved"]
-
-    with pytest.raises(PromptTooLong):
-        await limited(bound - 1).on_chat_model_start({}, [prompt], run_id=uuid.uuid4())
-    assert len(await calls(db_session)) == 1  # the refused call reserved nothing
-
-
-async def test_a_prompt_past_the_priced_length_is_refused_before_reserving(
-    db_session: AsyncSession, guard: Callable[..., BudgetGuard]
-) -> None:
-    short_limit = guard()
-    short_limit.price = prices.Price(
-        PRICE.rates,
-        checked="2026-11-06",
-        source="https://example.com/pricing",
-        max_prompt_tokens=10,
-    )
-    model = GenericFakeChatModel(messages=iter([answer("4")]), callbacks=[short_limit])
-    with pytest.raises(PromptTooLong) as refused:
-        await model.ainvoke(QUESTION)
-    assert refused.value.status == 422
-    assert await calls(db_session) == []
 
 
 async def test_stale_reservations_are_closed_at_their_reserved_cost(
@@ -498,52 +316,6 @@ async def test_concurrent_reservations_never_overshoot_the_cap(
     await engine.dispose()
     assert results.count(True) == 3
     assert total == 900
-
-
-@pytest.mark.parametrize(
-    "tool",
-    [
-        {"type": "web_search"},  # OpenAI, billed per search
-        {"type": "web_search_20250305", "name": "web_search", "max_uses": 3},  # Anthropic
-        {"type": "file_search", "vector_store_ids": ["vs_1"]},
-        {"type": "code_interpreter", "container": {"type": "auto"}},
-    ],
-)
-async def test_a_tool_the_provider_runs_and_bills_per_use_is_refused_before_reserving(
-    db_session: AsyncSession, guard: Callable[..., BudgetGuard], tool: dict[str, Any]
-) -> None:
-    model = GenericFakeChatModel(messages=iter([answer("4")]), callbacks=[guard()])
-    with pytest.raises(UnpricedRequest, match=str(tool["type"])):
-        await model.bind(tools=[tool]).ainvoke(QUESTION)
-    assert await calls(db_session) == []
-
-
-async def test_tools_the_app_runs_cost_only_tokens_and_are_allowed(
-    db_session: AsyncSession, guard: Callable[..., BudgetGuard]
-) -> None:
-    openai_style = {"type": "function", "function": {"name": "f", "parameters": {}}}
-    anthropic_style = {"name": "f", "description": "d", "input_schema": {"type": "object"}}
-    model = GenericFakeChatModel(messages=iter([answer("4")]), callbacks=[guard()])
-    await model.bind(tools=[openai_style, anthropic_style]).ainvoke(QUESTION)
-    assert [c.status for c in await calls(db_session)] == ["settled"]
-
-
-@pytest.mark.parametrize("tier", ["priority", "scale"])
-async def test_a_service_tier_priced_above_the_standard_rates_is_refused(
-    db_session: AsyncSession, guard: Callable[..., BudgetGuard], tier: str
-) -> None:
-    model = GenericFakeChatModel(messages=iter([answer("4")]), callbacks=[guard()])
-    with pytest.raises(UnpricedRequest, match=tier):
-        await model.bind(service_tier=tier).ainvoke(QUESTION)
-    assert await calls(db_session) == []
-
-
-@pytest.mark.parametrize("tier", ["auto", "default", "flex", "standard_only"])
-async def test_service_tiers_at_or_below_the_standard_rates_are_allowed(
-    guard: Callable[..., BudgetGuard], tier: str
-) -> None:
-    model = GenericFakeChatModel(messages=iter([answer("4")]), callbacks=[guard()])
-    await model.bind(service_tier=tier).ainvoke(QUESTION)
 
 
 async def test_the_budget_has_its_own_pool(app: FastAPI) -> None:

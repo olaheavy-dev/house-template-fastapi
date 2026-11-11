@@ -329,18 +329,18 @@ async def test_a_lone_opening_bracket_at_the_end_of_a_stream_is_still_shown() ->
 
 @pytest.mark.parametrize("opening", ['{"a": ', '["x", ', "[1, ", "[ 2"])
 async def test_text_that_opens_like_a_json_document_is_taken_as_json(opening: str) -> None:
-    from app.llm.langchain.redaction import _opens_json
+    from app.llm.core.redaction_data import opens_json
 
-    assert _opens_json(opening)
+    assert opens_json(opening)
 
 
 @pytest.mark.parametrize(
     "opening", ["[NAME_1], hi", "  [EMAIL_2]", "[", "Hello {", "[a", "[ NAME_1]"]
 )
 async def test_text_that_opens_with_a_placeholder_or_plain_words_is_not(opening: str) -> None:
-    from app.llm.langchain.redaction import _opens_json
+    from app.llm.core.redaction_data import opens_json
 
-    assert not _opens_json(opening)
+    assert not opens_json(opening)
 
 
 # --- additional_kwargs in streamed chunks ---------------------------------------------------------

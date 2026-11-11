@@ -257,7 +257,7 @@ async def test_a_run_that_errors_while_the_anonymizer_fails_sends_no_value_at_al
 def test_a_failed_mask_keeps_only_the_error_key_langsmith_needs_and_no_other_key() -> None:
     anonymize = masking_anonymizer(Redactor(DETECTORS))
     with (
-        mock.patch("app.llm.langchain.redaction._walk_data", return_value=["not", "a", "dict"]),
+        mock.patch("app.llm.langchain.redaction.walk_data", return_value=["not", "a", "dict"]),
         capture_logs() as logs,
     ):
         masked = anonymize({"inputs": EMAIL, "error": EMAIL, EMAIL: PHONE})

@@ -309,9 +309,9 @@ async def test_the_problem_body_for_each_provider_failure(
 async def test_a_retry_after_is_sent_only_when_the_outcome_says_retry(
     app: FastAPI, client: httpx.AsyncClient
 ) -> None:
-    # Passing the provider's value on is test_llm_errors.py's. Here: a provider header is ignored
-    # on an outcome that is not retryable (504, 503 auth) and, when retryable, a missing or empty
-    # header falls back to 30.
+    # Passing the provider's value on is test_llm_parity_budget.py's. Here: a provider header is
+    # ignored on an outcome that is not retryable (504, 503 auth) and, when retryable, a missing or
+    # empty header falls back to 30.
     def with_header(error: ModelError, headers: dict[str, str]) -> ModelError:
         error.response = SimpleNamespace(headers=headers)  # type: ignore[attr-defined]
         return error
