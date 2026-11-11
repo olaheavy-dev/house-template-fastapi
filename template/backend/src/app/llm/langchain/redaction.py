@@ -571,11 +571,25 @@ class _StreamRestorers:
                 )
             else:  # refusal
                 tails.append(AIMessageChunk(content="", additional_kwargs={"refusal": tail}))
-        for (kind, index), fragments in self._held.items():
-            whole = "".join(fragments)
-            if not whole:
-                continue
-            tails.append(self._transport_tail(kind, index, self._values.raw(whole)))
+        restored = {
+            key: self._values.raw(whole) for key, f in self._held.items() if (whole := "".join(f))
+        }
+        for (kind, index), arguments in restored.items():
+            if kind == "call" and ("kwargs-call", index) in restored:
+                continue  # sent with the raw call below, in one chunk
+            piece = self._transport_tail(kind, index, arguments)
+            if kind == "kwargs-call" and ("call", index) in restored:
+                # langchain-core also derives tool_call_chunks from the raw calls of a chunk, so
+                # the same call was held twice. One tail carries both, and since it has an
+                # explicit tool-call chunk nothing is derived from the kwargs: the arguments
+                # come out once.
+                explicit = self._transport_tail("call", index, restored[("call", index)])
+                piece = AIMessageChunk(
+                    content="",
+                    additional_kwargs=piece.additional_kwargs,
+                    tool_call_chunks=explicit.tool_call_chunks,
+                )
+            tails.append(piece)
         self._held.clear()
         return tails
 
