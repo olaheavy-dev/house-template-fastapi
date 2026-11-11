@@ -1,3 +1,6 @@
+"""The price tables and the cost arithmetic, for any framework (the usage the cases build is the
+neutral one)."""
+
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta, timezone
@@ -7,18 +10,29 @@ import pytest
 
 from app.llm.core.prices import Price, Rates, ceiling, cost
 from app.llm.core.usage import Usage
-from app.llm.langchain.usage import from_langchain
 from app.llm.prices import EMBEDDING_PRICES, PRICES
 
 
 def usage(input_tokens: int, output_tokens: int, **details: Any) -> Usage:
-    return from_langchain(
-        {
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "total_tokens": input_tokens + output_tokens,
-            "input_token_details": details,  # type: ignore[typeddict-item]
-        }
+    return neutral(input_tokens, output_tokens, details, {})
+
+
+def neutral(input_tokens: int, output_tokens: int, given: dict[str, Any], out: dict[str, Any]) -> Usage:
+    """The neutral Usage a framework's adapter makes: a detail that is missing or None is 0. The
+    keys are the ones LangChain's usage_metadata uses (the names these cases were written with),
+    mapped by hand, so the cases hold for any framework's adapter."""
+
+    def count(details: dict[str, Any], key: str) -> int:
+        return int(details.get(key) or 0)
+
+    return Usage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        reasoning_tokens=count(out, "reasoning"),
+        cache_read_tokens=count(given, "cache_read"),
+        cache_write_short_tokens=count(given, "ephemeral_5m_input_tokens"),
+        cache_write_long_tokens=count(given, "ephemeral_1h_input_tokens"),
+        cache_write_undivided_tokens=count(given, "cache_creation"),
     )
 
 
