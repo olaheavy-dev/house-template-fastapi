@@ -73,8 +73,15 @@ def check_chain(client: Any, expected: list[Any]) -> None:
 
 class Gateway:
     def __init__(
-        self, settings: Settings, sessionmaker: Callable[[], async_sessionmaker[AsyncSession]]
+        self,
+        settings: Settings,
+        sessionmaker: Callable[[], async_sessionmaker[AsyncSession]],
+        *,
+        http_client: Any = None,
     ) -> None:
+        """`http_client` is a test seam: an httpx client over a fake transport, given to the chat
+        provider's SDK so its real retries and timeouts run with no network. Production passes
+        none."""
         llm_model = (settings.llm_model or "").strip()
         if not llm_model:
             raise ValueError(
@@ -146,6 +153,7 @@ class Gateway:
                     api_key=api_key.get_secret_value(),
                     timeout=settings.llm_timeout_seconds,
                     max_retries=settings.llm_max_retries,
+                    http_client=http_client,
                 )
                 self._client = AnthropicClient(
                     model=model_id, anthropic_client=self._sdk, middleware=self.middleware
@@ -155,6 +163,7 @@ class Gateway:
                     api_key,
                     timeout=settings.llm_timeout_seconds,
                     max_retries=settings.llm_max_retries,
+                    http_client=http_client,
                 )
                 # OpenAI's Responses API; the middleware sends store=False on every call.
                 self._client = OpenAIChatClient(
