@@ -1,5 +1,5 @@
-"""How model failures and an exhausted budget reach the client: problem responses that never carry
-the provider's message."""
+"""How an exhausted budget reaches the client: problem responses. (How a model failure reaches the
+client, never with the provider's message, is in test_llm_parity_budget.py.)"""
 
 from __future__ import annotations
 
