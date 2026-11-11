@@ -46,7 +46,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator, Mapping, Sequence
 from contextlib import aclosing
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -309,10 +309,29 @@ def _walk_text(text: str, leaf: Leaf, context: str = "") -> str:
 _walk_raw = _walk_text  # the older name: raw JSON argument strings
 
 
+def _type_of(block: dict[str, Any]) -> str | None:
+    """A content block's type if it is a string (user data can put anything in a `type`)."""
+    kind = block.get("type")
+    return kind if isinstance(kind, str) else None
+
+
+def _string_tokens(node: Any) -> Iterator[_Str]:
+    """Every string token of a scanned JSON text, keys and values, in document order."""
+    if isinstance(node, _Str):
+        yield node
+    elif isinstance(node, _Obj):
+        for key, child in node.members:
+            yield key
+            yield from _string_tokens(child)
+    elif isinstance(node, _Arr):
+        for child in node.items:
+            yield from _string_tokens(child)
+
+
 def _walk_block(
     block: dict[str, Any], leaf: Leaf, tools: Mapping[str, str], context: str = ""
 ) -> dict[str, Any]:
-    if block.get("type") in _MEDIA or block.get("type") in _UNTOUCHED:
+    if _type_of(block) in _MEDIA or _type_of(block) in _UNTOUCHED:
         return block
     if block.get("type") == "tool_result":  # the answer of the tool named by its tool_use
         context = _field_context(tools.get(str(block.get("tool_use_id"))))
@@ -410,7 +429,7 @@ def _walk_raw_call(call: Any, leaf: Leaf) -> Any:
 def _media_count(content: Any) -> int:
     if isinstance(content, list):
         return sum(
-            (1 if item.get("type") in _MEDIA else _media_count(item.get("content")))
+            (1 if _type_of(item) in _MEDIA else _media_count(item.get("content")))
             for item in content
             if isinstance(item, dict)
         )
@@ -518,9 +537,51 @@ class _Restorer:
         return restored
 
     def raw(self, text: str) -> str:
+        """A provider's transport string (an argument string, a fragment of one, JSON-mode text).
+        Whole JSON is restored string by string, at each nesting level; anything else (a cut-off
+        fragment) by substituting the JSON-escaped originals."""
+        restored = self._restore_json(text)
+        if restored is not None:
+            return restored
         restored, missed = restore(text, self.escaped)
         self.unrestored += missed
         return restored
+
+    def string(self, text: str) -> str:
+        """The decoded text of a string value. JSON text inside it is restored at its own level, so
+        an original with a quote or a backslash does not break the document; anything else is plain
+        text."""
+        if text.lstrip()[:1] in ("{", "["):
+            restored = self._restore_json(text)
+            if restored is not None:
+                return restored
+        return self.text(text)
+
+    def _restore_json(self, text: str) -> str | None:
+        """`text` as JSON with the placeholders in its strings and keys restored, each string at its
+        own level (a string that is itself JSON text is restored inside); None if it is not a JSON
+        object or array, or too deeply nested to read."""
+        if text.lstrip()[:1] not in ("{", "["):
+            return None
+        try:
+            parsed = json.loads(text)
+            if not isinstance(parsed, dict | list):
+                return None
+            edits: list[tuple[int, int, str]] = []
+            for token in _string_tokens(_scan(text)):
+                new = self.string(token.value)
+                if new != token.value:
+                    edits.append((token.start, token.end, json.dumps(new, ensure_ascii=False)))
+        except (ValueError, RecursionError):
+            return None
+        pieces: list[str] = []
+        position = 0
+        for start, end, replacement in edits:
+            pieces.append(text[position:start])
+            pieces.append(replacement)
+            position = end
+        pieces.append(text[position:])
+        return "".join(pieces)
 
     def answer(self, text: str) -> str:
         """Answer text: JSON text gets escaped originals. It is JSON when the call asked for JSON
@@ -528,43 +589,78 @@ class _Restorer:
         return self.raw(text) if self._json_text or _opens_json(text) else self.text(text)
 
     def data(self, obj: Any) -> Any:
+        """Plain data (tool arguments, a parsed answer): every string restored as text, JSON text
+        inside a string at its own level. No field name changes how: a field called `arguments`
+        in a tool's own schema is data like any other."""
         if isinstance(obj, BaseModel):
             # A parsed schema object (OpenAI's json_schema): copy it with restored fields. Not
             # validated again: the provider's SDK validated the placeholder form.
             fields = {name: self.data(getattr(obj, name)) for name in type(obj).model_fields}
             return obj.model_copy(update=fields)
         if isinstance(obj, str):
-            return self.text(obj)
+            return self.string(obj)
         if isinstance(obj, dict):
-            if obj.get("type") in _UNTOUCHED:
-                return obj
             return {
                 # A key can hold a placeholder too (the model copied one into a field name).
-                (self.text(key) if isinstance(key, str) else key): (
-                    self.raw(value)
-                    if key in _RAW_KEYS and isinstance(value, str)
-                    else self.data(value)
-                )
+                (self.string(key) if isinstance(key, str) else key): self.data(value)
                 for key, value in obj.items()
             }
         if isinstance(obj, list | tuple):
             return [self.data(value) for value in obj]
         return obj
 
+    def block(self, block: dict[str, Any]) -> dict[str, Any]:
+        """A content block. Thinking and reasoning blocks are left as they are. A block's own
+        `arguments` or `partial_json` string is the provider's transport string (a Responses
+        function_call, Anthropic's partial JSON), by its position in the block; the same name
+        deeper down is a tool's own data."""
+        kind = _type_of(block)
+        if kind in _UNTOUCHED:
+            return block
+        if kind == "text" and isinstance(block.get("text"), str):
+            return {**block, "text": self.answer(block["text"])}
+        return {
+            key: self.raw(value)
+            if key in _RAW_KEYS and isinstance(value, str)
+            else self.data(value)
+            for key, value in block.items()
+        }
+
     def content(self, content: Any) -> Any:
         if isinstance(content, str):
             return self.answer(content)
         if not isinstance(content, list):
             return content
-        out: list[Any] = []
-        for block in content:
-            if isinstance(block, str):
-                out.append(self.answer(block))
-            elif isinstance(block, dict) and block.get("type") == "text":
-                out.append({**block, "text": self.answer(str(block.get("text", "")))})
-            else:
-                out.append(self.data(block))
-        return out
+        return [
+            self.answer(block)
+            if isinstance(block, str)
+            else self.block(block)
+            if isinstance(block, dict)
+            else block
+            for block in content
+        ]
+
+    def transport_kwargs(self, key: str, value: Any) -> Any:
+        """An additional_kwargs entry. The older raw argument strings of a tool call are transport
+        strings; reasoning is left alone; everything else is data."""
+        if key == "reasoning":
+            return value
+        if key == "tool_calls" and isinstance(value, list):
+            return [self._transport_call(call) for call in value]
+        if key == "function_call" and isinstance(value, dict):
+            return self._transport_function(value)
+        return self.data(value)
+
+    def _transport_function(self, function: dict[str, Any]) -> dict[str, Any]:
+        arguments = function.get("arguments")
+        if isinstance(arguments, str):
+            return {**function, "arguments": self.raw(arguments)}
+        return function
+
+    def _transport_call(self, call: Any) -> Any:
+        if isinstance(call, dict) and isinstance(call.get("function"), dict):
+            return {**call, "function": self._transport_function(call["function"])}
+        return call
 
     def message(self, message: AIMessage) -> AIMessage:
         update: dict[str, Any] = {"content": self.content(message.content)}
@@ -581,7 +677,7 @@ class _Restorer:
             ]
         if message.additional_kwargs:
             update["additional_kwargs"] = {
-                key: value if key == "reasoning" else self.data(value)
+                key: self.transport_kwargs(key, value)
                 for key, value in message.additional_kwargs.items()
             }
         return message.model_copy(update=update)
