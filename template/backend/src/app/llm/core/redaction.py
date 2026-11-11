@@ -27,6 +27,7 @@ Redactor on the outgoing messages before the budget reservation (app/llm/langcha
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from bisect import bisect_left, bisect_right
@@ -262,13 +263,21 @@ def _normal(value: str) -> str:
 def _value_patterns(value: str) -> list[re.Pattern[str]]:
     """Patterns matching `value` ignoring case and any run of whitespace, not inside a longer
     word, written in either Unicode normal form (NFC, "é" as one character, or NFD, "e" and a
-    combining accent). None for a value of only whitespace."""
+    combining accent), and also as it is written inside JSON text (a quote, a backslash or a
+    control character escaped, non-ASCII as \\uXXXX or as it is), so a known value is found in a
+    JSON document that was not decoded. None for a value of only whitespace."""
     bodies: dict[str, None] = {}  # in order, without repeats (an ASCII value has one form)
-    for form in ("NFC", "NFD"):
-        words = unicodedata.normalize(form, value).split()
-        if not words:
-            return []
-        bodies[r"\s+".join(re.escape(word) for word in words)] = None
+    forms = [value]
+    for ensure_ascii in (False, True):
+        escaped = json.dumps(value, ensure_ascii=ensure_ascii)[1:-1]
+        if escaped != value:
+            forms.append(escaped)
+    for text in forms:
+        for form in ("NFC", "NFD"):
+            words = unicodedata.normalize(form, text).split()
+            if not words:
+                return []
+            bodies[r"\s+".join(re.escape(word) for word in words)] = None
     return [re.compile(rf"(?<!\w){body}(?!\w)", re.IGNORECASE) for body in bodies]
 
 
@@ -319,18 +328,29 @@ class Redactor:
             _check_kind(detector.kind)
 
     def redact(
-        self, texts: Sequence[str], scope: Scope | None = None, *, log_conflicts: bool = True
+        self,
+        texts: Sequence[str],
+        scope: Scope | None = None,
+        *,
+        log_conflicts: bool = True,
+        contexts: Sequence[str] | None = None,
     ) -> Redacted:
         """Replaces the values in every text. The scope defaults to the current one. Raises
         TypeError for a single str (pass a list), and RedactionFailed on any error while
         redacting, so the caller sends nothing. `log_conflicts=False` skips the
         redaction_allow_conflict warning, for a caller that redacts many payloads under one scope
-        (trace masking) and would repeat it for each."""
+        (trace masking) and would repeat it for each. `contexts`, one string per text, is text that
+        stands in front of that text for detection only (a field name such as "date of birth: "),
+        so a rule that needs a word before the value can see it; only a match inside the text
+        itself is replaced, and the context is never part of the result."""
         items = _check_strings(texts, "texts")
+        prefixes = _check_strings(contexts, "contexts") if contexts is not None else None
         failure: str | None = None
         try:
+            if prefixes is not None and len(prefixes) != len(items):
+                raise ValueError("one context for each text")
             return self._redact(
-                items, scope if scope is not None else current_scope(), log_conflicts
+                items, scope if scope is not None else current_scope(), log_conflicts, prefixes
             )
         except Exception as exc:  # fail closed: a bug here must not let the text through
             failure = type(exc).__name__
@@ -338,7 +358,13 @@ class Redactor:
         log.error("llm_redaction_failed", error_type=failure)
         raise RedactionFailed
 
-    def _redact(self, texts: list[str], scope: Scope, log_conflicts: bool = True) -> Redacted:
+    def _redact(
+        self,
+        texts: list[str],
+        scope: Scope,
+        log_conflicts: bool = True,
+        contexts: list[str] | None = None,
+    ) -> Redacted:
         allowed = [p for value in scope.allow for p in _value_patterns(value)]
         named = [
             (kind, value, pattern)
@@ -368,7 +394,9 @@ class Redactor:
             mapping[name] = original
             return name
 
-        for text in texts:
+        for number, text in enumerate(texts):
+            prefix = contexts[number] if contexts is not None else ""
+            seen = prefix + text  # detectors see the field name too; only the value is replaced
             allow_starts, allow_ends = _union(
                 [m.span() for pattern in allowed for m in pattern.finditer(text)]
             )
@@ -382,14 +410,21 @@ class Redactor:
                 if _touches(allow_starts, allow_ends, item.span.start, item.span.end):
                     conflicts.add(item.span.kind)
             for detector in self._detectors:
-                for span in detector.find(text):
+                for found_span in detector.find(seen):
                     if (
-                        not isinstance(span, Span)
-                        or not isinstance(span.start, int)
-                        or not isinstance(span.end, int)
-                        or not 0 <= span.start < span.end <= len(text)
+                        not isinstance(found_span, Span)
+                        or not isinstance(found_span.start, int)
+                        or not isinstance(found_span.end, int)
+                        or not 0 <= found_span.start < found_span.end <= len(seen)
                     ):
                         raise ValueError("a detector returned a span outside the text")
+                    if found_span.start < len(prefix):
+                        continue  # a match that begins in the field name is not the value
+                    span = Span(
+                        found_span.start - len(prefix),
+                        found_span.end - len(prefix),
+                        found_span.kind,
+                    )
                     if span.kind not in checked_kinds:
                         checked_kinds.add(_check_kind(span.kind))
                     if _contains(allow_starts, allow_ends, span.start, span.end) and not _touches(

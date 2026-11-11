@@ -110,7 +110,9 @@ _STRUCTURAL = frozenset(
 # Keys whose string value is raw JSON text (a provider's argument string, a streamed fragment).
 _RAW_KEYS = frozenset({"arguments", "partial_json"})
 
-Leaf = Callable[[str], str]
+# What the walkers call for each string: (the text, the field name in front of it) -> the text. The
+# field name ("date of birth: ") is context for detection only; see Redactor.redact(contexts=).
+Leaf = Callable[[str, str], str]
 
 
 class RedactionUnavailable(RuntimeError):
@@ -121,38 +123,60 @@ class RedactionUnavailable(RuntimeError):
 
 # --- walking the strings of a message ----------------------------------------------------------
 
+_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
-def _walk_data(obj: Any, leaf: Leaf) -> Any:
-    """Every string value in plain data (tool arguments, a parsed answer), keys untouched."""
+
+def _field_context(key: Any) -> str:
+    """A field name as words in front of its value: `date_of_birth` and `dateOfBirth` both become
+    "date of birth: ", so a rule that needs the words "date of birth", "account", "sort code" or
+    "NHS" before a value finds them when the value is in a field of that name."""
+    if not isinstance(key, str) or not key:
+        return ""
+    words = _CAMEL.sub(" ", key).replace("_", " ").replace("-", " ").replace(".", " ")
+    return " ".join(words.split())[-40:] + ": "
+
+
+def _walk_data(obj: Any, leaf: Leaf, context: str = "") -> Any:
+    """Every string value in plain data (tool arguments, a parsed answer), keys untouched. A value
+    carries its field name as context (a list item, its list's), and a string that is JSON text is
+    decoded and walked."""
     if isinstance(obj, str):
-        return leaf(obj)
+        return _walk_text(obj, leaf, context)
     if isinstance(obj, dict):
-        return {key: _walk_data(value, leaf) for key, value in obj.items()}
+        return {key: _walk_data(value, leaf, _field_context(key)) for key, value in obj.items()}
     if isinstance(obj, list | tuple):
-        return [_walk_data(value, leaf) for value in obj]
+        return [_walk_data(value, leaf, context) for value in obj]
     return obj
 
 
-def _walk_raw(text: str, leaf: Leaf) -> str:
-    """Raw JSON text (an argument string): its string values are walked, and the text is written
-    again only when one changed, so an untouched string is sent byte for byte. Text that is not
-    JSON is one string."""
-    try:
-        parsed = json.loads(text)
-    except ValueError:
-        return leaf(text)
-    if not isinstance(parsed, dict | list):
-        return leaf(text)
-    changed = False
+def _walk_text(text: str, leaf: Leaf, context: str = "") -> str:
+    """One string. JSON text (an object or array: a provider's argument string, a tool result, a
+    streamed fragment that is whole) is decoded, its string values walked with their field names,
+    and the text is written again only when one changed, so an untouched string is sent byte for
+    byte. Decoding matters: a value with a quote or a backslash is escaped in JSON text and would
+    not match as it is. Anything else is one string."""
+    if text.lstrip()[:1] in ("{", "["):
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            return leaf(text, context)
+        if isinstance(parsed, dict | list):
+            changed = False
 
-    def track(value: str) -> str:
-        nonlocal changed
-        out = leaf(value)
-        changed = changed or out != value
-        return out
+            def track(value: str, field: str) -> str:
+                nonlocal changed
+                out = leaf(value, field)
+                changed = changed or out != value
+                return out
 
-    rebuilt = _walk_data(parsed, track)
-    return json.dumps(rebuilt, ensure_ascii=False, separators=(",", ":")) if changed else text
+            rebuilt = _walk_data(parsed, track, context)
+            return (
+                json.dumps(rebuilt, ensure_ascii=False, separators=(",", ":")) if changed else text
+            )
+    return leaf(text, context)
+
+
+_walk_raw = _walk_text  # the older name: raw JSON argument strings
 
 
 def _walk_block(block: dict[str, Any], leaf: Leaf) -> dict[str, Any]:
@@ -161,12 +185,7 @@ def _walk_block(block: dict[str, Any], leaf: Leaf) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key, value in block.items():
         if isinstance(value, str):
-            if key in _STRUCTURAL:
-                out[key] = value
-            elif key in _RAW_KEYS:
-                out[key] = _walk_raw(value, leaf)
-            else:
-                out[key] = leaf(value)
+            out[key] = value if key in _STRUCTURAL else _walk_text(value, leaf)
         elif key in ("content", "summary") and isinstance(value, list):
             out[key] = _walk_content(value, leaf)
         elif isinstance(value, dict | list | tuple):
@@ -178,10 +197,10 @@ def _walk_block(block: dict[str, Any], leaf: Leaf) -> dict[str, Any]:
 
 def _walk_content(content: Any, leaf: Leaf) -> Any:
     if isinstance(content, str):
-        return leaf(content)
+        return _walk_text(content, leaf)
     if isinstance(content, list):
         return [
-            leaf(item)
+            _walk_text(item, leaf)
             if isinstance(item, str)
             else _walk_block(item, leaf)
             if isinstance(item, dict)
@@ -270,9 +289,11 @@ def prepare(redactor: Redactor, messages: Sequence[BaseMessage]) -> _Prepared:
     failure: str | None = None
     try:
         strings: list[str] = []
+        contexts: list[str] = []
 
-        def collect(text: str) -> str:
+        def collect(text: str, context: str) -> str:
             strings.append(text)
+            contexts.append(context)
             return text
 
         for message in messages:
@@ -281,9 +302,12 @@ def prepare(redactor: Redactor, messages: Sequence[BaseMessage]) -> _Prepared:
         if names and redactor.redact(names).texts != tuple(names):
             # A provider accepts only plain names there, so no placeholder fits: refuse.
             raise _NameFieldHoldsPersonalData
-        result = redactor.redact(strings)
+        result = redactor.redact(strings, contexts=contexts)
         replacements = iter(result.texts)
-        rebuilt = [_walk_message(message, lambda _text: next(replacements)) for message in messages]
+        rebuilt = [
+            _walk_message(message, lambda _text, _context: next(replacements))
+            for message in messages
+        ]
         if next(replacements, None) is not None:  # the two walks disagree: a bug, send nothing
             raise RuntimeError("the redacted texts did not match the message strings")
         unscanned = sum(_media_count(message.content) for message in messages)
@@ -981,14 +1005,17 @@ def masking_anonymizer(redactor: Redactor) -> Callable[[dict[str, Any]], dict[st
         failure: str | None = None
         try:
             strings: list[str] = []
+            contexts: list[str] = []
 
-            def collect(text: str) -> str:
+            def collect(text: str, context: str) -> str:
                 strings.append(text)
+                contexts.append(context)
                 return text
 
             _walk_data(data, collect)
-            replacements = iter(redactor.redact(strings, log_conflicts=False).texts)
-            masked = _walk_data(data, lambda _text: next(replacements))
+            result = redactor.redact(strings, log_conflicts=False, contexts=contexts)
+            replacements = iter(result.texts)
+            masked = _walk_data(data, lambda _text, _context: next(replacements))
             if isinstance(masked, dict):
                 return masked
         except RedactionFailed:  # already logged, by type only
