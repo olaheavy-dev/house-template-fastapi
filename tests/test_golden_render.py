@@ -33,9 +33,9 @@ import yaml
 
 from conftest import BASE_ANSWERS, ROOT
 
-# The v0.8.0 release (tag; commit 4c6d12a), the state the default render may only leave on purpose.
+# The v0.9.0 release (tag; commit a700ee9), the state the default render may only leave on purpose.
 # It records the `llm` answer, so a baseline project updates to HEAD without the 0.7.x fallbacks.
-BASELINE_REF = "v0.8.0"
+BASELINE_REF = "v0.9.0"
 
 # The files 0.8.0 removed (#33): the old import paths and the tests that exist only for them. A
 # project made from v0.7.x or earlier loses them on `copier update` to this version or later;
@@ -46,122 +46,12 @@ REMOVED_FILES = {
     "backend/tests/test_llm_shims.py",
 }
 
-# {rendered path: "reason (#NN)"}. Starts empty after each baseline move; the entries below are the
-# changes of #78 parts 2 and 3 (personal-data redaction in the LangChain adapter, and of text sent for embeddings) and of #35 PR 1 (the
-# shared parity harness and the framework-neutral redaction walkers; "#35:" marks its reasons). The
-# test fails for a path that differs without an entry here, and for an entry whose path no longer
-# differs. A path-level entry hides a second, accidental change to the same file until the next
-# baseline move.
+# {rendered path: "reason (#NN)"}. Starts empty after each baseline move. The test fails for a path
+# that differs without an entry here, and for an entry whose path no longer differs. A path-level
+# entry hides a second, accidental change to the same file until the next baseline move.
 # Not compared: file modes, symlinks and empty directories (the template has no tracked
 # executables today).
-INTENDED: dict[str, str] = {
-    "backend/src/app/llm/core/redaction_data.py":
-        "new: the framework-neutral redaction walkers and restorer, moved from langchain (#35)",
-    "backend/src/app/llm/core/__init__.py":
-        "docstring names redaction_data.py (#35)",
-    "backend/tests/harness/__init__.py":
-        "new: the harness protocol the shared parity tests run through (#35); set_redactor (#78)",
-    "backend/tests/harness/langchain.py":
-        "new: the LangChain harness (#35); set_redactor (#78)",
-    "backend/tests/test_llm_parity_budget.py":
-        "new: the budget cases moved here, run once per framework (#35)",
-    "backend/tests/test_llm_budget.py":
-        "the budget cases that hold for every framework moved to test_llm_parity_budget.py (#35)",
-    "backend/tests/test_llm_embeddings.py":
-        "the shared embedding budget cases moved to test_llm_parity_budget.py (#35); the class takes a redactor (#78)",
-    "backend/tests/test_llm_errors.py":
-        "the failure-to-problem cases moved to test_llm_parity_budget.py (#35)",
-    ".claude/rules/fastapi.md":
-        "rules text for personal-data redaction, and migrations 0002 to 0006 (#78); #35: names the core redaction module and the parity harness",
-    ".github/template-owned/fastapi.txt":
-        "owns migration 0006 and the redaction evals (#78)",
-    "backend/.env.example":
-        "LLM_REDACTION and LLM_REDACT_KINDS; the comment says embeddings are cleaned too (#78)",
-    "backend/migrations/versions/20261110_0006_llm_call_redacted_count.py":
-        "new migration 0006: llm_call.redacted_count (#78)",
-    "backend/src/app/llm/core/budget.py":
-        "LlmCall.redacted_count, CallTags.redacted_count, reserve() (#78)",
-    "backend/src/app/llm/core/metrics.py":
-        "the llm.redactions counter (#78)",
-    "backend/src/app/llm/core/redaction.py":
-        "choose_detectors (LLM_REDACT_KINDS); redact_each for embeddings (#78)",
-    "backend/src/app/llm/redaction_rules.py":
-        "context words for birth date, account, NHS and sort code under common field names (#78)",
-    "backend/src/app/llm/langchain/callbacks.py":
-        "BudgetGuard reads redacted_count from the call metadata (#78)",
-    "backend/src/app/llm/langchain/gateway.py":
-        "gateway.model() returns the redacting wrapper; LangSmith masking client; the embeddings get the redactor (#78)",
-    "backend/src/app/llm/core/embeddings.py":
-        "embed() redacts each text first and takes a required redactor (#78)",
-    "backend/src/app/llm/langchain/embeddings.py":
-        "GatewayEmbeddings takes the gateway's redactor (#78)",
-    "backend/tests/test_llm_core_embeddings.py":
-        "tests for embedding redaction in the core (#78)",
-    "backend/tests/test_llm_langchain_embeddings.py":
-        "tests for the redactor of GatewayEmbeddings (#78)",
-    "backend/tests/test_llm_parity_redaction.py":
-        "new: shared embedding redaction tests, run once per framework (#78)",
-    "backend/tests/test_llm_redaction_embeddings.py":
-        "new: embedding redaction on the wire and in traces, and the bypass guards (#78)",
-    "backend/src/app/llm/langchain/redaction.py":
-        "new: RedactingChatModel and masking_anonymizer (#78); #35: the framework-free walkers and restorer moved to core/redaction_data.py; _Restorer subclasses it",
-    "backend/src/app/settings.py":
-        "LLM_REDACTION and LLM_REDACT_KINDS settings; the comment says embeddings are cleaned too (#78)",
-    "backend/tests/evals/redaction_corpus.py":
-        "new: synthetic corpus for the redaction evals (#78)",
-    "backend/tests/evals/test_redaction_evals.py":
-        "new: live redaction evals, including redacted embeddings (#78)",
-    "backend/tests/test_llm_core_redaction.py":
-        "tests for choose_detectors (#78); #35: a test pins the imports of redaction_data.py; tests for redact_each (#78)",
-    "backend/tests/test_llm_gateway.py":
-        "tests for the redaction start-up log and kinds (#78)",
-    "backend/tests/test_llm_langchain_callbacks.py":
-        "tests for the redaction count tag (#78)",
-    "backend/tests/test_llm_ledger.py":
-        "tests for llm_call.redacted_count; the embeddings class takes a redactor (#78)",
-    "backend/tests/test_llm_migrations.py":
-        "tests for migration 0006 and the stamp-0005 recipe (#78)",
-    "backend/tests/test_llm_redaction_agents.py":
-        "new: agents and gateway wiring through the wrapper (#78)",
-    "backend/tests/cassettes/test_llm_redaction_wire/test_nothing_unredacted_reaches_the_wire.yaml":
-        "new: the recorded call of the wire test, redacted body only (#78)",
-    "backend/tests/conftest.py":
-        "restores the process-wide LangSmith client after each test (#78); #35: the `framework` fixture, run once per framework",
-    "backend/tests/test_llm_redaction_restore.py":
-        "new: restoring by position, nested JSON text and data of any shape (#78)",
-    "backend/tests/test_llm_redaction_fields.py":
-        "new: field names as context and JSON text decoded before matching (#78); #35: imports walk_text and opens_json from the core module",
-    "backend/tests/test_llm_steps.py":
-        "the llm_call rows of the step tests sort deterministically (#78)",
-    "backend/tests/test_llm_redaction_context.py":
-        "new: the caller's context reaches the inner run on streamed calls (#78)",
-    "backend/tests/test_llm_redaction_corpus.py":
-        "new: the corpus against the default detectors, offline (#78)",
-    "backend/tests/test_llm_redaction_ledger.py":
-        "new: redaction counts on a real ledger (#78)",
-    "backend/tests/test_llm_redaction_logs.py":
-        "new: logs and the 503 body hold no value (#78)",
-    "backend/tests/test_llm_redaction_model.py":
-        "new: ainvoke through the wrapper (#78)",
-    "backend/tests/test_llm_redaction_observability.py":
-        "new: the llm.redactions metric and unscanned media (#78)",
-    "backend/tests/test_llm_redaction_stream.py":
-        "new: streaming through the wrapper (#78); #35: imports from the core module; patch target walk_data",
-    "backend/tests/test_llm_redaction_structured.py":
-        "new: structured output through the wrapper (#78)",
-    "backend/tests/test_llm_redaction_tools.py":
-        "new: tool calls through the wrapper (#78)",
-    "backend/tests/test_llm_redaction_traces.py":
-        "new: masked LangSmith traces (#78); #35: imports from the core module",
-    "backend/tests/test_llm_redaction_wire.py":
-        "new: nothing unredacted on the wire (cassette test) (#78)",
-    "backend/tests/test_llm_settings.py":
-        "tests for the redaction settings (#78)",
-    "backend/tests/test_llm_surface.py":
-        "the llm_call column pin includes redacted_count (#78); #35: a comment points at test_llm_parity_budget.py",
-    "backend/tests/wire.py":
-        "new: a fake provider wire for the redaction tests (#78)",
-}
+INTENDED: dict[str, str] = {}
 
 # DEPENDABOT_*: what Dependabot updates in this repository's rendered output
 # (.github/dependabot.yml). Its PRs must pass this test unchanged, so these are normalised away
@@ -390,7 +280,7 @@ def test_updating_a_baseline_project_with_defaults_deletes_nothing(tmp_path):
     # keeps every file the project had, keeps a file the user added, leaves no conflict markers or
     # .rej files, and brings the project to what a fresh render at HEAD produces. Copier deletes
     # files that an answer change stops generating (#32); the defaults must not stop generating any.
-    # The baseline (v0.8.0) has the #49 fix: the update works without the base answers file
+    # The baseline (v0.9.0) has the #49 fix: the update works without the base answers file
     # in Copier's temporary old copy (Copier 9.19.1 warns that the file is missing; that is harmless).
     # The project's lockfile is its own (`_skip_if_exists`), so it keeps the old content: the user
     # runs `make lock`.
@@ -422,7 +312,7 @@ def test_updating_a_baseline_project_with_storage_off_deletes_only_the_storage_f
 ):
     # A baseline project turns `storage` off. The `storage is defined` guard in copier.yml (#29) is
     # for projects made from main after #53 and before this question (#54); v0.6.1 and earlier
-    # recopy instead. That range is tested with PRE_OPTIONS in test_update.py; v0.8.0 records the
+    # recopy instead. That range is tested with PRE_OPTIONS in test_update.py; v0.9.0 records the
     # answer.
     dst = committed_baseline_project(tmp_path / "project")
     assert yaml.safe_load((dst / ANSWERS_FILE).read_text())["storage"] is True
