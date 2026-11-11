@@ -46,7 +46,7 @@ def make(settings: Settings, db_session: AsyncSession) -> Any:
 
 
 async def ask(gateway: Gateway, options: dict[str, Any] | None = None) -> None:
-    await gateway.client().get_response([Message("user", ["hi"])], options=options)  # type: ignore[arg-type]
+    await gateway.client().get_response([Message("user", ["hi"])], options=options)
 
 
 def sent(gateway: Gateway) -> list[Any]:
@@ -74,7 +74,7 @@ async def test_a_client_whose_chain_is_not_the_gateways_is_refused(make: Any, wh
 
 async def test_a_client_with_no_middleware_list_at_all_is_refused(make: Any) -> None:
     gateway = make()
-    gateway._client = object()  # type: ignore[assignment]
+    gateway._client = object()
     with pytest.raises(RedactionUnavailable):
         gateway.client()
 
@@ -181,5 +181,5 @@ def test_a_validation_error_never_echoes_the_value_given() -> None:
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError) as raised:
-        Settings(_env_file=None, llm_max_tokens="sk-secret-value")  # type: ignore[arg-type]
+        Settings(_env_file=None, llm_max_tokens="sk-secret-value")
     assert "sk-secret-value" not in str(raised.value)

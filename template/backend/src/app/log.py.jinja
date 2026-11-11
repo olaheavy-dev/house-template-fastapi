@@ -87,8 +87,25 @@ def _route_stdlib_logging(
         logger.propagate = True
     logging.getLogger("uvicorn.access").disabled = True
     # A line per outgoing HTTP request is noise at INFO.
-    for name in ("httpx", "httpx2", "httpcore", {% if llm != 'none' %}"openai", "anthropic", {% endif %}{% if llm == 'maf' %}"agent_framework", {% endif %}{% if storage %}"botocore", {% endif %}"urllib3"):
+{%- if llm == 'maf' %}
+    # agent_framework logs its exceptions' messages, which can hold the provider's text, at DEBUG.
+    for name in (
+        "httpx",
+        "httpx2",
+        "httpcore",
+        "openai",
+        "anthropic",
+        "agent_framework",
+{%- if storage %}
+        "botocore",
+{%- endif %}
+        "urllib3",
+    ):
         logging.getLogger(name).setLevel(max(level, logging.WARNING))
+{%- else %}
+    for name in ("httpx", "httpx2", "httpcore", {% if llm != 'none' %}"openai", "anthropic", {% endif %}{% if storage %}"botocore", {% endif %}"urllib3"):
+        logging.getLogger(name).setLevel(max(level, logging.WARNING))
+{%- endif %}
 
 
 async def request_context(

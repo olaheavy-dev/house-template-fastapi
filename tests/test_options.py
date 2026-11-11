@@ -73,8 +73,6 @@ LLM_FILES = [
     "backend/tests/recording.py",
     "backend/tests/test_llm_errors.py",
     "backend/tests/test_recording_keys.py",
-    "backend/tests/test_observability.py",
-    "backend/tests/wire.py",
     "backend/tests/harness/__init__.py",
     "backend/tests/test_llm_parity_budget.py",
     "backend/tests/evals/redaction_corpus.py",
@@ -859,9 +857,9 @@ def test_llm_none_is_allowed_with_the_database(render):
     assert (answers["database"], answers["llm"]) == (True, "none")
 
 
-@pytest.mark.parametrize("llm", ["maf", "LangChain", "NONE", "true"])
+@pytest.mark.parametrize("llm", ["crewai", "LangChain", "MAF", "NONE", "true"])
 def test_llm_refuses_an_unknown_framework(render, llm):
-    # `maf` arrives with #35; answers are case-sensitive.
+    # The answers are none, langchain and maf, and case-sensitive.
     with pytest.raises(ValueError, match="Invalid choice for 'llm'"):
         render(database=True, llm=llm)
 
@@ -911,8 +909,10 @@ def test_migration_chain_is_linear_in_every_variant(render, database, storage, l
     gateway = llm != "none"
     for rev in GATEWAY_REVISIONS:
         # Without the gateway the revision stays and does nothing: no table, no app.llm import.
-        assert migrations[rev]["empty"] is not gateway, rev
-        if not gateway:
+        # Revision 0003 holds LangGraph's checkpoint tables: it does nothing under MAF too.
+        has_tables = gateway and (rev != "0003" or llm == "langchain")
+        assert migrations[rev]["empty"] is not has_tables, rev
+        if not has_tables:
             assert not [i for i in migrations[rev]["imports"] if i.startswith("app.")], rev
     for rev in ("0001", "app_root"):
         assert migrations[rev]["empty"] is (rev == "app_root"), rev

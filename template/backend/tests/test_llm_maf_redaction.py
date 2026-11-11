@@ -100,7 +100,7 @@ async def test_the_instructions_an_agent_sends_are_redacted_before_the_messages(
     client = script(gateway)
     await gateway.client().get_response(
         [Message("user", [f"and {EMAIL}"])],
-        options={"instructions": f"The user is at {EMAIL}."},  # type: ignore[typeddict-item]
+        options={"instructions": f"The user is at {EMAIL}."},
     )
     assert client.seen_options[0]["instructions"] == "The user is at [EMAIL_1]."
     # One numbering over the whole request: the same email is the same placeholder.
@@ -124,7 +124,7 @@ async def test_the_originals_come_back_in_a_tool_call_the_model_makes(gateway: G
     HARNESS.install_plain(gateway, [reply])
     response = await gateway.client().get_response(
         [Message("user", [f"mail {EMAIL} or {PHONE}"])],
-        options={"tools": [{"type": "function", "name": "send"}]},  # type: ignore[typeddict-item]
+        options={"tools": [{"type": "function", "name": "send"}]},
     )
     first, second = response.messages[0].contents
     assert json.loads(first.arguments) == {"to": EMAIL, "n": PHONE}  # type: ignore[arg-type]
@@ -148,7 +148,7 @@ async def test_a_quote_in_an_original_does_not_break_the_json_of_a_restored_argu
     async with redaction_scope(known={"NAME": ['Priya "PJ" Shah']}):
         response = await gateway.client().get_response(
             [Message("user", ['Priya "PJ" Shah is here'])],
-            options={"tools": [{"type": "function", "name": "tell"}]},  # type: ignore[typeddict-item]
+            options={"tools": [{"type": "function", "name": "tell"}]},
         )
     assert json.loads(response.messages[0].contents[0].arguments) == {"who": 'Priya "PJ" Shah'}  # type: ignore[arg-type]
 
@@ -214,5 +214,5 @@ async def test_a_provider_run_tool_object_the_budget_cannot_recognise_is_refused
     with pytest.raises(UnpricedRequest):
         await gateway.client().get_response(
             [Message("user", ["hi"])],
-            options={"tools": [object()]},  # type: ignore[typeddict-item,list-item]
+            options={"tools": [object()]},
         )

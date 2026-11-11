@@ -192,7 +192,9 @@ class MafHarness:
     def meter(self, gateway: Gateway) -> Meter:
         return gateway.meter
 
-    def install_scripted(self, gateway: Gateway, script: Sequence[Reply | Failure]) -> None:
+    def install_scripted(
+        self, gateway: Gateway, script: Sequence[Reply | Failure | ChatResponse[Any]]
+    ) -> None:
         client = ScriptedClient(script=script, middleware=gateway.middleware)
         check_chain(client, gateway.middleware)
         gateway._client = client
