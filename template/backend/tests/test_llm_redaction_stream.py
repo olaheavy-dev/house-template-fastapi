@@ -369,11 +369,23 @@ def test_additional_kwargs_fragments_are_restored_and_reasoning_is_left_alone() 
     out = [restorers.chunk(c).additional_kwargs for c in chunks]
     assert "".join(k.get("refusal", "") for k in out) == f"No, {TRICKY}."
     assert out[0]["reasoning"] == reasoning
-    function = "".join(k.get("function_call", {}).get("arguments", "") for k in out)
+    # Argument strings are held until the stream ends (#102), then restored whole, in one chunk.
+    assert all(k.get("function_call", {}).get("arguments", "") == "" for k in out)
+    tails_chunks = restorers.flush()
+    tails = [t.additional_kwargs for t in tails_chunks]
+    function = "".join(k["function_call"]["arguments"] for k in tails if "function_call" in k)
     assert json.loads(function) == {"who": TRICKY}
-    calls = "".join(c["function"]["arguments"] for k in out for c in k.get("tool_calls", []))
+    calls = "".join(c["function"]["arguments"] for k in tails for c in k.get("tool_calls", []))
     assert json.loads(calls) == {"m": EMAIL}
     assert restorers.flush() == []
+    # Merged as LangChain merges chunks, the call keeps its index (a tail without it would be a
+    # second call).
+    total = AIMessageChunk(content="")
+    for piece in [*(AIMessageChunk(content="", additional_kwargs=k) for k in out), *tails_chunks]:
+        total = total + piece
+    [merged_call] = total.additional_kwargs["tool_calls"]
+    assert merged_call["index"] == 0
+    assert json.loads(merged_call["function"]["arguments"]) == {"m": EMAIL}
 
 
 async def test_a_lone_bracket_then_a_json_array_is_taken_as_json_whole_and_streamed() -> None:
@@ -390,3 +402,47 @@ async def test_a_lone_bracket_then_a_json_array_is_taken_as_json_whole_and_strea
             streamed = "".join([c.text async for c in model.astream(messages)])
     assert json.loads(whole) == [1, TRICKY]
     assert json.loads(streamed) == [1, TRICKY]
+
+
+def test_a_tool_call_that_never_had_arguments_adds_no_tail_chunk() -> None:
+    from app.llm.langchain.redaction import _StreamRestorers
+
+    restorers = _StreamRestorers({}, json_text=False)
+    start = {"name": "ping", "id": "c1", "args": "", "index": 0, "type": "tool_call_chunk"}
+    restorers.chunk(AIMessageChunk(content="", tool_call_chunks=[start]))
+    assert restorers.flush() == []
+
+
+def test_legacy_raw_tool_calls_do_not_make_a_second_copy_of_the_arguments_when_merged() -> None:
+    """A chunk with `additional_kwargs["tool_calls"]` also gets `tool_call_chunks` derived from
+    them by langchain-core: the held arguments must come back once, not once per place."""
+    from app.llm.langchain.redaction import _StreamRestorers
+
+    restorers = _StreamRestorers({"[NAME_1]": TRICKY}, json_text=False)
+
+    def legacy(arguments: str) -> AIMessageChunk:
+        # langchain-core derives tool_call_chunks from a raw call that names its function.
+        call = {"index": 0, "id": "call_1", "function": {"name": "", "arguments": arguments}}
+        return AIMessageChunk(content="", additional_kwargs={"tool_calls": [call]})
+
+    pieces = [legacy('{"who": "[NA'), legacy('ME_1]"}')]
+    assert all(p.tool_call_chunks for p in pieces)  # derived by langchain-core
+    out = [restorers.chunk(p) for p in pieces]
+    tails = restorers.flush()
+    # One tail for the call: its explicit tool-call chunk and its raw kwargs travel together, so
+    # langchain-core has nothing to derive a second chunk from (it derives only when none is given,
+    # and what it reads from raw calls differs between versions).
+    [tail] = tails
+    assert tail.tool_call_chunks
+    assert tail.additional_kwargs["tool_calls"]
+    total = out[0]
+    for piece in [*out[1:], *tails]:
+        total = total + piece
+    expected = {"who": TRICKY}
+    [chunk] = total.tool_call_chunks
+    assert json.loads(chunk["args"] or "") == expected
+    [call] = total.tool_calls
+    assert call["args"] == expected
+    [raw] = total.additional_kwargs["tool_calls"]
+    assert raw["index"] == 0
+    assert json.loads(raw["function"]["arguments"]) == expected
