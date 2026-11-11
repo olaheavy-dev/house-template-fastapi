@@ -371,12 +371,21 @@ def test_additional_kwargs_fragments_are_restored_and_reasoning_is_left_alone() 
     assert out[0]["reasoning"] == reasoning
     # Argument strings are held until the stream ends (#102), then restored whole, in one chunk.
     assert all(k.get("function_call", {}).get("arguments", "") == "" for k in out)
-    tails = [t.additional_kwargs for t in restorers.flush()]
+    tails_chunks = restorers.flush()
+    tails = [t.additional_kwargs for t in tails_chunks]
     function = "".join(k["function_call"]["arguments"] for k in tails if "function_call" in k)
     assert json.loads(function) == {"who": TRICKY}
     calls = "".join(c["function"]["arguments"] for k in tails for c in k.get("tool_calls", []))
     assert json.loads(calls) == {"m": EMAIL}
     assert restorers.flush() == []
+    # Merged as LangChain merges chunks, the call keeps its index (a tail without it would be a
+    # second call).
+    total = AIMessageChunk(content="")
+    for piece in [*(AIMessageChunk(content="", additional_kwargs=k) for k in out), *tails_chunks]:
+        total = total + piece
+    [merged_call] = total.additional_kwargs["tool_calls"]
+    assert merged_call["index"] == 0
+    assert json.loads(merged_call["function"]["arguments"]) == {"m": EMAIL}
 
 
 async def test_a_lone_bracket_then_a_json_array_is_taken_as_json_whole_and_streamed() -> None:
@@ -393,3 +402,12 @@ async def test_a_lone_bracket_then_a_json_array_is_taken_as_json_whole_and_strea
             streamed = "".join([c.text async for c in model.astream(messages)])
     assert json.loads(whole) == [1, TRICKY]
     assert json.loads(streamed) == [1, TRICKY]
+
+
+def test_a_tool_call_that_never_had_arguments_adds_no_tail_chunk() -> None:
+    from app.llm.langchain.redaction import _StreamRestorers
+
+    restorers = _StreamRestorers({}, json_text=False)
+    start = {"name": "ping", "id": "c1", "args": "", "index": 0, "type": "tool_call_chunk"}
+    restorers.chunk(AIMessageChunk(content="", tool_call_chunks=[start]))
+    assert restorers.flush() == []
