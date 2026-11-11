@@ -1025,3 +1025,118 @@ def test_importing_the_neutral_redaction_walkers_loads_no_framework() -> None:
         [sys.executable, "-c", code], capture_output=True, text=True, check=True
     )
     assert result.stdout.strip() == "[]"
+
+
+# --- redact_each: one result per text, numbered inside that text (#78 part 3) ----------------
+
+
+def test_redact_each_numbers_inside_each_text_so_neighbours_do_not_matter() -> None:
+    result = REDACTOR.redact_each(["a@example.com", "b@example.com a@example.com", "no data"])
+    # redact() would number across the list (b@ would be [EMAIL_2]); here every text starts at 1.
+    assert result.texts == ("[EMAIL_1]", "[EMAIL_1] [EMAIL_2]", "no data")
+    assert result.counts == (1, 2, 0)
+    assert result.kinds == {"EMAIL": 3}
+    assert REDACTOR.redact(["a@example.com", "b@example.com"]).texts == ("[EMAIL_1]", "[EMAIL_2]")
+
+
+def test_a_text_is_the_same_alone_or_with_neighbours_in_any_order() -> None:
+    texts = ["call 07700 900123", "a@example.com and 07700 900123", "b@example.com"]
+    together = REDACTOR.redact_each(texts).texts
+    for index, text in enumerate(texts):
+        assert REDACTOR.redact_each([text]).texts == (together[index],)
+    assert REDACTOR.redact_each(texts[::-1]).texts == together[::-1]
+
+
+@pytest.mark.anyio
+async def test_redact_each_replaces_known_values_and_keeps_allowed_ones_in_every_text() -> None:
+    async with redaction_scope(known={"NAME": ["Priya Shah"]}, allow=["020 7946 0321"]):
+        result = REDACTOR.redact_each(
+            ["Priya Shah rang 020 7946 0321", "Then priya shah and 07700 900123"]
+        )
+    assert result.texts == ("[NAME_1] rang 020 7946 0321", "Then [NAME_1] and [PHONE_1]")
+    assert result.counts == (1, 2)
+    assert result.kinds == {"NAME": 2, "PHONE": 1}
+
+
+def test_a_placeholder_written_in_one_text_is_avoided_only_in_that_text() -> None:
+    result = REDACTOR.redact_each(["[EMAIL_1] and a@example.com", "b@example.com"])
+    assert result.texts == ("[EMAIL_1] and [EMAIL_2]", "[EMAIL_1]")
+
+
+@pytest.mark.anyio
+async def test_a_conflict_between_a_known_and_an_allowed_value_is_logged_once_for_the_list() -> (
+    None
+):
+    async with redaction_scope(
+        known={"EMAIL": ["priya.shah@example.com"]}, allow=["PRIYA.SHAH@example.com"]
+    ):
+        with capture_logs() as logs:
+            result = REDACTOR.redact_each(["to priya.shah@example.com"] * 3)
+    assert result.texts == ("to [EMAIL_1]",) * 3
+    assert [e for e in logs if e["event"] == "redaction_allow_conflict"] == [
+        {"event": "redaction_allow_conflict", "kind": "EMAIL", "log_level": "warning"}
+    ]
+
+
+class ExplodesOn:
+    """Fails on a text holding `word`, finds nothing in any other."""
+
+    kind = "EMAIL"
+
+    def __init__(self, word: str) -> None:
+        self._word = word
+
+    def find(self, text: str) -> Iterable[Span]:
+        if self._word in text:
+            raise ValueError(f"cannot read {text}")
+        return []
+
+
+def test_one_text_that_fails_blocks_the_whole_list_and_leaks_nothing() -> None:
+    with capture_logs() as logs, pytest.raises(RedactionFailed) as raised:
+        Redactor([ExplodesOn("boom")]).redact_each(["fine", "boom priya.shah@example.com", "ok"])
+    assert raised.value.status == 503
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+    assert logs == [
+        {"event": "llm_redaction_failed", "error_type": "ValueError", "log_level": "error"}
+    ]
+
+
+def test_redact_each_refuses_a_single_string_and_non_text() -> None:
+    with pytest.raises(TypeError, match="texts"):
+        REDACTOR.redact_each("priya.shah@example.com")
+    with pytest.raises(TypeError, match="texts"):
+        REDACTOR.redact_each(["fine", 3])  # type: ignore[list-item]
+
+
+def test_redact_each_of_nothing_gives_nothing() -> None:
+    result = REDACTOR.redact_each([])
+    assert (result.texts, result.counts, result.kinds) == ((), (), {})
+
+
+@pytest.mark.anyio
+async def test_redact_each_builds_the_scopes_patterns_once_however_many_texts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.llm.core import redaction
+
+    built: list[str] = []
+    real = redaction._value_patterns
+
+    def counting(value: str) -> list[re.Pattern[str]]:
+        built.append(value)
+        return real(value)
+
+    monkeypatch.setattr(redaction, "_value_patterns", counting)
+    async with redaction_scope(known={"NAME": ["Priya Shah"]}, allow=["020 7946 0321"]):
+        REDACTOR.redact_each(["Priya Shah"] * 50)
+    assert sorted(built) == ["020 7946 0321", "Priya Shah"]  # one value, one build, not 50
+
+
+def test_redact_each_runs_in_linear_time_over_many_texts() -> None:
+    texts = ["Mail a@example.com or call 07700 900123 today. "] * 20_000
+    started = time.perf_counter()
+    result = REDACTOR.redact_each(texts)
+    assert time.perf_counter() - started < 4.0
+    assert result.kinds == {"EMAIL": 20_000, "PHONE": 20_000}
