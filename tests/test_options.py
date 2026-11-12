@@ -121,6 +121,7 @@ DATABASE_FILES = [
     "backend/migrations/versions/20261026_0004_llm_call_details.py",
     "backend/migrations/versions/20261026_0005_per_user_llm_budget.py",
     "backend/migrations/versions/20261110_0006_llm_call_redacted_count.py",
+    "backend/migrations/versions/20261112_0007_agent_session.py",
     "backend/migrations/versions/20261026_app_project_root.py",
     "backend/compose/db/compose.yaml",
     "backend/tests/db.py",
@@ -143,6 +144,7 @@ TWINS = [
     "backend/migrations/versions/20261026_0004_llm_call_details.py",
     "backend/migrations/versions/20261026_0005_per_user_llm_budget.py",
     "backend/migrations/versions/20261110_0006_llm_call_redacted_count.py",
+    "backend/migrations/versions/20261112_0007_agent_session.py",
 ]
 # Words that must not appear in a storage-off project, except in pyproject.toml and uv.lock
 # (the dependency stays declared: `boto3` in the extra, `types-boto3` in the dev group).
@@ -446,6 +448,7 @@ DATABASE_OWNED = [
     "backend/migrations/versions/20261026_0004_llm_call_details.py",
     "backend/migrations/versions/20261026_0005_per_user_llm_budget.py",
     "backend/migrations/versions/20261110_0006_llm_call_redacted_count.py",
+    "backend/migrations/versions/20261112_0007_agent_session.py",
     "backend/migrations/versions/20261026_app_project_root.py",
     "backend/compose/db/compose.yaml",
     "backend/tests/db.py",
@@ -563,7 +566,7 @@ SWITCH_ON_WITH_DATABASE = "(add `-d llm=langchain` for the model gateway too: it
 STAYS_OFF = "(the gateway stays off once the answers file records `llm`, which the first 0.8.0 update does)"
 SWITCH_ON = "`-d llm=langchain` to turn the model gateway on"
 # For a database that ran without the gateway: its migrations did nothing, so the tables are missing.
-RECIPE = ("A database that ran without the model tables (migrations 0002 to 0006 did nothing there) "
+RECIPE = ("A database that ran without the model tables (migrations 0002 to 0007 did nothing there) "
           "gets them only after `copier update` has turned the model gateway on (stamping first would "
           "make `make migrate` re-run the empty revisions and leave no tables). Then, on every database "
           "the project runs against, production and staging included, and before the gateway is "
@@ -865,10 +868,10 @@ def test_llm_refuses_an_unknown_framework(render, llm):
 
 
 # The migration chain (#30). Worked out from the files the template ships (the template's revisions
-# 0001 to 0006 on the "template" branch, the project's root on the "app" branch), not from a run.
+# 0001 to 0007 on the "template" branch, the project's root on the "app" branch), not from a run.
 CHAIN = {"0001": None, "0002": "0001", "0003": "0002", "0004": "0003", "0005": "0004", "0006": "0005",
-         "app_root": None}
-GATEWAY_REVISIONS = {"0002", "0003", "0004", "0005", "0006"}
+         "0007": "0006", "app_root": None}
+GATEWAY_REVISIONS = {"0002", "0003", "0004", "0005", "0006", "0007"}
 
 
 def _migrations(project: Path) -> dict[str, dict]:
@@ -904,7 +907,7 @@ def test_migration_chain_is_linear_in_every_variant(render, database, storage, l
     assert migrations["0001"]["labels"] == ("template",)
     assert migrations["app_root"]["labels"] == ("app",)
     assert sorted(rev for rev, m in migrations.items() if m["down"] is None) == ["0001", "app_root"]
-    for rev in ("0002", "0003", "0004", "0005", "0006"):
+    for rev in ("0002", "0003", "0004", "0005", "0006", "0007"):
         assert migrations[rev]["labels"] is None, rev
     gateway = llm != "none"
     for rev in GATEWAY_REVISIONS:
@@ -945,7 +948,7 @@ def test_llm_none_autogenerate_ignores_every_table_the_gateway_made(render, tmp_
                 created.add(node.args[0].value)
     checkpoint_tables = _string_set(
         ast.parse((langchain / "backend/src/app/llm/langchain/checkpoints.py").read_text()), "TABLES")
-    assert created == {"llm_call", "llm_spend_day", "llm_spend_user_day"}
+    assert created == {"agent_session", "llm_call", "llm_spend_day", "llm_spend_user_day"}
     assert checkpoint_tables == {"checkpoint_migrations", "checkpoints", "checkpoint_blobs",
                                  "checkpoint_writes"}
     none = render_other(render, tmp_path, database=True, storage=True, llm="none")

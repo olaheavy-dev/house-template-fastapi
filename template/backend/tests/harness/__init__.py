@@ -21,7 +21,7 @@ The vocabulary is neutral on purpose:
 from __future__ import annotations
 
 import importlib
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Protocol
@@ -201,6 +201,27 @@ class Harness(Protocol):
     ) -> tuple[str, bool]:
         """One run of the gateway's agent with `tools`: its final answer's text, and whether the
         run ended on the forced final answer (the neutral step_limit_reached flag)."""
+        ...
+
+    async def open_threads(self, gateway: Any, settings: Settings) -> Callable[[], Awaitable[None]]:
+        """Make the gateway keep conversations in the test database, the way the app does at
+        start-up; returns what closes it. `settings` carries the database URL."""
+        ...
+
+    async def thread_turn(
+        self,
+        gateway: Any,
+        *,
+        user_ref: str,
+        conversation_id: str,
+        messages: Sequence[Message],
+    ) -> str:
+        """One turn of a stored conversation, keyed by the user and the conversation id (derived on
+        the server, as the app must); returns the answer's text."""
+        ...
+
+    async def forget_threads(self, gateway: Any, *, user_ref: str, conversation_id: str) -> None:
+        """Delete what the turns above stored (the test database outlives one test)."""
         ...
 
     def last_request_offered_tools(self, gateway: Any) -> bool:

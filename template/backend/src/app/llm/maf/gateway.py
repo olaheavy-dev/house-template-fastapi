@@ -33,7 +33,12 @@ from typing import Annotated, Any
 
 import anthropic
 import structlog
-from agent_framework import Agent, FunctionInvocationConfiguration, SupportsChatGetResponse
+from agent_framework import (
+    Agent,
+    FunctionInvocationConfiguration,
+    InMemoryHistoryProvider,
+    SupportsChatGetResponse,
+)
 
 # Not exported by agent-framework-core 1.25.0; it is the function MAF itself sorts middleware with.
 # The pins move together by hand (decision 0002), and a test calls it, so a rename fails loudly.
@@ -55,6 +60,7 @@ from app.llm.core.steps import StepLimit
 from app.llm.maf.embeddings import GatewayEmbeddings
 from app.llm.maf.middleware import BudgetMiddleware, tagged
 from app.llm.maf.redaction import RedactionMiddleware, RedactionUnavailable
+from app.llm.maf.sessions import PostgresSessionStore
 from app.llm.maf.steps import RUN_OPTION, StepRun, flagged
 from app.llm.redaction_rules import DETECTORS
 from app.problems import Problem
@@ -182,6 +188,8 @@ class Gateway:
             step_limit=self.step_limit,
         )
         self.middleware: list[Any] = [self.redaction, self.budget]
+        # Conversations stored in Postgres, keyed by the current user (app/llm/maf/sessions.py).
+        self.sessions = PostgresSessionStore(sessionmaker)
 
         # Without OpenAI's key there are no embeddings, and asking for them gets a 503.
         self._embeddings: GatewayEmbeddings | None = None
@@ -263,8 +271,15 @@ class Gateway:
         without tools, so the model writes a final answer, and the response is flagged. The count
         restarts on every run. `options` go to MAF's Agent (`name`, `default_options`,
         `context_providers`, agent and function `middleware`); chat middleware is refused (it
-        would run after redaction and the budget). Threads are not stored by the gateway yet:
-        keep the `AgentSession` you pass to `run` yourself."""
+        would run after redaction and the budget).
+
+        To keep a conversation, give the agent a stable `name` and load and save its session with
+        `gateway.sessions` (app/llm/maf/sessions.py). With no context providers given, the agent
+        keeps its history in the session with MAF's InMemoryHistoryProvider, added here
+        explicitly (MAF's docs: "add it explicitly when you want deterministic local memory
+        behavior")."""
+        if not options.get("context_providers"):
+            options["context_providers"] = [InMemoryHistoryProvider()]
         return Agent(self.client(), instructions, tools=list(tools), **options)
 
     def embeddings(self) -> GatewayEmbeddings:
