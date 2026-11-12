@@ -5,6 +5,7 @@ and a cancelled call."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable
 from datetime import date
 from typing import Any
@@ -24,6 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.llm.core.budget import LlmCall
+from app.llm.core.errors import SchemaMismatch
 from app.llm.maf.gateway import Gateway
 from app.llm.maf.middleware import ALLOWED_OPTIONS, OptionNotAllowed
 from app.llm.maf.redaction import RedactionUnavailable
@@ -184,8 +186,15 @@ def long_tool() -> FunctionTool:
 
 
 async def reserved(gateway: Gateway, db_session: AsyncSession, **options: Any) -> int:
-    await gateway.client().get_response([Message("user", ["hi"])], options=options or None)
-    return (await rows(db_session))[-1].reserved_micro_usd
+    # The new row, found by id: the rows of one test share created_at (now() is the transaction's
+    # start), so "the last one" is not defined.
+    before = {row.id for row in await rows(db_session)}
+    # The scripted answer is plain text, so a call that asks for a schema ends in the 502 after it
+    # was reserved; only the reservation is measured here.
+    with contextlib.suppress(SchemaMismatch):
+        await gateway.client().get_response([Message("user", ["hi"])], options=options or None)
+    [new] = [row for row in await rows(db_session) if row.id not in before]
+    return new.reserved_micro_usd
 
 
 async def test_a_long_tool_description_and_a_long_schema_are_reserved_for_in_full(

@@ -4,7 +4,8 @@ exactly as in the app and nothing reaches a provider."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
+from contextlib import aclosing
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -19,9 +20,9 @@ from langchain_core.exceptions import (
     ModelTimeoutError,
 )
 from langchain_core.language_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage, BaseMessage, convert_to_messages
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, convert_to_messages
 from langchain_core.messages.ai import UsageMetadata
-from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_core.runnables import Runnable, RunnableLambda
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from pydantic import BaseModel as PydanticModel
@@ -104,6 +105,27 @@ class ScriptedModel(GenericFakeChatModel):
         if isinstance(item, Failure):
             raise _error(item)
         return ChatResult(generations=[ChatGeneration(message=_answer(item))])
+
+    async def _astream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        """The scripted reply in its pieces, the usage on the last one (as providers report it)."""
+        self.seen.append(list(messages))
+        self.seen_kwargs.append(dict(kwargs))
+        item = self.script.pop(0)
+        if isinstance(item, Failure):
+            raise _error(item)
+        pieces = item.streamed()
+        for number, piece in enumerate(pieces, start=1):
+            usage = _answer(item).usage_metadata if number == len(pieces) else None
+            chunk = ChatGenerationChunk(message=AIMessageChunk(content=piece, usage_metadata=usage))
+            if run_manager is not None:
+                await run_manager.on_llm_new_token(piece, chunk=chunk)
+            yield chunk
 
 
 class LangChainHarness:
@@ -189,6 +211,25 @@ class LangChainHarness:
         if isinstance(response_format, type) and issubclass(response_format, PydanticModel):
             return response_format.model_json_schema()  # what the provider SDK would send
         return cast("dict[str, Any] | None", response_format)
+
+    async def stream(
+        self,
+        gateway: Gateway,
+        messages: Sequence[Message],
+        *,
+        take: int | None = None,
+        tags: dict[str, Any] | None = None,
+    ) -> list[str]:
+        config: Any = {"metadata": dict(tags)} if tags else None
+        out: list[str] = []
+        chunks = gateway.model().astream(convert_to_messages(list(messages)), config=config)
+        async with aclosing(cast(AsyncGenerator[Any, None], chunks)) as stream:
+            async for chunk in stream:
+                if chunk.text:
+                    out.append(chunk.text)
+                if take is not None and len(out) >= take:
+                    break
+        return out
 
     def last_request_messages(self, gateway: Gateway) -> list[Message] | None:
         seen = self._scripted(gateway).seen

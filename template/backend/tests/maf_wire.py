@@ -20,7 +20,15 @@ import anthropic
 import httpx2
 import openai
 
-__all__ = ["Attempt", "FakeProviderHttp", "Fault", "anthropic_message", "openai_response", "sse"]
+__all__ = [
+    "Attempt",
+    "FakeProviderHttp",
+    "Fault",
+    "anthropic_message",
+    "openai_response",
+    "openai_sse",
+    "sse",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,10 +92,27 @@ def openai_response(text: str, usage: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def sse(text: str, usage: dict[str, int]) -> bytes:
-    """An Anthropic streamed answer with its usage in message_start and message_delta (the shape
-    MAF's streaming merge reads; used from the streaming PR on)."""
+def _events(events: list[tuple[str, dict[str, Any]]]) -> bytes:
+    return "".join(f"event: {name}\ndata: {json.dumps(data)}\n\n" for name, data in events).encode()
+
+
+def sse(
+    text: str,
+    usage: dict[str, int],
+    *,
+    pieces: list[str] | None = None,
+    repeat_input_in_delta: bool = False,
+) -> bytes:
+    """An Anthropic streamed answer: message_start with the input (and cache) counts and one output
+    token, the text in `pieces` (or whole), then message_delta with the CUMULATIVE usage, as
+    Anthropic documents it ("The token counts shown in the usage field of the message_delta event
+    are cumulative", platform.claude.com/docs/en/build-with-claude/streaming). With
+    `repeat_input_in_delta` the delta repeats the input and cache counts too, as the docs' web
+    search example does; a client that added the two up would count the input twice."""
     start = {**anthropic_message("", {**usage, "output_tokens": 1}), "content": []}
+    delta_usage = (
+        dict(usage) if repeat_input_in_delta else {"output_tokens": usage["output_tokens"]}
+    )
     events: list[tuple[str, dict[str, Any]]] = [
         ("message_start", {"type": "message_start", "message": start}),
         (
@@ -98,26 +123,104 @@ def sse(text: str, usage: dict[str, int]) -> bytes:
                 "content_block": {"type": "text", "text": ""},
             },
         ),
-        (
-            "content_block_delta",
-            {
-                "type": "content_block_delta",
-                "index": 0,
-                "delta": {"type": "text_delta", "text": text},
-            },
-        ),
+    ]
+    for piece in pieces or [text]:
+        events.append(
+            (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": piece},
+                },
+            )
+        )
+    events += [
         ("content_block_stop", {"type": "content_block_stop", "index": 0}),
         (
             "message_delta",
             {
                 "type": "message_delta",
                 "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-                "usage": {"output_tokens": usage["output_tokens"]},
+                "usage": delta_usage,
             },
         ),
         ("message_stop", {"type": "message_stop"}),
     ]
-    return "".join(f"event: {name}\ndata: {json.dumps(data)}\n\n" for name, data in events).encode()
+    return _events(events)
+
+
+def openai_sse(text: str, usage: dict[str, Any], *, pieces: list[str] | None = None) -> bytes:
+    """An OpenAI Responses streamed answer: the text deltas, then response.completed, the one
+    event that carries the usage (developers.openai.com/api/reference/resources/responses/
+    streaming-events)."""
+    item = {"type": "message", "id": "msg_fake", "status": "in_progress", "role": "assistant"}
+    created = {**openai_response("", usage), "status": "in_progress", "output": [], "usage": None}
+    events: list[tuple[str, dict[str, Any]]] = [
+        ("response.created", {"type": "response.created", "response": created}),
+        (
+            "response.output_item.added",
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {**item, "content": []},
+            },
+        ),
+        (
+            "response.content_part.added",
+            {
+                "type": "response.content_part.added",
+                "item_id": "msg_fake",
+                "output_index": 0,
+                "content_index": 0,
+                "part": {"type": "output_text", "text": "", "annotations": []},
+            },
+        ),
+    ]
+    for piece in pieces or [text]:
+        events.append(
+            (
+                "response.output_text.delta",
+                {
+                    "type": "response.output_text.delta",
+                    "item_id": "msg_fake",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": piece,
+                    "logprobs": [],
+                },
+            )
+        )
+    done_item = {
+        **item,
+        "status": "completed",
+        "content": [{"type": "output_text", "text": text, "annotations": []}],
+    }
+    events += [
+        (
+            "response.output_text.done",
+            {
+                "type": "response.output_text.done",
+                "item_id": "msg_fake",
+                "output_index": 0,
+                "content_index": 0,
+                "text": text,
+                "logprobs": [],
+            },
+        ),
+        (
+            "response.output_item.done",
+            {"type": "response.output_item.done", "output_index": 0, "item": done_item},
+        ),
+        (
+            "response.completed",
+            {"type": "response.completed", "response": openai_response(text, usage)},
+        ),
+    ]
+    numbered = [
+        (name, {**data, "sequence_number": number}) for number, (name, data) in enumerate(events)
+    ]
+    return _events(numbered)
 
 
 class FakeProviderHttp:
@@ -131,10 +234,15 @@ class FakeProviderHttp:
         text: str = "4",
         usage: dict[str, Any] | None = None,
         plan: Plan | None = None,
+        pieces: list[str] | None = None,
+        repeat_input_in_delta: bool = False,
     ) -> None:
         assert provider in {"openai", "anthropic"}
+        assert pieces is None or "".join(pieces) == text
         self.provider = provider
         self.text = text
+        self.pieces = pieces
+        self.repeat_input_in_delta = repeat_input_in_delta
         self.usage: dict[str, Any] = usage or (
             {"input_tokens": 11, "output_tokens": 3}
             if provider == "anthropic"
@@ -182,12 +290,18 @@ class FakeProviderHttp:
             # An empty x-should-retry leaves the decision to the SDK's own status rules.
             headers = {"x-should-retry": "", **fault.headers}
             return httpx2.Response(fault.status, headers=headers, json=error)
+        streamed = {"content-type": "text/event-stream"}
         if self.provider == "anthropic":
             if body.get("stream"):
-                return httpx2.Response(
-                    200,
-                    headers={"content-type": "text/event-stream"},
-                    content=sse(self.text, self.usage),
+                content = sse(
+                    self.text,
+                    self.usage,
+                    pieces=self.pieces,
+                    repeat_input_in_delta=self.repeat_input_in_delta,
                 )
+                return httpx2.Response(200, headers=streamed, content=content)
             return httpx2.Response(200, json=anthropic_message(self.text, self.usage))
+        if body.get("stream"):
+            content = openai_sse(self.text, self.usage, pieces=self.pieces)
+            return httpx2.Response(200, headers=streamed, content=content)
         return httpx2.Response(200, json=openai_response(self.text, self.usage))

@@ -29,7 +29,8 @@ Limits worth knowing:
 - Text from the model's thinking and reasoning blocks is neither redacted on the way out nor
   restored on the way back (a provider checks their signature), so it can show placeholders.
 - A schema validator that rejects a placeholder (EmailStr, a pattern) fails inside the provider's
-  SDK before the answer reaches this wrapper. Restored values are not validated again.
+  SDK before the answer reaches this wrapper, as a SchemaMismatch (502). Restored values are not
+  validated again.
 - In a stream, text, tool-call arguments (also the Responses API's repeated `function_call`
   blocks and the older `function_call`/`tool_calls` argument strings), Anthropic's `partial_json`,
   refusals, and the parsed object of a structured answer in `additional_kwargs` are restored. What
@@ -52,6 +53,11 @@ Limits worth knowing:
   whose `name` matches a detector or a known value is refused, nothing sent.
 - A LangChainTracer you pass in a call's config with a client of its own records what that client
   is given; only the gateway's client masks.
+- with_structured_output: an answer that does not parse into the schema (LangChain's parsers raise
+  OutputParserException, pydantic's ValidationError or StructuredOutputError depending on the
+  provider and method) is the core's SchemaMismatch, a 502 settled at its cost, as under MAF. A
+  dict schema is only checked for being JSON, by LangChain as by MAF. With include_raw the
+  parsing error is returned in `parsing_error` as before.
 """
 
 from __future__ import annotations
@@ -63,12 +69,14 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 import structlog
+from langchain.agents.structured_output import StructuredOutputError
 from langchain_core.callbacks import (
     AsyncCallbackHandler,
     AsyncCallbackManager,
     AsyncCallbackManagerForLLMRun,
     BaseCallbackManager,
 )
+from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models import BaseChatModel, LanguageModelInput
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
@@ -83,9 +91,10 @@ from langchain_core.runnables.config import ensure_config
 from langchain_core.runnables.fallbacks import RunnableWithFallbacks
 from langchain_core.runnables.passthrough import RunnableAssign
 from langchain_core.tracers.langchain import LangChainTracer
-from pydantic import PrivateAttr
+from pydantic import PrivateAttr, ValidationError
 
 from app.llm.core import metrics
+from app.llm.core.errors import schema_mismatch
 from app.llm.core.redaction import RedactionFailed, Redactor, StreamRestorer, restore
 from app.llm.core.redaction_data import (
     MEDIA,
@@ -698,6 +707,51 @@ def _uses(runnable: Any, target: Any, depth: int = 0) -> bool:
     return any(_uses(child, target, depth + 1) for child in children)
 
 
+# Raised by a structured-output runnable when the answer does not fit its schema (which one
+# depends on the provider and the method; measured on the pinned langchain packages).
+_PARSE_ERRORS = (OutputParserException, ValidationError, StructuredOutputError)
+
+
+class _SchemaChecked(Runnable[Any, Any]):
+    """A structured-output runnable whose parse errors are the core's SchemaMismatch (a 502, the
+    parser's message left out: it quotes the model's answer). Inside it, a ValidationError can
+    only come from parsing the answer. Everything else is the runnable's own."""
+
+    def __init__(self, bound: Runnable[Any, Any]) -> None:
+        self.bound = bound
+
+    @property
+    def InputType(self) -> Any:
+        return self.bound.InputType
+
+    @property
+    def OutputType(self) -> Any:
+        return self.bound.OutputType
+
+    def invoke(self, input: Any, config: RunnableConfig | None = None, **kwargs: Any) -> Any:
+        try:
+            return self.bound.invoke(input, config, **kwargs)
+        except _PARSE_ERRORS as error:
+            raise schema_mismatch(error) from None
+
+    async def ainvoke(self, input: Any, config: RunnableConfig | None = None, **kwargs: Any) -> Any:
+        try:
+            return await self.bound.ainvoke(input, config, **kwargs)
+        except _PARSE_ERRORS as error:
+            raise schema_mismatch(error) from None
+
+    async def astream(
+        self, input: Any, config: RunnableConfig | None = None, **kwargs: Any
+    ) -> AsyncIterator[Any]:
+        stream = cast(AsyncGenerator[Any, None], self.bound.astream(input, config, **kwargs))
+        try:
+            async with aclosing(stream) as chunks:
+                async for chunk in chunks:
+                    yield chunk
+        except _PARSE_ERRORS as error:
+            raise schema_mismatch(error) from None
+
+
 # --- the wrapper -------------------------------------------------------------------------------
 
 
@@ -722,6 +776,11 @@ class _Holder:
 
 
 _pending: ContextVar[_Holder | None] = ContextVar("redaction_pending_call", default=None)
+# The `_astream` generators made during one `astream` call. langchain-core's astream does not close
+# the `_astream` generator it reads when it is itself closed, so without this the provider stream
+# (and the budget guard's settlement on it) would stay open until garbage collection; holding a
+# reference also keeps the collector from closing it first, concurrently.
+_open_streams: ContextVar[list[Any] | None] = ContextVar("redaction_open_streams", default=None)
 
 
 def _tracers(handlers: Sequence[Any]) -> tuple[Any, ...]:
@@ -885,7 +944,7 @@ class RedactingChatModel(BaseChatModel):
                 "with_structured_output did not bind the model in a shape this code knows, so "
                 "its fields could not be redacted"
             )
-        return cast("Runnable[Any, Any]", repointed)
+        return _SchemaChecked(cast("Runnable[Any, Any]", repointed))
 
     async def _agenerate(
         self,
@@ -945,17 +1004,29 @@ class RedactingChatModel(BaseChatModel):
         else:
             wrapped = [*(callbacks or []), capture]
         _pending.set(holder)
+        opened: list[Any] = []
+        _open_streams.set(opened)
         try:
             stream = cast(
                 AsyncGenerator[AIMessageChunk, None],
                 super().astream(input, {**config, "callbacks": wrapped}, stop=stop, **kwargs),
             )
-            # aclosing: closing this stream closes langchain-core's, and with it the inner run.
+            # aclosing: closing this stream closes langchain-core's; the inner streams are closed
+            # below, so a consumer that stops early ends the inner run (and settles its budget)
+            # now, not when the garbage collector gets to it.
             async with aclosing(stream) as chunks:
                 async for chunk in chunks:
+                    # `_astream` is made on the first read: from here on the variable would only
+                    # leak into the consumer's context (an async generator shares it).
+                    _open_streams.set(None)
                     yield chunk
         finally:
+            # Not reset(token): a stream the consumer dropped is closed by the event loop's
+            # finalizer, in another context, where the token is not valid.
             _pending.set(None)
+            _open_streams.set(None)
+            for generator in opened:
+                await generator.aclose()
 
     async def _agenerate_with_cache(
         self,
@@ -974,13 +1045,27 @@ class RedactingChatModel(BaseChatModel):
         finally:
             _pending.reset(token)
 
-    async def _astream(
+    def _astream(
         self,
         messages: list[BaseMessage],
         stop: list[str] | None = None,
         run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
+        """The streaming generator, recorded so that `astream` can close it (see _open_streams)."""
+        generator = self._redacted_stream(messages, stop, run_manager, **kwargs)
+        opened = _open_streams.get()
+        if opened is not None:
+            opened.append(generator)
+        return generator
+
+    async def _redacted_stream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None,
+        run_manager: AsyncCallbackManagerForLLMRun | None,
+        **kwargs: Any,
+    ) -> AsyncGenerator[ChatGenerationChunk, None]:
         context = _context_of(run_manager) or self._pending_context()
         prepared = prepare(self._redactor, messages, kwargs)
         _note(prepared)
@@ -994,6 +1079,7 @@ class RedactingChatModel(BaseChatModel):
                 **prepared.kwargs,
             ),
         )
+
         # aclosing: a consumer that stops early (or is cancelled) closes the inner stream too, so
         # the inner run ends and the budget guard settles or fails its reservation.
         async with aclosing(stream) as chunks:

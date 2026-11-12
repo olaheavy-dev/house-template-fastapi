@@ -6,7 +6,7 @@ client raises (the SDK's error wrapped by MAF's own wrapper)."""
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -113,7 +113,8 @@ class ScriptedBase(BaseChatClient[Any]):
         options: Mapping[str, Any],
         **kwargs: Any,
     ) -> Awaitable[ChatResponse[Any]] | ResponseStream[ChatResponseUpdate, ChatResponse[Any]]:
-        assert not stream, "the gateway refuses streamed calls before they reach the provider"
+        if stream:
+            return self._stream(messages, options)
 
         async def answer() -> ChatResponse[Any]:
             self.seen.append(list(messages))
@@ -137,6 +138,49 @@ class ScriptedBase(BaseChatClient[Any]):
             return response
 
         return answer()
+
+    def _stream(
+        self, messages: Sequence[Message], options: Mapping[str, Any]
+    ) -> ResponseStream[ChatResponseUpdate, ChatResponse[Any]]:
+        """The scripted item as a provider streams it (adapted from the founder's MAF lab): the
+        text in its pieces, then any other contents (tool calls), then the usage."""
+
+        async def updates() -> AsyncGenerator[ChatResponseUpdate]:
+            self.seen.append(list(messages))
+            self.seen_options.append(dict(options))
+            item = self.script.pop(0)
+            if isinstance(item, Failure):
+                raise error_of(item)
+            if isinstance(item, ChatResponse):
+                for message in item.messages:
+                    yield ChatResponseUpdate(
+                        role="assistant", contents=list(message.contents), message_id="msg_scripted"
+                    )
+                if item.usage_details is not None:
+                    yield _usage_update(item.usage_details)
+                return
+            for piece in item.streamed():
+                yield ChatResponseUpdate(
+                    role="assistant", contents=[Content.from_text(piece)], message_id="msg_scripted"
+                )
+            if item.usage is not None:
+                given, produced = item.usage
+                yield _usage_update(
+                    UsageDetails(input_token_count=given, output_token_count=produced)
+                )
+
+        response_format = options.get("response_format")
+
+        def final(collected: Sequence[ChatResponseUpdate]) -> ChatResponse[Any]:
+            return ChatResponse.from_updates(collected, output_format_type=response_format)
+
+        return ResponseStream(updates(), finalizer=final)
+
+
+def _usage_update(usage: UsageDetails) -> ChatResponseUpdate:
+    return ChatResponseUpdate(
+        role="assistant", contents=[Content.from_usage(usage)], message_id="msg_scripted"
+    )
 
 
 class ScriptedClient(
@@ -285,6 +329,27 @@ class MafHarness:
         if isinstance(response_format, type) and issubclass(response_format, BaseModel):
             return response_format.model_json_schema()  # what the provider client would send
         return cast("dict[str, Any] | None", response_format)
+
+    async def stream(
+        self,
+        gateway: Gateway,
+        messages: Sequence[Neutral],
+        *,
+        take: int | None = None,
+        tags: dict[str, Any] | None = None,
+    ) -> list[str]:
+        out: list[str] = []
+        with tagged(CallTags(**(tags or {}))):
+            stream = gateway.client().get_response(
+                [to_maf(message) for message in messages], stream=True
+            )
+            async with stream:
+                async for update in stream:
+                    if update.text:
+                        out.append(update.text)
+                    if take is not None and len(out) >= take:
+                        break
+        return out
 
     def last_request_messages(self, gateway: Gateway) -> list[Neutral] | None:
         seen = self._scripted(gateway).seen

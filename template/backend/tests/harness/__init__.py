@@ -63,10 +63,18 @@ FAILURE_KINDS = (
 @dataclass(frozen=True, slots=True)
 class Reply:
     """What the provider answers: the text, and the usage it reports (input tokens, output
-    tokens), or None when it reports none."""
+    tokens), or None when it reports none. Streamed, the text arrives in `pieces` when given (they
+    must add up to `text`), else in one piece, and the usage after the last piece."""
 
     text: str
     usage: tuple[int, int] | None = (1_000, 500)
+    pieces: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        assert not self.pieces or "".join(self.pieces) == self.text, self.pieces
+
+    def streamed(self) -> tuple[str, ...]:
+        return self.pieces or (self.text,)
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +164,18 @@ class Harness(Protocol):
     def last_request_schema(self, gateway: Any) -> dict[str, Any] | None:
         """The output schema the provider was last given, after redaction, as a JSON schema, or
         None when the call asked for none."""
+        ...
+
+    async def stream(
+        self,
+        gateway: Any,
+        messages: Sequence[Message],
+        *,
+        take: int | None = None,
+        tags: dict[str, Any] | None = None,
+    ) -> list[str]:
+        """One streamed call, read the way the framework streams; returns the text of each update
+        that carried text. With `take`, stops reading after that many and closes the stream."""
         ...
 
     def last_request_messages(self, gateway: Any) -> list[Message] | None:

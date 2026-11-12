@@ -13,6 +13,7 @@ from types import MappingProxyType
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from langchain.agents.structured_output import StructuredOutputError
 from langchain_core.exceptions import (
     ContextOverflowError,
     ModelAPIError,
@@ -24,10 +25,12 @@ from langchain_core.exceptions import (
     ModelPermissionDeniedError,
     ModelRateLimitError,
     ModelTimeoutError,
+    OutputParserException,
 )
 
 from app.llm.core import errors as core
-from app.llm.core.errors import FailureKind, Outcome
+from app.llm.core.errors import SCHEMA_MISMATCH_DETAIL, FailureKind, Outcome
+from app.problems import problem_response
 
 __all__ = [
     "KINDS",
@@ -93,8 +96,19 @@ async def _model_error(request: Request, exc: Exception) -> JSONResponse:
     )
 
 
+async def _schema_mismatch(request: Request, exc: Exception) -> JSONResponse:
+    """A structured answer that did not match its schema: the core's 502 (SchemaMismatch), with
+    the parser's message left out (it quotes the model's answer) and only its type logged."""
+    core.log.warning("llm_schema_mismatch", error_type=type(exc).__name__)
+    return problem_response(502, detail=SCHEMA_MISMATCH_DETAIL, instance=request.url.path)
+
+
 def install_model_error_handlers(app: FastAPI) -> None:
     """Answers LangChain's model errors. A GraphRecursionError has no handler: an agent ends at
     its model-call limit by itself (app/llm/langchain/steps.py), so one is a bug and a plain 500.
+    A structured answer that did not match its schema (with_structured_output's parsers raise
+    OutputParserException, an agent's response_format StructuredOutputError) is the core's 502.
     The core's own handlers are installed apart (app.llm.core.errors.install_failure_handlers)."""
     app.add_exception_handler(ModelError, _model_error)
+    app.add_exception_handler(OutputParserException, _schema_mismatch)
+    app.add_exception_handler(StructuredOutputError, _schema_mismatch)
