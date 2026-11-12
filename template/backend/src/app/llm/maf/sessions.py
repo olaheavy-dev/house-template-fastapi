@@ -74,11 +74,13 @@ def _is_data_uri(value: Any) -> bool:
 
 
 def _refuse_inline_bytes(value: Any) -> None:
-    """A file's bytes, whichever way they came: a data content, or a URI content (or any other
-    `uri`) holding a data URI. MAF turns `Content.from_uri("data:...")` into a data content, but
-    only for that exact spelling (measured on 1.25.0: "DATA:..." or " data:..." stay `uri`)."""
+    """A file's bytes, whichever way they came. MAF keeps them in a content's `uri` as a data URI:
+    a data content (`Content.from_data`, or `Content.from_uri("data:...")`) serializes as
+    `{"type": "data", "uri": "data:...;base64,..."}`, and "DATA:..." or " data:..." stay `uri`
+    contents with the same bytes (measured on 1.25.0). So the test is the `uri`, not the `type`:
+    the app's own state may use `"type": "data"` for anything else (PR #120 review)."""
     if isinstance(value, dict):
-        if value.get("type") == "data" or _is_data_uri(value.get("uri")):
+        if _is_data_uri(value.get("uri")):
             raise InlineMedia(
                 "a session must not store a file's bytes: store the file and send its URI (#73)"
             )

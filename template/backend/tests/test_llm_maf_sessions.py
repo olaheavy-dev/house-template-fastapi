@@ -151,6 +151,21 @@ async def test_a_file_sent_as_bytes_is_refused_and_nothing_is_stored(
     assert await db_session.get(AgentSessionRow, (ALICE.id, "c6", "helper")) is None
 
 
+async def test_the_apps_own_state_may_use_the_word_data(
+    gateway: Gateway, db_session: AsyncSession
+) -> None:
+    # Only a data URI is a file's bytes: an ordinary object whose `type` is "data" is stored
+    # (PR #120 review).
+    scripted(gateway, "ok")
+    agent = gateway.agent([], name="helper")
+    session = await gateway.sessions.load(ALICE, "c11", agent)
+    session.state["report"] = {"type": "data", "value": 42}
+    await agent.run("hi", session=session)
+    await gateway.sessions.save(ALICE, "c11", agent, session)
+    row = await stored(db_session, ALICE, "c11")
+    assert row.document["state"]["report"] == {"type": "data", "value": 42}
+
+
 async def test_a_file_stored_elsewhere_is_kept_as_its_pointer(
     gateway: Gateway, db_session: AsyncSession
 ) -> None:
