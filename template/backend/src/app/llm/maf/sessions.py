@@ -69,9 +69,16 @@ def _check_key(part: str, what: str) -> str:
     return part
 
 
+def _is_data_uri(value: Any) -> bool:
+    return isinstance(value, str) and value.strip().lower().startswith("data:")
+
+
 def _refuse_inline_bytes(value: Any) -> None:
+    """A file's bytes, whichever way they came: a data content, or a URI content (or any other
+    `uri`) holding a data URI. MAF turns `Content.from_uri("data:...")` into a data content, but
+    only for that exact spelling (measured on 1.25.0: "DATA:..." or " data:..." stay `uri`)."""
     if isinstance(value, dict):
-        if value.get("type") == "data":
+        if value.get("type") == "data" or _is_data_uri(value.get("uri")):
             raise InlineMedia(
                 "a session must not store a file's bytes: store the file and send its URI (#73)"
             )

@@ -127,18 +127,41 @@ async def test_deleting_a_users_data_deletes_their_sessions_only(
     assert left == [BOB.id]
 
 
+@pytest.mark.parametrize(
+    "image",
+    [
+        Content.from_data(b"\x89PNG\r\n", media_type="image/png"),
+        # A data URI sent as a URI: MAF makes a data content of "data:..." only, so these stay
+        # URI contents carrying the bytes (PR #120 review).
+        Content.from_uri("DATA:image/png;base64,iVBORw0KGgo=", media_type="image/png"),
+        Content.from_uri(" data:image/png;base64,iVBORw0KGgo=", media_type="image/png"),
+    ],
+    ids=["data-content", "upper-case-data-uri", "spaced-data-uri"],
+)
 async def test_a_file_sent_as_bytes_is_refused_and_nothing_is_stored(
-    gateway: Gateway, db_session: AsyncSession
+    gateway: Gateway, db_session: AsyncSession, image: Content
 ) -> None:
     # #73: a thread keeps a pointer to a stored file, never its bytes.
     scripted(gateway, "a room")
     agent = gateway.agent([], name="helper")
     session = await gateway.sessions.load(ALICE, "c6", agent)
-    image = Content.from_data(b"\x89PNG\r\n", media_type="image/png")
     await agent.run([Message("user", [image, "Which room?"])], session=session)
     with pytest.raises(InlineMedia):
         await gateway.sessions.save(ALICE, "c6", agent, session)
     assert await db_session.get(AgentSessionRow, (ALICE.id, "c6", "helper")) is None
+
+
+async def test_a_file_stored_elsewhere_is_kept_as_its_pointer(
+    gateway: Gateway, db_session: AsyncSession
+) -> None:
+    scripted(gateway, "a room")
+    agent = gateway.agent([], name="helper")
+    session = await gateway.sessions.load(ALICE, "c10", agent)
+    pointer = Content.from_uri("https://files.example/rooms/1.png", media_type="image/png")
+    await agent.run([Message("user", [pointer, "Which room?"])], session=session)
+    await gateway.sessions.save(ALICE, "c10", agent, session)
+    row = await stored(db_session, ALICE, "c10")
+    assert "https://files.example/rooms/1.png" in json.dumps(row.document)
 
 
 async def test_a_stored_document_builds_only_the_types_maf_registered(
