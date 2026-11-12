@@ -148,6 +148,21 @@ class Settings(BaseSettings):
     # Leave prompts and answers out of traces when they may hold personal data.
     langsmith_hide_inputs: bool = False
     langsmith_hide_outputs: bool = False
+{%- elif llm == 'maf' %}
+
+    # LangSmith tracing of model calls over OpenTelemetry (app/llm/maf/tracing.py): MAF's spans
+    # and the gateway's llm.call span, never message text. Never on in tests.
+    langsmith_tracing: bool = False
+    langsmith_api_key: SecretStr | None = None
+    langsmith_project: str | None = None
+    # The OpenTelemetry endpoint, without /v1/traces; the US region's by default.
+    langsmith_endpoint: str | None = None
+    # Share of traces sent, 0 to 1: production rarely needs every call.
+    langsmith_tracing_sampling_rate: float = Field(default=1.0, ge=0, le=1)
+    # MAF's switch for putting prompts, answers and tool arguments in spans. It must stay off
+    # while redaction is on (the app refuses to start otherwise): spans would hold the text
+    # redaction keeps from the provider.
+    enable_sensitive_data: bool = False
 {%- endif %}
     # Personal-data redaction (#78, docs/decisions/0006): before a request goes to the model
     # provider, contact, bank and ID numbers in common formats and the values the app names
@@ -181,6 +196,21 @@ class Settings(BaseSettings):
                 "calls and defaults to 13, so set it only to change that."
             )
         return data
+{%- endif %}
+{%- if llm == 'maf' %}
+
+    @model_validator(mode="after")
+    def no_sensitive_spans_with_redaction(self) -> Settings:
+        """Refuse to start with MAF's sensitive data capture on while redaction is on (the
+        founder's decision on #35): spans would record the prompts, answers and tool arguments
+        that redaction keeps from the provider, in the clear."""
+        if self.enable_sensitive_data and self.llm_redaction == "on":
+            raise ValueError(
+                "ENABLE_SENSITIVE_DATA is on while LLM_REDACTION is on: spans would record the "
+                "text redaction keeps from the provider. Turn ENABLE_SENSITIVE_DATA off (or, only "
+                "where no personal data is sent, turn LLM_REDACTION off)."
+            )
+        return self
 {%- endif %}
 
     @model_validator(mode="after")

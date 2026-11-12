@@ -220,6 +220,7 @@ MAF_ONLY = {
     "test_llm_maf_sessions.py",
     "test_llm_maf_stream.py",
     "test_llm_maf_surface.py",
+    "test_llm_maf_tracing.py",
     "test_llm_maf_usage.py",
     "test_llm_maf_wire.py",
 }
