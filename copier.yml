@@ -66,6 +66,7 @@ _exclude:
   - "{% if llm is defined and llm != 'langchain' %}backend/src/app/llm/langchain{% endif %}"
   - "{% if llm is defined and llm != 'maf' %}backend/src/app/llm/maf{% endif %}"
   - "{% if llm is defined and llm != 'langchain' %}backend/src/app/llm/checkpoint_types.py{% endif %}"
+  - "{% if llm is defined and llm != 'maf' %}backend/src/app/llm/workflow_checkpoint_types.py{% endif %}"
   - "{% if llm is defined and llm != 'langchain' %}backend/tests/harness/langchain.py{% endif %}"
   - "{% if llm is defined and llm != 'maf' %}backend/tests/harness/maf.py{% endif %}"
   - "{% if llm is defined and llm != 'maf' %}backend/tests/test_llm_maf_*.py{% endif %}"

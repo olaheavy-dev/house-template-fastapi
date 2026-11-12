@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from agent_framework import Message
+from agent_framework import Message, WorkflowBuilder
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -249,6 +249,58 @@ async def test_a_stored_conversation_is_resent_after_a_restart(
     first, second = [json.dumps(json.loads(request.body)) for request in vcr.requests]
     assert "ORCHID" in first
     assert "ORCHID" in second  # the stored history was sent again
+
+
+@pytest.mark.vcr
+@pytest.mark.block_network
+@pytest.mark.usefixtures("cassette_or_skip")
+@pytest.mark.parametrize("model", [CHAT_MODEL, ANTHROPIC_MODEL], ids=["openai", "anthropic"])
+async def test_a_workflow_with_an_agent_resumes_from_its_checkpoint_after_a_restart(
+    settings: Settings, db_session: AsyncSession, vcr: Any, model: str
+) -> None:
+    # The real APIs in a checkpointed workflow (#35 PR 6): an agent answers, the workflow's
+    # checkpoints are stored in Postgres, and a new gateway (a restart) resumes from the first one,
+    # so the agent runs again from the stored input. The agent's id is stable, as a workflow's
+    # graph must be the same to resume.
+    sessions = async_sessionmaker(
+        bind=db_session.bind, join_transaction_mode="create_savepoint", expire_on_commit=False
+    )
+    who = User(id="u_cassette")
+
+    def build() -> tuple[Gateway, Any, Any]:
+        gateway = Gateway(settings.model_copy(update={"llm_model": model}), lambda: sessions)
+        gateway.meter.cap, gateway.meter.today = 1_000_000, lambda: DAY
+        agent = gateway.agent(
+            [], name="writer", id="writer", instructions="Answer in one short sentence."
+        )
+        storage = gateway.checkpoints(who)
+        return (
+            gateway,
+            storage,
+            WorkflowBuilder(
+                start_executor=agent, checkpoint_storage=storage, name="one-agent"
+            ).build(),
+        )
+
+    def texts(events: list[Any]) -> str:
+        return " ".join(str(getattr(event.data, "text", event.data)) for event in events)
+
+    gateway, storage, workflow = build()
+    first = [e async for e in workflow.run("Reply with the word ORCHID.", stream=True)]
+    await gateway.aclose()
+    assert "ORCHID" in texts([e for e in first if e.type == "output"]).upper()
+    [entry, *_] = await storage.list_checkpoints(workflow_name="one-agent")
+
+    gateway, storage, workflow = build()  # a restart: the checkpoint comes back from Postgres
+    again = [
+        e
+        async for e in workflow.run(
+            checkpoint_id=entry.checkpoint_id, checkpoint_storage=storage, stream=True
+        )
+    ]
+    await gateway.aclose()
+    assert "ORCHID" in texts([e for e in again if e.type == "output"]).upper()
+    assert len(vcr.requests) == 2
 
 
 def test_the_maf_cassettes_hold_no_credentials_or_personal_data() -> None:

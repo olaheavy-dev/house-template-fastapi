@@ -57,6 +57,7 @@ from app.llm.core.prices import MICRO_USD
 from app.llm.core.prompts import Prompt
 from app.llm.core.redaction import Redactor, choose_detectors
 from app.llm.core.steps import StepLimit
+from app.llm.maf.checkpoints import PostgresCheckpointStorage
 from app.llm.maf.embeddings import GatewayEmbeddings
 from app.llm.maf.middleware import BudgetMiddleware, tagged
 from app.llm.maf.redaction import RedactionMiddleware, RedactionUnavailable
@@ -190,6 +191,7 @@ class Gateway:
         self.middleware: list[Any] = [self.redaction, self.budget]
         # Conversations stored in Postgres, keyed by the current user (app/llm/maf/sessions.py).
         self.sessions = PostgresSessionStore(sessionmaker)
+        self._sessionmaker = sessionmaker
 
         # Without OpenAI's key there are no embeddings, and asking for them gets a 503.
         self._embeddings: GatewayEmbeddings | None = None
@@ -281,6 +283,20 @@ class Gateway:
         if not options.get("context_providers"):
             options["context_providers"] = [InMemoryHistoryProvider()]
         return Agent(self.client(), instructions, tools=list(tools), **options)
+
+    def checkpoints(self, user: User) -> PostgresCheckpointStorage:
+        """MAF's CheckpointStorage for this user's workflow runs, in Postgres
+        (app/llm/maf/checkpoints.py): pass it as `checkpoint_storage` to a WorkflowBuilder, or to
+        `workflow.run(checkpoint_id=..., checkpoint_storage=...)` to resume. A user only ever sees
+        their own checkpoints."""
+        return PostgresCheckpointStorage(self._sessionmaker, user)
+
+    async def delete_user_data(self, user_ref: str) -> tuple[int, int]:
+        """Delete everything the gateway stored for a user: their agent sessions and workflow
+        checkpoints (both hold conversation text). Returns how many of each went."""
+        sessions = await self.sessions.delete_user(user_ref)
+        checkpoints = await PostgresCheckpointStorage.delete_user(self._sessionmaker, user_ref)
+        return sessions, checkpoints
 
     def embeddings(self) -> GatewayEmbeddings:
         """Embeddings under the same daily budget; always await them:
