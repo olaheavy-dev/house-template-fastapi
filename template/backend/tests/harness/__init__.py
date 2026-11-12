@@ -35,6 +35,7 @@ from app.settings import Settings
 
 __all__ = [
     "FAILURE_KINDS",
+    "AsksTool",
     "Failure",
     "FakeEmbeddingsApi",
     "Harness",
@@ -78,6 +79,18 @@ class Reply:
 
 
 @dataclass(frozen=True, slots=True)
+class AsksTool:
+    """A model that asks for the tool `name` (with `args`) whenever it is offered tools, and
+    answers `text` when it is offered none: the model that loops until the step limit stops it.
+    Each call reports the same usage."""
+
+    name: str
+    args: dict[str, Any]
+    text: str = "final answer"
+    usage: tuple[int, int] = (100, 10)
+
+
+@dataclass(frozen=True, slots=True)
 class Failure:
     """A failed provider call. `message` stands for the provider's own text (which can echo the
     prompt), so a test can check it never reaches a client; `retry_after` is the provider's
@@ -111,7 +124,7 @@ class Harness(Protocol):
         a test may set)."""
         ...
 
-    def install_scripted(self, gateway: Any, script: Sequence[Reply | Failure]) -> None:
+    def install_scripted(self, gateway: Any, script: Sequence[Reply | Failure | AsksTool]) -> None:
         """Replace the provider with one that answers `script` in order, one item per provider
         call, through the same path a real call takes (the budget and redaction included)."""
         ...
@@ -176,6 +189,22 @@ class Harness(Protocol):
     ) -> list[str]:
         """One streamed call, read the way the framework streams; returns the text of each update
         that carried text. With `take`, stops reading after that many and closes the stream."""
+        ...
+
+    async def run_agent(
+        self,
+        gateway: Any,
+        question: str,
+        tools: Sequence[Callable[..., Any]],
+        *,
+        tags: dict[str, Any] | None = None,
+    ) -> tuple[str, bool]:
+        """One run of the gateway's agent with `tools`: its final answer's text, and whether the
+        run ended on the forced final answer (the neutral step_limit_reached flag)."""
+        ...
+
+    def last_request_offered_tools(self, gateway: Any) -> bool:
+        """Whether the provider's last request let the model call a tool."""
         ...
 
     def last_request_messages(self, gateway: Any) -> list[Message] | None:

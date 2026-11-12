@@ -210,6 +210,7 @@ LANGCHAIN_ONLY = {
     "test_llm_usage.py",
 }
 MAF_ONLY = {
+    "test_llm_maf_agent.py",
     "test_llm_maf_cassettes.py",
     "test_llm_maf_errors.py",
     "test_llm_maf_gateway.py",

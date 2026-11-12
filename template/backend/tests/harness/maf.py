@@ -6,6 +6,8 @@ client raises (the SDK's error wrapped by MAF's own wrapper)."""
 
 from __future__ import annotations
 
+import json
+import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from types import SimpleNamespace
 from typing import Any, cast
@@ -34,8 +36,9 @@ from app.llm.core.errors import ProviderError
 from app.llm.core.redaction import Redactor
 from app.llm.maf.gateway import Gateway, NoExtraChatMiddleware, check_chain
 from app.llm.maf.middleware import tagged
+from app.llm.maf.steps import step_limit_reached
 from app.settings import Settings
-from tests.harness import Failure, FakeEmbeddingsApi, Reply
+from tests.harness import AsksTool, Failure, FakeEmbeddingsApi, Reply
 from tests.harness import Message as Neutral
 
 # What a failed chat call raises for each kind: the core's ProviderError, which the middleware makes
@@ -127,6 +130,8 @@ class ScriptedBase(BaseChatClient[Any]):
                 return item
             if isinstance(item, Failure):
                 raise error_of(item)
+            if isinstance(item, AsksTool):
+                return _asks(item, options)
             response = ChatResponse(
                 messages=[Message("assistant", [item.text])], model="scripted-model"
             )
@@ -151,6 +156,8 @@ class ScriptedBase(BaseChatClient[Any]):
             item = self.script.pop(0)
             if isinstance(item, Failure):
                 raise error_of(item)
+            if isinstance(item, AsksTool):
+                item = _asks(item, options)
             if isinstance(item, ChatResponse):
                 for message in item.messages:
                     yield ChatResponseUpdate(
@@ -175,6 +182,24 @@ class ScriptedBase(BaseChatClient[Any]):
             return ChatResponse.from_updates(collected, output_format_type=response_format)
 
         return ResponseStream(updates(), finalizer=final)
+
+
+def offers_tools(options: Mapping[str, Any]) -> bool:
+    return bool(options.get("tools")) and options.get("tool_choice") != "none"
+
+
+def _asks(item: AsksTool, options: Mapping[str, Any]) -> ChatResponse[Any]:
+    given, produced = item.usage
+    if offers_tools(options):
+        call = Content.from_function_call(
+            f"call_{uuid.uuid4().hex[:8]}", item.name, arguments=json.dumps(item.args)
+        )
+        message = Message("assistant", [call])
+    else:
+        message = Message("assistant", [item.text])
+    response = ChatResponse(messages=[message], model="scripted-model")
+    response.usage_details = UsageDetails(input_token_count=given, output_token_count=produced)
+    return response
 
 
 def _usage_update(usage: UsageDetails) -> ChatResponseUpdate:
@@ -350,6 +375,21 @@ class MafHarness:
                     if take is not None and len(out) >= take:
                         break
         return out
+
+    async def run_agent(
+        self,
+        gateway: Gateway,
+        question: str,
+        tools: Sequence[Callable[..., Any]],
+        *,
+        tags: dict[str, Any] | None = None,
+    ) -> tuple[str, bool]:
+        with tagged(CallTags(**(tags or {}))):
+            response = await gateway.agent(list(tools)).run(question)
+        return response.text, step_limit_reached(response)
+
+    def last_request_offered_tools(self, gateway: Gateway) -> bool:
+        return offers_tools(self._scripted(gateway).seen_options[-1])
 
     def last_request_messages(self, gateway: Gateway) -> list[Neutral] | None:
         seen = self._scripted(gateway).seen

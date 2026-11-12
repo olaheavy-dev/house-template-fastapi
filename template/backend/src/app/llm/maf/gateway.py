@@ -27,13 +27,13 @@ connections that belong to the loop that opened them.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from typing import Annotated, Any
 
 import anthropic
 import structlog
-from agent_framework import FunctionInvocationConfiguration, SupportsChatGetResponse
+from agent_framework import Agent, FunctionInvocationConfiguration, SupportsChatGetResponse
 
 # Not exported by agent-framework-core 1.25.0; it is the function MAF itself sorts middleware with.
 # The pins move together by hand (decision 0002), and a test calls it, so a rename fails loudly.
@@ -55,6 +55,7 @@ from app.llm.core.steps import StepLimit
 from app.llm.maf.embeddings import GatewayEmbeddings
 from app.llm.maf.middleware import BudgetMiddleware, tagged
 from app.llm.maf.redaction import RedactionMiddleware, RedactionUnavailable
+from app.llm.maf.steps import RUN_OPTION, StepRun, flagged
 from app.llm.redaction_rules import DETECTORS
 from app.problems import Problem
 from app.settings import Settings
@@ -70,7 +71,21 @@ class NoExtraChatMiddleware:
     client's own chain, so it would run closer to the provider than redaction and the budget and
     could add personal data or spend unmetered. The gateway's clients refuse it instead (fail
     closed): add chat middleware to the gateway's chain, where it is deliberate. Function
-    middleware (around tools) is not affected."""
+    middleware (around tools) is not affected.
+
+    Each `get_response` is one run of the agent step limit (app/llm/maf/steps.py): it gets a fresh
+    StepRun in its options, which the budget middleware counts against, and its result is flagged
+    if its last call was the forced final answer."""
+
+    def get_response(
+        self, messages: Any, *, stream: bool = False, options: Any = None, **kwargs: Any
+    ) -> Any:
+        run = StepRun()
+        with_run = {**(options or {}), RUN_OPTION: run}
+        result = super().get_response(  # type: ignore[misc]
+            messages, stream=stream, options=with_run, **kwargs
+        )
+        return flagged(result, run)
 
     def _get_chat_middleware_pipeline(self, middleware: Any) -> Any:
         if categorize_middleware(list(middleware or []))["chat"]:
@@ -164,7 +179,7 @@ class Gateway:
             self.meter,
             max_tokens=settings.llm_max_tokens,
             sends_store=llm_model.startswith("openai:"),
-            final_only=settings.agent_max_model_calls == 1,
+            step_limit=self.step_limit,
         )
         self.middleware: list[Any] = [self.redaction, self.budget]
 
@@ -227,6 +242,30 @@ class Gateway:
             raise Problem(503, detail="The language model isn't configured.")
         check_chain(self._client, self.middleware)
         return self._client
+
+    def agent(
+        self,
+        tools: Sequence[Any] = (),
+        *,
+        instructions: str | None = None,
+        **options: Any,
+    ) -> Agent[Any]:
+        """A tool-calling agent (MAF's Agent) on the gateway's client, so every model call of its
+        tool loop is redacted and budgeted:
+
+            agent = gateway.agent([search_courses], instructions=prompt.text)
+            with gateway.call_options(user, "answer", prompt):
+                response = await agent.run(question)
+            if step_limit_reached(response):  # app.llm.maf.steps
+                ...  # the answer was cut short at the model-call limit
+
+        A run makes at most AGENT_MAX_MODEL_CALLS model calls (default 13); the last one is made
+        without tools, so the model writes a final answer, and the response is flagged. The count
+        restarts on every run. `options` go to MAF's Agent (`name`, `default_options`,
+        `context_providers`, agent and function `middleware`); chat middleware is refused (it
+        would run after redaction and the budget). Threads are not stored by the gateway yet:
+        keep the `AgentSession` you pass to `run` yourself."""
+        return Agent(self.client(), instructions, tools=list(tools), **options)
 
     def embeddings(self) -> GatewayEmbeddings:
         """Embeddings under the same daily budget; always await them:

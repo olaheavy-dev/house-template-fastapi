@@ -35,6 +35,7 @@ from app.llm.core.budget import LlmCall
 from app.llm.core.prices import cost
 from app.llm.core.usage import Usage
 from app.llm.maf.gateway import Gateway
+from app.llm.maf.steps import step_limit_reached
 from app.settings import Settings
 from tests.models import CHAT_MODEL
 
@@ -176,6 +177,44 @@ async def test_a_streamed_structured_call_is_redacted_restored_and_settled(
     assert EMAIL in text
     assert call.redacted_count == 1
     settled_at_its_price(call)
+
+
+def add(a: int, b: int) -> int:
+    """Add two whole numbers."""
+    return a + b
+
+
+@pytest.mark.vcr
+@pytest.mark.block_network
+@pytest.mark.usefixtures("cassette_or_skip")
+@pytest.mark.parametrize("model", [CHAT_MODEL, ANTHROPIC_MODEL], ids=["openai", "anthropic"])
+async def test_an_agent_run_stops_at_its_limit_with_a_real_answer(
+    settings: Settings, db_session: AsyncSession, vcr: Any, model: str
+) -> None:
+    # The real APIs at the step limit (#35 PR 4): with a limit of 2 the model asks for the tool
+    # on call 1, call 2 is sent with tool_choice "none" and is answered in text, and the run is
+    # flagged. Two requests, two settled rows.
+    sessions = async_sessionmaker(
+        bind=db_session.bind, join_transaction_mode="create_savepoint", expire_on_commit=False
+    )
+    gateway = Gateway(
+        settings.model_copy(update={"llm_model": model, "agent_max_model_calls": 2}),
+        lambda: sessions,
+    )
+    gateway.meter.cap, gateway.meter.today = 1_000_000, lambda: DAY
+    agent = gateway.agent([add], instructions="Always use the add tool for arithmetic.")
+    response = await agent.run("Use the add tool to add 2 and 3, then add 4 to that result.")
+    await gateway.aclose()
+    assert response.text
+    assert step_limit_reached(response)
+    first, last = [json.loads(request.body) for request in vcr.requests]
+    assert first.get("tools")
+    choice = last.get("tool_choice")
+    assert choice == "none" or (isinstance(choice, dict) and choice.get("type") == "none")
+    calls = (await db_session.scalars(select(LlmCall).where(LlmCall.day == DAY))).all()
+    assert len(calls) == 2
+    for call in calls:
+        settled_at_its_price(call)
 
 
 def test_the_maf_cassettes_hold_no_credentials_or_personal_data() -> None:

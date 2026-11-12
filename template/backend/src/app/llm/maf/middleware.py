@@ -57,9 +57,11 @@ from agent_framework import (
 
 from app.llm.core import bounds
 from app.llm.core.budget import CallTags, Meter
+from app.llm.core.steps import DEFAULT_MAX_MODEL_CALLS, StepLimit
 from app.llm.core.usage import Usage
 from app.llm.maf.errors import classify
 from app.llm.maf.redaction import REDACTED_COUNT
+from app.llm.maf.steps import RUN_OPTION, StepRun
 from app.llm.maf.usage import from_maf
 
 __all__ = [
@@ -234,14 +236,18 @@ class BudgetMiddleware(ChatMiddleware):
     Meter. `max_tokens` is the gateway's output limit (LLM_MAX_TOKENS)."""
 
     def __init__(
-        self, meter: Meter, *, max_tokens: int, sends_store: bool, final_only: bool = False
+        self,
+        meter: Meter,
+        *,
+        max_tokens: int,
+        sends_store: bool,
+        step_limit: StepLimit | None = None,
     ) -> None:
         self.meter = meter
         self.max_tokens = max_tokens
-        # AGENT_MAX_MODEL_CALLS=1: the only call is the final one, so no tools are offered on any
-        # call (`tool_choice="none"`). MAF's tool loop would otherwise make a second call after
-        # a tool round, which is two model calls where the limit says one.
-        self.final_only = final_only
+        # AGENT_MAX_MODEL_CALLS (app/llm/maf/steps.py): the run's last allowed call is sent with
+        # `tool_choice="none"`, so the model answers instead of asking for another tool.
+        self.step_limit = step_limit or StepLimit(DEFAULT_MAX_MODEL_CALLS)
         # Whether the provider's API has a `store` option to send False in: OpenAI's Responses API
         # does (and stores by default); Anthropic's Messages API stores nothing and its SDK refuses
         # the keyword.
@@ -249,6 +255,11 @@ class BudgetMiddleware(ChatMiddleware):
 
     async def process(self, context: ChatContext, call_next: Callable[[], Awaitable[None]]) -> None:
         options = dict(context.options or {})
+        # The run's count (put there by the gateway's client); never sent to the provider. A call
+        # that did not come through the gateway's client is a run of its own.
+        run = options.pop(RUN_OPTION, None)
+        if not isinstance(run, StepRun):
+            run = StepRun()
         refused = sorted(str(key) for key in options if key not in ALLOWED_OPTIONS)
         if refused:
             raise OptionNotAllowed(f"options the gateway does not allow: {', '.join(refused)}")
@@ -267,8 +278,11 @@ class BudgetMiddleware(ChatMiddleware):
         limit = options.get("max_tokens")
         if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
             options["max_tokens"] = self.max_tokens
-        if self.final_only:
+        run.limit = self.step_limit
+        if self.step_limit.is_final(run.calls):
             options["tool_choice"] = "none"
+            run.forced = True
+        run.calls += 1
         thinking = options.get("thinking")
         if isinstance(thinking, Mapping):
             budget = thinking.get("budget_tokens")

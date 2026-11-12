@@ -312,7 +312,7 @@ async def test_the_real_clients_carry_the_tool_loop_limit(
     client = gateway._client
     assert client is not None
     assert client.function_invocation_configuration["max_iterations"] == iterations
-    assert gateway.budget.final_only is (limit == 1)
+    assert gateway.budget.step_limit.max_model_calls == limit
 
 
 @pytest.mark.parametrize("provider", ["openai", "anthropic"])

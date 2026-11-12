@@ -1,0 +1,182 @@
+interactions:
+- request:
+    body: '{"model":"gpt-6-luna","stream":false,"include":["reasoning.encrypted_content"],"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Use
+      the add tool to add 2 and 3, then add 4 to that result."}]}],"instructions":"Always
+      use the add tool for arithmetic.","max_output_tokens":1024,"store":false,"tool_choice":"auto","tools":[{"name":"add","parameters":{"properties":{"a":{"title":"A","type":"integer"},"b":{"title":"B","type":"integer"}},"required":["a","b"],"title":"add_input","type":"object","additionalProperties":false},"strict":false,"type":"function","description":"Add
+      two whole numbers."}]}'
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate, zstd
+      connection:
+      - keep-alive
+      content-length:
+      - '625'
+      content-type:
+      - application/json
+      host:
+      - api.openai.com
+      user-agent:
+      - AsyncOpenAI/Python 3.37.0
+      x-stainless-arch:
+      - arm64
+      x-stainless-async:
+      - async:asyncio
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - MacOS
+      x-stainless-package-version:
+      - 3.37.0
+      x-stainless-raw-response:
+      - 'true'
+      x-stainless-read-timeout:
+      - '60.0'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.14.5
+    method: POST
+    uri: https://api.openai.com/v1/responses
+  response:
+    body:
+      string: "{\n  \"id\": \"resp_0a5fcc170a927764016af5f280dd3487d2896388ebb324cb79\",\n
+        \ \"object\": \"response\",\n  \"created_at\": 1794503296,\n  \"status\":
+        \"completed\",\n  \"access_programs\": null,\n  \"background\": false,\n  \"billing\":
+        {\n    \"payer\": \"developer\"\n  },\n  \"completed_at\": 1794503298,\n  \"error\":
+        null,\n  \"frequency_penalty\": 0.0,\n  \"image\": {\n    \"context_compression\":
+        \"disabled\"\n  },\n  \"incomplete_details\": null,\n  \"instructions\": \"Always
+        use the add tool for arithmetic.\",\n  \"max_output_tokens\": 1024,\n  \"max_tool_calls\":
+        null,\n  \"model\": \"gpt-6-luna\",\n  \"moderation\": null,\n  \"output\":
+        [\n    {\n      \"id\": \"fc_0a5fcc170a927764016af5f2821c9487d28c372ae06ecdd5e1\",\n
+        \     \"type\": \"function_call\",\n      \"status\": \"completed\",\n      \"arguments\":
+        \"{\\\"a\\\":2,\\\"b\\\":3}\",\n      \"call_id\": \"call_CCnakxBUf3cs9zgqAUTldm0I\",\n
+        \     \"name\": \"add\"\n    }\n  ],\n  \"parallel_tool_calls\": true,\n  \"presence_penalty\":
+        0.0,\n  \"previous_response_id\": null,\n  \"prompt_cache_key\": null,\n  \"prompt_cache_retention\":
+        \"24h\",\n  \"reasoning\": {\n    \"context\": \"all_turns\",\n    \"effort\":
+        \"medium\",\n    \"mode\": \"standard\",\n    \"summary\": null\n  },\n  \"safety_identifier\":
+        null,\n  \"service_tier\": \"default\",\n  \"store\": false,\n  \"temperature\":
+        1.0,\n  \"text\": {\n    \"format\": {\n      \"type\": \"text\"\n    },\n
+        \   \"verbosity\": \"medium\"\n  },\n  \"tool_choice\": \"auto\",\n  \"tool_usage\":
+        {\n    \"image_gen\": {\n      \"input_tokens\": 0,\n      \"input_tokens_details\":
+        {\n        \"image_tokens\": 0,\n        \"text_tokens\": 0\n      },\n      \"output_tokens\":
+        0,\n      \"output_tokens_details\": {\n        \"image_tokens\": 0,\n        \"text_tokens\":
+        0\n      },\n      \"total_tokens\": 0\n    },\n    \"web_search\": {\n      \"num_requests\":
+        0\n    }\n  },\n  \"tools\": [\n    {\n      \"type\": \"function\",\n      \"description\":
+        \"Add two whole numbers.\",\n      \"name\": \"add\",\n      \"output_schema\":
+        null,\n      \"parameters\": {\n        \"properties\": {\n          \"a\":
+        {\n            \"title\": \"A\",\n            \"type\": \"integer\"\n          },\n
+        \         \"b\": {\n            \"title\": \"B\",\n            \"type\": \"integer\"\n
+        \         }\n        },\n        \"required\": [\n          \"a\",\n          \"b\"\n
+        \       ],\n        \"title\": \"add_input\",\n        \"type\": \"object\",\n
+        \       \"additionalProperties\": false\n      },\n      \"strict\": false\n
+        \   }\n  ],\n  \"top_logprobs\": 0,\n  \"top_p\": 0.98,\n  \"truncation\":
+        \"disabled\",\n  \"usage\": {\n    \"input_tokens\": 85,\n    \"input_tokens_details\":
+        {\n      \"cache_write_tokens\": 0,\n      \"cached_tokens\": 0\n    },\n
+        \   \"output_tokens\": 21,\n    \"output_tokens_details\": {\n      \"reasoning_tokens\":
+        0\n    },\n    \"total_tokens\": 106\n  },\n  \"user\": null,\n  \"metadata\":
+        {}\n}"
+    headers:
+      content-type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+- request:
+    body: '{"model":"gpt-6-luna","stream":false,"include":["reasoning.encrypted_content"],"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Use
+      the add tool to add 2 and 3, then add 4 to that result."}]},{"call_id":"call_CCnakxBUf3cs9zgqAUTldm0I","id":"fc_0a5fcc170a927764016af5f2821c9487d28c372ae06ecdd5e1","type":"function_call","name":"add","arguments":"{\"a\":2,\"b\":3}","status":"completed"},{"call_id":"call_CCnakxBUf3cs9zgqAUTldm0I","type":"function_call_output","output":"5"}],"instructions":"Always
+      use the add tool for arithmetic.","max_output_tokens":1024,"store":false,"tool_choice":"none","tools":[{"name":"add","parameters":{"properties":{"a":{"title":"A","type":"integer"},"b":{"title":"B","type":"integer"}},"required":["a","b"],"title":"add_input","type":"object","additionalProperties":false},"strict":false,"type":"function","description":"Add
+      two whole numbers."}]}'
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate, zstd
+      connection:
+      - keep-alive
+      content-length:
+      - '906'
+      content-type:
+      - application/json
+      cookie:
+      - __cf_bm=B0aVlmyqJpzF80WGeQxsYhTdR5_SIhNmnhzfG.vNXqU-1794503295.4348516-1.0.1.1-Vdn4Mi8ocg24exYWmKzco5Nv0GqMFdKMA4p6cePAC8SVY0rVywojPxPIAtwop_kdphAONz0luEZGgcemSZAu7sWpLa7PTyXxieRZcMb86gABVlW07DDUG8g.vaHRLujm
+      host:
+      - api.openai.com
+      user-agent:
+      - AsyncOpenAI/Python 3.37.0
+      x-stainless-arch:
+      - arm64
+      x-stainless-async:
+      - async:asyncio
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - MacOS
+      x-stainless-package-version:
+      - 3.37.0
+      x-stainless-raw-response:
+      - 'true'
+      x-stainless-read-timeout:
+      - '60.0'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.14.5
+    method: POST
+    uri: https://api.openai.com/v1/responses
+  response:
+    body:
+      string: "{\n  \"id\": \"resp_0a5fcc170a927764016af5f2827fc487d294706f12acace700\",\n
+        \ \"object\": \"response\",\n  \"created_at\": 1794503298,\n  \"status\":
+        \"completed\",\n  \"access_programs\": null,\n  \"background\": false,\n  \"billing\":
+        {\n    \"payer\": \"developer\"\n  },\n  \"completed_at\": 1794503302,\n  \"error\":
+        null,\n  \"frequency_penalty\": 0.0,\n  \"image\": {\n    \"context_compression\":
+        \"disabled\"\n  },\n  \"incomplete_details\": null,\n  \"instructions\": \"Always
+        use the add tool for arithmetic.\",\n  \"max_output_tokens\": 1024,\n  \"max_tool_calls\":
+        null,\n  \"model\": \"gpt-6-luna\",\n  \"moderation\": null,\n  \"output\":
+        [\n    {\n      \"id\": \"rs_0a5fcc170a927764016af5f28355e887d285837ff9a09c6e24\",\n
+        \     \"type\": \"reasoning\",\n      \"content\": [],\n      \"encrypted_content\":
+        \"gAAAAABq9fKG7w6uejejhF7HKyvnR3URnyh6JNjdyYuPhe-gWD_4sfLDcl_qxasvXPIDBI3FJ6zV_Gfkqdel5UX0GeHAfNQJXvQ7BCAqZnfMSPr2hJv1cHlaCP_etDhJ1BmHW1rsyiVw0kjQGzK7WP_uNY0P7BAmaodMbt4m3OgsyGMQcvv4wmmXIF78OZ2xraAoQgSsEdzZyTI9ZWkiF9Pk2pKlTav8vAZgqcyKv7_y_cV-9EtqXXA0AEfs89tj5OZ737Aqqaudxu7U34S9PfW4BQl9lP-kWUa9ew-Fo6AcAv7ZmBErz83bR_H6RNLZEdcqo2HUHyvO4-gnhlrtLpdRi_DY-unNQP1V0Y2oDuXba_WykH8dXJL0xcWSEYbFeqUktyGiqDJZ3Tl-z0hBVWtYLtXyxYx3rU_fsWvJdM2pI3RQ5u95P5K7p85XnXc7ToAw9JI0RvhUo5saie8pGB0KLDq17t--4yadfpHQ7Q__lcjsARA0aw9EWQ7_qqjxMkwk_SbZZCyMBv814tRywGGzEsJbGYV6l4xBOTaFpWT4q-KJRrOCemaMYK_unk93aqIMV2YVk7EXfta38P_NbIgEPorwwyJ6SXbk4A9pkpIhMBF0R5qNm98Ln5OLXx1NsllgYcL5UHzRi6AMiexaI1twIH07Qlbn6t_k4mhOjvxJu-XvRqq_5wY75TRXQHVMyJzwrxAeRmk_b7R6emBwekIi3shjIWuZNe5r5O081OEPdIENExCd2C7Qx7otJzDacU8KVrii_a4sRwQLkxdwnGGM9aNWKJH6iGTtC8Inxd0oPTJEkqn9L0pQBKGZ9F3OmUthiWaNh7mTWI83Z2bAD7CkRpwox3mEUd8bleIGhGygNBpH9pBQG2Qvybply0QdtQYkNytzGzvnfRB7qtV1qNY9iTdFKtTKDNHCzX_xhKuYrD9MwvanGBsR8WiGupIfrtYDXR0RiSl9Xh33fuPrOMNL2YoPAkvFGM9RQCDup7AbTqb4yTA4r6pgUYFlhOAAsbo0rifUwg8-09v301NiQW8vilMrx0Mjhh-FxgeUh-q-lxm6DsXNpghXeqtJX3kL0g5aXIzp6LaV0R5IvpdaEq56laTiVOu2qNY3nyYjVPHsQJft18szQREM6wli6ytZip8CAgwBo5I-rsFo8wNmMvK2h562pyXhgqO6ryDb85hWLds4ipOIOTbc3RYiiAJ0Uu8tt6nG4Xw6UHTVcUQS-xDkF8WPPKcayANWRFlPYgztVyqztdo18xjiPMWC4Ntp_iRdmtlF5vbzNaw_hzPl5Eyu3wH4dTMdApYsJOdGlQ6kAc5-4GC3d9BiSwTwJYL8lNramgwdKInteC7aTg_Pe8md9Md0SyA6ZPd763K-dsySWOoTOn9pH2EavKfWChhMGwA0X-EBkV1D1TQUoaMVCyuZNcb0X8-OB_WxcXkSe-zyXjhSHFiFnV1GJYH0Bwdw7m2eIYeASfDPeHHOZk-WeKALX_hYQB1zAoWFePFjfPHL-5h-0Txp6LKQcoT6MrAn2TyUE6-WDKf6tZdvzvf5b0T4IyqId_PwcB98VoKuaQKpyXXmUXBShWKIe4j_0QuvUxoNIrATnjflTDPZn_1FIyQU5cFuOOJeEbNL5FNcvZUWIXCCLmr_yaGndTCNtBak1NOilKGeX_h3Tm0-as2vJjaeXDD2tdNDyg6pTIH0oSLl3SOaXwR7vAdRHO3oRE8NEV9q7ZvcYmiqRv9vwcZ6Za7dqA5jv_qmUV1AUTNm_TpISJWFl6ljI6qCtzeiGnf79TZAyMuGa5K00b33CEs5oETRZNIjJZDG7aG_RnpeGsfYbvUKVALacJ8SqX1mHHtMJU2zAlEV6saNcTVd1pwQz-yza6Y7ULLE8M5rlDZaoKSnACgYdBuMX03cdJ4oWfqOyFEKQXLDnUqcMP6XwQp_Z7N50sLxN4sCm3rEBsB-_e8lyOFCxpfaBOGsgHAbGtr6yepubOnzA47Yw03otgF1d217wdc64rKPXDY1KY3KPQGzI1y61pFiNvn7z-X03jTW_pQzwyPoh3JmuKbQXugdWtvDjTgOnfQQB01f3A1rlWD8fvgQP-uismeenrneI03eNEiYW5GJsINR1HI6IjLvHw2GVo_XWf6b60z5hEY88GZMtH6bLoNCqWg6xeB7Etwv1-EBqqiPVehH9Th-zOURZSsddniPAJq_cknbxTzIlcMNnF4pDojdUjRfOTp0iQyjgAMbMoelpJNlnOpCaDtKDh6CMWa1SPKjZwen7Wva7WWxkHt-Yd2CWWm5Z9FYerQfHeitWWNVkDWR2Li3nPpRxrdFTutCrYF-nwD2RQE8x91gqM1fwFCtz1BUawz-oDqz4pSakCseqAfjFmQmPh5UCxkTLgTBLlzs6YhN4XNktyTx0Q1yxxU6Eib29LznGDacLR_tr_pP-H-482iFI6_iA0HzKnOlIiPWkTVLur6vhNQZFsVr1iaom6W7Ld1_Q7ArUljvz9Auk2R_Z4NJBqAPmVWQuq7aqAQMP9h-RZVTbOPhYema1lpUJFnMCBjQmv1TK-dlMAQQQZZeAlFcnXiuYaism-Z6H9fb8BNLnShKr54glQBru-yhROcOYxV-EB5pkkOgTer8BYTKVRxmPPFiO5B_pt6IEmSbEjeIwvg1QGLdUxh2kggYAwQFfdcDgwN8EBxmvzJhYdS_36ccRi4_ukzGKjNV2DuX7tXUa1knICTsMlhvj_PHzw4j9SP7gnntm9IBK2ZFseJkOHOEfhYe85cYQsq9bRbmBh9VLj_JxD8PvtUAi-miPAyJ_Nb33nTVeanm-qLbMb-YZ4-rDECwHr_vs8v7YRtBu9w5mbkayz_-NP4Sg6P-ryItd3Bfuuck5BcxxdFv9TFD6b_rGXbP6TFQCJeLvGvG_Ezk7s_TtnAgy1E_jGVq_-3Oc1brBOSdmKCMSGxrmTWnv5kxAMavCuqfMXRNExV2zqrnGYJUC_i9gd3xvN6rbJTowPTXo5D3nvvubFwvokfiwU-ZSP9tM3Sisb0bDnsoMubOkNU11rtUJa7zIztDrV-yl_MuR-MLIwoO_mnvyyBWLZbrYVIzPeBx9Vw8vWimsUP7PkVyfOeeqgPquPsM4lix5lc-6QSpVYzwF8G1V6YzZcB7z6zY6_oJlsamKakyIfhpG4Fgxx29qrq-X9OwsbxhLm9tLhRUkHC6fssZ-QV3B8fgCRta0sku-VJ_hkmvPqNK4-sK3ItqAAMT99HejbaeXJ0TilLDEfueyO-VsvECjLQ7-tzAcWKoXNavUrp4wbD61S7CdmSdMrvkY-vlAN_kKDXHZo29s-6RndSzbt-SiVGyyeTlMog8mBG8BOUokHlb919t_Vlpsla1oDmD0tyawlYgXKhBljVLJeC00XC_z-UgGvnftLjrUInNkreqNiXxR6o1NJf0IhbAxhsF7GtDvUGvcv-H-s-yDQW929Za5EyFHdAqarNvwp8Bc68i0tOtlsZMZPBlZdeqrDdmOpKXlmXCFyUGEj9FKcGQbmF7Bbz7a9gIWoK9dTeveFPA7Ujj-bQ8zc3INqBndUd5JS0JzuVF37whr51AwK_dwrLAqjX7nwMt1irWVEyKcLwRLQpmXSOKhIcAuN7OrMFbMk_LY6ik--9dNOrJJfw2HERPOTmuUO6D5YCiZ8Jl2VUfrUWAj1eNlDuPgcfALExsnTG6xedstF0nB-7UDKpEszHxUk76EI3UeifyECHozqOntBVhF8MTkYq32I1LY2038QOFWnRB0u2yYO-rdcfjyRTyQhl7UnuBauoYQN4D-PRE3GostKCPnkzqQXRB7qlRiV-Q8cSNI81_zETRwUjm_owKxAOpSTCuZ42pJwlk4gUr5lm4BmAOz8Mp7tslgSrzjxk97_CllhYwsStZbjYWStRbheCnF4rr4mMD0b7-2I-Cv3ccLVOdSfOfO_C8cI3LHA-t0T6w2Bm3I_Aq3iRcSaMk8eQRtm6ICj4InzqMaNHYWotXFm5mLXhbLE8atlJMZxLOsz6KQn5kixX65SzTwKtpLzc8M69uh9ZsTP6Eo8coHOb1sQCWTc8_lRzKpr-VfK_jKOG0o7TF3G2eAKG-XF6e-NIqJ669RQtzQfWdVwF9rAndNSsEWqqE1yLkTXFB5OmqyLOQMrPrV0Fug8AREZNjP7g7oq9gBPhtO10deQoirnX_u1XGywhWvlsTZwDmG-RT2MXMJz0OqYrH5OWN4cVGt0Wdwk1yZCNff74oOJqBvcnlIXmr1ZUxm4JtRJ8ivTwiXedVwmaRuT_m6l9gSqD1rsEtg11cFSqfDBvqIlbj7r4dYSI_1dkvJyvFJBFlXF9CWV6EWeKOthN3c26pHv0_OXL8F2jYqns1LKVeCYHhH3lEgGyRXNa0DABFTlu35mP3ttPEsGe1cdoj5QEU1bvQ9vGvEu-9Sliqa3-Cwi_6oh8spruAcnVIEMdU7pug2oekayRlwEagXHCbmXianWMa5kNfeNKWvtP9-AhLm6Nip2mcheSLsQdSkDKNHpGNESzI2oz7RIjZbS_ITB_354I747hwJ0tJ8VSOuDnUNxrVOqjCLng2r38CEFAzZw1E5Kz-dD464oZGXsU4QKYAHDjJnOntM2QBI3sA1IkZaeImtTM0U-KwhYZhjS_Nk9l5d3DjM3ZNIKN4aZWSgsXozE5JkXxbaPlJNFKVPtIaFxqlOQ==\",\n
+        \     \"summary\": []\n    },\n    {\n      \"id\": \"msg_0a5fcc170a927764016af5f286078887d285171090ceec74f8\",\n
+        \     \"type\": \"message\",\n      \"status\": \"completed\",\n      \"content\":
+        [\n        {\n          \"type\": \"output_text\",\n          \"annotations\":
+        [],\n          \"logprobs\": [],\n          \"text\": \"The first sum is 5.
+        I can\\u2019t complete the second addition here.\"\n        }\n      ],\n
+        \     \"phase\": \"final_answer\",\n      \"role\": \"assistant\"\n    }\n
+        \ ],\n  \"parallel_tool_calls\": true,\n  \"presence_penalty\": 0.0,\n  \"previous_response_id\":
+        null,\n  \"prompt_cache_key\": null,\n  \"prompt_cache_retention\": \"24h\",\n
+        \ \"reasoning\": {\n    \"context\": \"all_turns\",\n    \"effort\": \"medium\",\n
+        \   \"mode\": \"standard\",\n    \"summary\": null\n  },\n  \"safety_identifier\":
+        null,\n  \"service_tier\": \"default\",\n  \"store\": false,\n  \"temperature\":
+        1.0,\n  \"text\": {\n    \"format\": {\n      \"type\": \"text\"\n    },\n
+        \   \"verbosity\": \"medium\"\n  },\n  \"tool_choice\": \"none\",\n  \"tool_usage\":
+        {\n    \"image_gen\": {\n      \"input_tokens\": 0,\n      \"input_tokens_details\":
+        {\n        \"image_tokens\": 0,\n        \"text_tokens\": 0\n      },\n      \"output_tokens\":
+        0,\n      \"output_tokens_details\": {\n        \"image_tokens\": 0,\n        \"text_tokens\":
+        0\n      },\n      \"total_tokens\": 0\n    },\n    \"web_search\": {\n      \"num_requests\":
+        0\n    }\n  },\n  \"tools\": [\n    {\n      \"type\": \"function\",\n      \"description\":
+        \"Add two whole numbers.\",\n      \"name\": \"add\",\n      \"output_schema\":
+        null,\n      \"parameters\": {\n        \"properties\": {\n          \"a\":
+        {\n            \"title\": \"A\",\n            \"type\": \"integer\"\n          },\n
+        \         \"b\": {\n            \"title\": \"B\",\n            \"type\": \"integer\"\n
+        \         }\n        },\n        \"required\": [\n          \"a\",\n          \"b\"\n
+        \       ],\n        \"title\": \"add_input\",\n        \"type\": \"object\",\n
+        \       \"additionalProperties\": false\n      },\n      \"strict\": false\n
+        \   }\n  ],\n  \"top_logprobs\": 0,\n  \"top_p\": 0.98,\n  \"truncation\":
+        \"disabled\",\n  \"usage\": {\n    \"input_tokens\": 117,\n    \"input_tokens_details\":
+        {\n      \"cache_write_tokens\": 0,\n      \"cached_tokens\": 0\n    },\n
+        \   \"output_tokens\": 248,\n    \"output_tokens_details\": {\n      \"reasoning_tokens\":
+        226\n    },\n    \"total_tokens\": 365\n  },\n  \"user\": null,\n  \"metadata\":
+        {}\n}"
+    headers:
+      content-type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+version: 1

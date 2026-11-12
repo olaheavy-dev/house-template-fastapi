@@ -73,9 +73,14 @@ INTENDED: dict[str, str] = {
     "backend/src/app/llm/langchain/errors.py":
         "OutputParserException and StructuredOutputError are the core's 502 (#35 PR 3)",
     "backend/tests/harness/__init__.py":
-        "the harness can offer a tool, ask for structured output and stream (#35)",
+        "the harness can offer a tool, ask for structured output, stream and run an agent (#35)",
+    "backend/tests/test_llm_parity_steps.py":
+        "the step limit's shared tests, run once per framework (#35 PR 4)",
+    "backend/tests/test_llm_steps.py":
+        "the framework fixture's note points to the shared step tests (#35 PR 4)",
     "backend/tests/harness/langchain.py":
-        "the scripted model binds tools and structured output as ChatOpenAI does, and streams (#35)",
+        "the scripted model binds tools and structured output as ChatOpenAI does, streams, and "
+        "loops on a tool for the step-limit tests (#35)",
     "backend/tests/test_llm_core_redaction_definitions.py":
         "the core's rules for redacting tool definitions and output schemas (#112 review)",
     "backend/tests/test_llm_redaction_structured.py":
