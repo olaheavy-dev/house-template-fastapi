@@ -54,6 +54,8 @@ from agent_framework import (
     Message,
     ResponseStream,
 )
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
 
 from app.llm.core import bounds
 from app.llm.core.budget import CallTags, Meter
@@ -62,6 +64,7 @@ from app.llm.core.usage import Usage
 from app.llm.maf.errors import classify
 from app.llm.maf.redaction import REDACTED_COUNT
 from app.llm.maf.steps import RUN_OPTION, StepRun
+from app.llm.maf.tracing import call_span
 from app.llm.maf.usage import from_maf
 
 __all__ = [
@@ -313,26 +316,38 @@ class BudgetMiddleware(ChatMiddleware):
             ),
         )
         context.options = options
-        try:
-            await call_next()
-        except Exception as error:
-            known = classify(error)
-            await self.meter.failed(call_id, known.kind if known else None, streamed=False)
-            if known is None:
+        # The call's span (app/llm/maf/tracing.py): current while the call is made, so MAF's chat
+        # span is its child; it carries the prompt, the feature and this call's ledger row id.
+        with call_span(tags) as span:
+            span.set_attribute("langsmith.metadata.llm_call_id", str(call_id))
+            try:
+                await call_next()
+            except Exception as error:
+                known = classify(error)
+                _failed(span, known.kind.value if known else type(error).__name__)
+                span.end()  # a failed call's span is sent too (PR #122 review)
+                await self.meter.failed(call_id, known.kind if known else None, streamed=False)
+                if known is None:
+                    raise
+                raise known from error
+            except BaseException:
+                # Cancelled: the call may still be running at the provider, so its row stays
+                # reserved until expire_stale closes it. Nothing is awaited here, which would be
+                # cancelled again.
+                _failed(span, "cancelled")
+                span.end()
+                self.meter.abandon(call_id)
                 raise
-            raise known from error
-        except BaseException:
-            # Cancelled: the call may still be running at the provider, so its row stays reserved
-            # until expire_stale closes it. Nothing is awaited here, which would be cancelled again.
-            self.meter.abandon(call_id)
-            raise
         if context.stream:
-            context.result = self._settled_stream(call_id, context.result)
+            context.result = self._settled_stream(call_id, context.result, span)
             return
-        await self.meter.settle(call_id, _usage(context.result))
+        try:
+            await self.meter.settle(call_id, _usage(context.result))
+        finally:
+            span.end()
 
     def _settled_stream(
-        self, call_id: uuid.UUID, inner: object
+        self, call_id: uuid.UUID, inner: object, span: trace.Span
     ) -> ResponseStream[ChatResponseUpdate, ChatResponse[Any]]:
         """The provider's stream, passed through an async generator of our own that settles the
         call once, however the stream ends (see the module notes). The final response is the
@@ -344,42 +359,57 @@ class BudgetMiddleware(ChatMiddleware):
         provider = cast("ResponseStream[ChatResponseUpdate, ChatResponse[Any]]", inner)
 
         async def updates() -> AsyncGenerator[ChatResponseUpdate]:
-            streamed = False
+            # One generator: closing it (the consumer stopped, or dropped the stream) runs this
+            # code, so the call settles and its span ends now, not at garbage collection.
             try:
-                async for update in provider:
-                    # Usage alone is not output: a rejection before any text still releases.
-                    if any(content.type != "usage" for content in update.contents):
-                        streamed = True
-                    yield update
-            except asyncio.CancelledError:
-                meter.abandon(call_id)  # nothing awaited: it would be cancelled again
-                raise
-            except GeneratorExit:
-                # The consumer stopped reading and closed the stream, or dropped it.
-                await meter.failed(call_id, None, streamed=True)
-                raise
-            except Exception as error:
-                known = classify(error)
-                await meter.failed(call_id, known.kind if known else None, streamed=streamed)
-                if known is None:
+                streamed = False
+                try:
+                    async for update in provider:
+                        # Usage alone is not output: a rejection before any text still releases.
+                        if any(content.type != "usage" for content in update.contents):
+                            streamed = True
+                        yield update
+                except asyncio.CancelledError:
+                    _failed(span, "cancelled")
+                    meter.abandon(call_id)  # nothing awaited: it would be cancelled again
                     raise
-                raise known from error
-            except BaseException:
-                meter.abandon(call_id)
-                raise
+                except GeneratorExit:
+                    # The consumer stopped reading and closed the stream, or dropped it.
+                    _failed(span, "closed")
+                    await meter.failed(call_id, None, streamed=True)
+                    raise
+                except Exception as error:
+                    known = classify(error)
+                    _failed(span, known.kind.value if known else type(error).__name__)
+                    await meter.failed(call_id, known.kind if known else None, streamed=streamed)
+                    if known is None:
+                        raise
+                    raise known from error
+                except BaseException:
+                    meter.abandon(call_id)
+                    raise
+                finally:
+                    await provider.close()
+                try:
+                    final = await provider.get_final_response()
+                except Exception:
+                    await meter.settle(call_id, None)  # the reservation stays as the cost
+                    raise
+                await meter.settle(call_id, _usage(final))
             finally:
-                await provider.close()
-            try:
-                final = await provider.get_final_response()
-            except Exception:
-                await meter.settle(call_id, None)  # the reservation stays as the cost
-                raise
-            await meter.settle(call_id, _usage(final))
+                span.end()  # however the stream ended (open while the call streams)
 
         async def final(_updates: Sequence[ChatResponseUpdate]) -> ChatResponse[Any]:
             return await provider.get_final_response()
 
         return ResponseStream(updates(), finalizer=final)
+
+
+def _failed(span: trace.Span, kind: str) -> None:
+    """Mark the call's span failed with a kind or type name only: an error's message can hold the
+    provider's text, which can echo the prompt."""
+    span.set_status(Status(StatusCode.ERROR))
+    span.set_attribute("error.type", kind)
 
 
 def _usage(result: object) -> Usage | None:

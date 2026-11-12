@@ -57,6 +57,7 @@ from app.llm.core.prices import MICRO_USD
 from app.llm.core.prompts import Prompt
 from app.llm.core.redaction import Redactor, choose_detectors
 from app.llm.core.steps import StepLimit
+from app.llm.maf import tracing
 from app.llm.maf.checkpoints import PostgresCheckpointStorage
 from app.llm.maf.embeddings import GatewayEmbeddings
 from app.llm.maf.middleware import BudgetMiddleware, tagged
@@ -189,6 +190,8 @@ class Gateway:
             step_limit=self.step_limit,
         )
         self.middleware: list[Any] = [self.redaction, self.budget]
+        # MAF's instrumentation, and LangSmith over OpenTelemetry when configured (never in tests).
+        self.tracing = tracing.configure(settings)
         # Conversations stored in Postgres, keyed by the current user (app/llm/maf/sessions.py).
         self.sessions = PostgresSessionStore(sessionmaker)
         self._sessionmaker = sessionmaker
@@ -331,7 +334,9 @@ class Gateway:
             yield
 
     async def aclose(self) -> None:
-        """Closes the SDK clients (MAF leaves a client it was given open)."""
+        """Closes the SDK clients (MAF leaves a client it was given open) and flushes the spans
+        still to send, within a time limit."""
+        self.tracing.shutdown()
         if self._sdk is not None:
             await self._sdk.close()
         if self._embeddings is not None:
