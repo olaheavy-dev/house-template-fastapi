@@ -18,7 +18,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from agent_framework import Executor, WorkflowBuilder, WorkflowContext, handler
+from agent_framework import (
+    Content,
+    Executor,
+    Message,
+    WorkflowBuilder,
+    WorkflowContext,
+    handler,
+)
 from agent_framework._workflows._checkpoint import WorkflowCheckpoint
 from agent_framework._workflows._checkpoint_encoding import decode_checkpoint_value
 from agent_framework.exceptions import WorkflowCheckpointException
@@ -30,6 +37,7 @@ from app.llm import workflow_checkpoint_types
 from app.llm.core.checkpoints import WorkflowCheckpointRow
 from app.llm.core.sessions import AgentSessionRow
 from app.llm.maf.gateway import Gateway
+from app.llm.maf.media import InlineMedia
 from app.settings import Settings
 from tests.harness import Reply
 from tests.harness.maf import HARNESS
@@ -304,3 +312,46 @@ def test_every_decode_in_the_gateway_passes_an_allow_list() -> None:
         assert allowed, name
         value = allowed[0].value
         assert not (isinstance(value, ast.Constant) and value.value is None), name
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        {"history": [Message("user", [Content.from_data(b"\x89PNG", media_type="image/png")])]},
+        {
+            "_executor_state": {
+                "worker": {
+                    "last": Content.from_uri(
+                        "DATA:image/png;base64,iVBORw0KGgo=", media_type="image/png"
+                    )
+                }
+            }
+        },
+    ],
+    ids=["message-with-bytes", "executor-state-with-a-data-uri"],
+)
+async def test_a_checkpoint_holding_a_files_bytes_is_refused_and_nothing_is_stored(
+    make: Any, db_session: AsyncSession, state: dict[str, Any]
+) -> None:
+    # #73 and record 0007: a stored workflow keeps a pointer to a file, as a stored session does
+    # (PR #121 review). MAF would pickle these objects as they are, bytes and all.
+    storage = make().checkpoints(ALICE)
+    checkpoint = WorkflowCheckpoint(
+        workflow_name="countdown", graph_signature_hash="h", state=state
+    )
+    with pytest.raises(InlineMedia):
+        await storage.save(checkpoint)
+    assert await db_session.scalar(select(func.count()).select_from(WorkflowCheckpointRow)) == 0
+
+
+async def test_a_checkpoint_holding_a_pointer_to_a_file_is_stored(make: Any) -> None:
+    storage = make().checkpoints(ALICE)
+    pointer = Content.from_uri("https://files.example/rooms/1.png", media_type="image/png")
+    checkpoint = WorkflowCheckpoint(
+        workflow_name="countdown",
+        graph_signature_hash="h",
+        state={"history": [Message("user", [pointer, "Which room?"])]},
+    )
+    await storage.save(checkpoint)
+    [message] = (await storage.load(checkpoint.checkpoint_id)).state["history"]
+    assert message.contents[0].uri == "https://files.example/rooms/1.png"

@@ -55,6 +55,7 @@ from app.auth import User
 from app.llm import workflow_checkpoint_types
 from app.llm.core.checkpoints import WorkflowCheckpointRow
 from app.llm.core.checkpoints import delete_user as delete_rows
+from app.llm.maf.media import refuse_inline_media
 
 __all__ = ["PostgresCheckpointStorage", "allowed_types"]
 
@@ -86,7 +87,9 @@ class PostgresCheckpointStorage:
         return WorkflowCheckpoint.from_dict(cast("dict[str, Any]", decoded))
 
     async def save(self, checkpoint: WorkflowCheckpoint) -> str:
-        """Encode and store a checkpoint; refuses one this storage could not load again."""
+        """Encode and store a checkpoint; refuses one this storage could not load again, and one
+        that holds a file's bytes (InlineMedia: store the file and send its URI, #73)."""
+        refuse_inline_media(checkpoint.to_dict())
         try:
             document = cast("dict[str, Any]", encode_checkpoint_value(checkpoint.to_dict()))
             decode_checkpoint_value(document, allowed_types=self.allowed)

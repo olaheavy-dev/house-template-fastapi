@@ -42,14 +42,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.auth import User
 from app.llm.core.sessions import AgentSessionRow, SessionConflict
 from app.llm.core.sessions import delete_user as delete_rows
+from app.llm.maf.media import InlineMedia, refuse_inline_media
 
 __all__ = ["InlineMedia", "PostgresSessionStore"]
 
 _MAX_KEY = 200  # the columns' length
-
-
-class InlineMedia(ValueError):
-    """A session holds a file's bytes (`Content.from_data`): store the file and send its URI."""
 
 
 def _written_by() -> str:
@@ -67,28 +64,6 @@ def _check_key(part: str, what: str) -> str:
     if not isinstance(part, str) or not part or len(part) > _MAX_KEY:
         raise ValueError(f"the {what} must be a non-empty string of at most {_MAX_KEY} characters")
     return part
-
-
-def _is_data_uri(value: Any) -> bool:
-    return isinstance(value, str) and value.strip().lower().startswith("data:")
-
-
-def _refuse_inline_bytes(value: Any) -> None:
-    """A file's bytes, whichever way they came. MAF keeps them in a content's `uri` as a data URI:
-    a data content (`Content.from_data`, or `Content.from_uri("data:...")`) serializes as
-    `{"type": "data", "uri": "data:...;base64,..."}`, and "DATA:..." or " data:..." stay `uri`
-    contents with the same bytes (measured on 1.25.0). So the test is the `uri`, not the `type`:
-    the app's own state may use `"type": "data"` for anything else (PR #120 review)."""
-    if isinstance(value, dict):
-        if _is_data_uri(value.get("uri")):
-            raise InlineMedia(
-                "a session must not store a file's bytes: store the file and send its URI (#73)"
-            )
-        for item in value.values():
-            _refuse_inline_bytes(item)
-    elif isinstance(value, list):
-        for item in value:
-            _refuse_inline_bytes(item)
 
 
 class PostgresSessionStore:
@@ -131,7 +106,7 @@ class PostgresSessionStore:
         if expected is None:
             raise ValueError("save a session this store loaded (gateway.sessions.load)")
         document = session.to_dict()
-        _refuse_inline_bytes(document)
+        refuse_inline_media(document)
         user_ref, conversation, name = key
         async with self.sessionmaker()() as db, db.begin():
             if expected == 0:
