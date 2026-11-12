@@ -23,8 +23,12 @@ LOCAL_STORAGE_SECRET = "app-storage-secret"  # noqa: S105 - the local RustFS's, 
 class Settings(BaseSettings):
     # ENV_FILE="" turns the file off: the tests set it before any app code loads, so a
     # developer's backend/.env (real keys included) never reaches them.
+    # hide_input_in_errors: a validation error must never echo the raw input, which may hold a key.
     model_config = SettingsConfigDict(
-        env_file=os.environ.get("ENV_FILE", ".env") or None, extra="ignore", frozen=True
+        env_file=os.environ.get("ENV_FILE", ".env") or None,
+        extra="ignore",
+        frozen=True,
+        hide_input_in_errors=True,
     )
 
     app_env: Literal["local", "test", "production"] = "local"

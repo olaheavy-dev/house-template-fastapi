@@ -2,25 +2,32 @@
 strings of a request and putting the originals back into an answer.
 
 `walk_data` and `walk_text` call a function on every string of plain data or of JSON text (with the
-field name in front of it as context); `Restorer` puts the originals back into an answer's text,
-transport strings and data. Nothing here knows a model framework: LangChain's wrapper
-(app/llm/langchain/redaction.py) adds its message and content-block shapes on top, and a later
-adapter does the same for its own. Standard library and pydantic only (lint-imports and a test
-enforce it). The engine itself, the detectors and the fail-closed rules are in redaction.py.
+field name in front of it as context); `walk_definition` and `walk_output_schema` do the same for a
+tool definition or an output schema, leaving the identifiers a provider checks alone; `Restorer`
+puts the originals back into an answer's text, transport strings and data. Nothing here knows a
+model framework: LangChain's wrapper (app/llm/langchain/redaction.py) adds its message and
+content-block shapes on top, and a later adapter does the same for its own. Standard library and
+pydantic only (lint-imports and a test enforce it). The engine itself, the detectors and the
+fail-closed rules are in redaction.py.
 """
 
 from __future__ import annotations
 
+import copy
 import json
 import re
+import weakref
 from collections.abc import Callable, Iterator, Mapping
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel
 
 from app.llm.core.redaction import restore
 
 __all__ = [
+    "DEFINITION_DATA",
+    "DEFINITION_IDS",
+    "DEFINITION_REFS",
     "MEDIA",
     "RAW_KEYS",
     "STRUCTURAL",
@@ -31,7 +38,10 @@ __all__ = [
     "field_context",
     "opens_json",
     "walk_data",
+    "walk_definition",
+    "walk_output_schema",
     "walk_text",
+    "with_schema",
 ]
 
 # Content blocks that are not text: counted, and sent as they are.
@@ -116,6 +126,120 @@ def walk_data(obj: Any, leaf: Leaf, context: str = "") -> Any:
     if isinstance(obj, list | tuple):
         return [walk_data(value, leaf, context) for value in obj]
     return obj
+
+
+# --- walking a tool definition or an output schema ----------------------------------------------
+
+# Keys of a tool definition or an output schema whose string value is an identifier the provider
+# checks, not text: a tool's or a schema's name (providers accept only letters, digits, `_` and
+# `-` there), a JSON Schema type, format or reference. A placeholder there would make the provider
+# refuse the call, so these are not scanned.
+DEFINITION_IDS = frozenset(
+    {"name", "type", "format", "$ref", "$schema", "$id", "$anchor", "$dynamicRef", "$dynamicAnchor"}
+)
+# Keys whose value is data the model reads as values (an allowed value, a default, an example), not
+# schema: every string in it is scanned, a `name` or `type` inside an example included. Their
+# context is the field they belong to (`date_of_birth` with `"enum": ["12/03/1980"]`).
+DEFINITION_DATA = frozenset({"default", "examples", "example", "const", "enum"})
+# Keys whose own keys are the names a `$ref` points to: those names are not scanned.
+DEFINITION_REFS = frozenset({"$defs", "definitions"})
+
+_PLAIN_LEAF = (str, int, float, bool, type(None))
+
+
+def _check_plain(obj: Any) -> Any:
+    """`obj` if it is plain JSON data; TypeError otherwise (fail closed: a value of a type this code
+    does not know could hold text it cannot see)."""
+    if isinstance(obj, _PLAIN_LEAF):
+        return obj
+    if isinstance(obj, dict) and all(isinstance(key, str) for key in obj):
+        for value in obj.values():
+            _check_plain(value)
+        return obj
+    if isinstance(obj, list | tuple):
+        for value in obj:
+            _check_plain(value)
+        return obj
+    raise TypeError(type(obj).__name__)
+
+
+def walk_definition(obj: Any, leaf: Leaf, context: str = "") -> Any:
+    """Every string a provider reads in a tool definition or an output schema (a description, a
+    title, a property name, an allowed or example value), with the field it belongs to as context,
+    except identifiers (DEFINITION_IDS), which are left as they are. Keys are text as in
+    walk_data (a property name can hold a value too); a property name and the `required` entry
+    naming it are the same string, so they get the same placeholder. Anything but plain JSON data
+    raises TypeError (fail closed)."""
+    if isinstance(obj, str):
+        return walk_text(obj, leaf, context)
+    if isinstance(obj, dict):
+        out: dict[str, Any] = {}
+        for key, value in obj.items():
+            if not isinstance(key, str):
+                raise TypeError(type(key).__name__)
+            new_key = leaf(key, context)
+            if key in DEFINITION_IDS and isinstance(value, str):
+                out[new_key] = value
+            elif key in DEFINITION_DATA:
+                out[new_key] = walk_data(_check_plain(value), leaf, context)
+            elif key in DEFINITION_REFS and isinstance(value, dict):
+                out[new_key] = {
+                    name: walk_definition(schema, leaf, field_context(name))
+                    for name, schema in value.items()
+                }
+            else:
+                out[new_key] = walk_definition(value, leaf, field_context(key))
+        return out
+    if isinstance(obj, list | tuple):
+        return [walk_definition(value, leaf, context) for value in obj]
+    if isinstance(obj, _PLAIN_LEAF):
+        return obj
+    raise TypeError(type(obj).__name__)
+
+
+# A subclass made by with_schema -> the model it stands for (Restorer.data turns an instance back).
+_ORIGINALS: weakref.WeakKeyDictionary[type[BaseModel], type[BaseModel]] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def with_schema(model: type[BaseModel], schema: dict[str, Any]) -> type[BaseModel]:
+    """A subclass of `model` whose JSON schema is `schema` (the model's own, redacted). A provider
+    SDK builds its request from `model_json_schema()` (OpenAI's strict conversion, Anthropic's
+    output format, MAF's clients), so each sends the redacted text by its own code path, and parses
+    the answer with the same fields. It has the model's name (OpenAI sends it as the schema's
+    name). Restorer.data turns an instance of it back into `model`."""
+    frozen = copy.deepcopy(schema)
+
+    def model_json_schema(cls: type[BaseModel], *args: Any, **kwargs: Any) -> dict[str, Any]:
+        return copy.deepcopy(frozen)
+
+    namespace = {
+        "__module__": model.__module__,
+        "__qualname__": model.__qualname__,
+        "__doc__": model.__doc__,
+        "model_json_schema": classmethod(model_json_schema),
+    }
+    # Pydantic's ModelMetaclass builds the subclass, as a class statement would.
+    metaclass: Any = type(model)
+    redacted = cast("type[BaseModel]", metaclass(model.__name__, (model,), namespace))
+    _ORIGINALS[redacted] = model
+    return redacted
+
+
+def walk_output_schema(value: Any, leaf: Leaf) -> Any:
+    """A tool definition or an output schema as a call carries it (a mapping, or a Pydantic model
+    class), walked by walk_definition. Unchanged, it is returned as it is (the same object, so a
+    request with nothing to replace is byte for byte what it was); changed, a mapping comes back as
+    a new dict and a model class as with_schema's subclass."""
+    if isinstance(value, type) and issubclass(value, BaseModel):
+        schema = value.model_json_schema()
+        walked = walk_definition(schema, leaf)
+        return value if walked == schema else with_schema(value, walked)
+    if not isinstance(value, dict):
+        raise TypeError(type(value).__name__)
+    walked = walk_definition(value, leaf)
+    return value if walked == value else walked
 
 
 class _Str:
@@ -363,6 +487,9 @@ class Restorer:
             # A parsed schema object (OpenAI's json_schema): copy it with restored fields. Not
             # validated again: the provider's SDK validated the placeholder form.
             fields = {name: self.data(getattr(obj, name)) for name in type(obj).model_fields}
+            original = _ORIGINALS.get(type(obj))
+            if original is not None:  # parsed with a redacted schema (with_schema): the caller's
+                return original.model_construct(set(obj.model_fields_set), **fields)
             return obj.model_copy(update=fields)
         if isinstance(obj, str):
             return self.string(obj)

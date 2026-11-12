@@ -1,0 +1,82 @@
+interactions:
+- request:
+    body: '{"model":"gpt-6-luna","stream":false,"include":["reasoning.encrypted_content"],"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Reply
+      with one word: hello. (Context: write to [EMAIL_1].)"}]}],"max_output_tokens":1024,"store":false}'
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate, zstd
+      connection:
+      - keep-alive
+      content-length:
+      - '263'
+      content-type:
+      - application/json
+      host:
+      - api.openai.com
+      user-agent:
+      - AsyncOpenAI/Python 3.37.0
+      x-stainless-arch:
+      - arm64
+      x-stainless-async:
+      - async:asyncio
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - MacOS
+      x-stainless-package-version:
+      - 3.37.0
+      x-stainless-raw-response:
+      - 'true'
+      x-stainless-read-timeout:
+      - '60.0'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.14.5
+    method: POST
+    uri: https://api.openai.com/v1/responses
+  response:
+    body:
+      string: "{\n  \"id\": \"resp_0fa5de34b31c6ffd016af50509380087d2b0c1b36c0875690c\",\n
+        \ \"object\": \"response\",\n  \"created_at\": 1794442505,\n  \"status\":
+        \"completed\",\n  \"access_programs\": null,\n  \"background\": false,\n  \"billing\":
+        {\n    \"payer\": \"developer\"\n  },\n  \"completed_at\": 1794442506,\n  \"error\":
+        null,\n  \"frequency_penalty\": 0.0,\n  \"image\": {\n    \"context_compression\":
+        \"disabled\"\n  },\n  \"incomplete_details\": null,\n  \"instructions\": null,\n
+        \ \"max_output_tokens\": 1024,\n  \"max_tool_calls\": null,\n  \"model\":
+        \"gpt-6-luna\",\n  \"moderation\": null,\n  \"output\": [\n    {\n      \"id\":
+        \"rs_0fa5de34b31c6ffd016af5050a875c87d2be3e9e996a5c2dfd\",\n      \"type\":
+        \"reasoning\",\n      \"content\": [],\n      \"encrypted_content\": \"gAAAAABq9QUK9fwjC387K7Ec6fZg3bKlMDL4rVn9rCvusbZd_G4cx1FzwPfIiQ8dVjOAx-aAir35BxTYYBfQI-ZQq3CfyD3cXBHOSMw-9RHzmSLhHqv7VB8KdzZeklBq4hCR_W--ZAdtI9ZjK8J4LTfd2LWRM9pG0Zy1Ulg7hDskOkPLYsC563LrHx3dSc2SDTeDGuV6-0lEq3gvrrpVCGiEumMV9h92oa6DqcM4_aHIJnZZl4q7FvmHBZIWHnwd_MUpktngYMnduldLPyrc-7slC87BWcJABCcexuGhDdo5EDtfHnm1IHbCcr8XWvu6KG5OzvTDOR3QoJ6iV_Gv4yCRG1Zg8wUdq3aBcNM22qF6AmQyPCisrTgmhWj6ltpOq-UQ1ef4fEkVH6z1yktgNKRssfJkJUo_SM63NJUzsUTn2OwPJ7laC03BGf9sInldx-r_eD6Zt9Y9jVvGbTgVnjPq4cuFHXRcuEDiND-AVhyt5zR0af38eAKKc6KcCji_j-kuKmH151NU0uvFZUZDjJ2URC9bUr9HuPvkf09RPQMyKKy0uvI04PcjfA1wGaq15CHuEjY-dQsglsGTm4z7VtV12-0iMIZQ2QyJddB9ZJMCvQJ54QaHrMiuWr0WLPIztPGpgte9ZDsEIkqz7kwdYwrfU4ZuFqJ5lRHud9wwipmOkPg5PGE7dCX6qyrDrKfZluij79_CG6LdmoJl-vch880JN__QdUA51cplFv7hfUF4n_NvYESqbERKFT72sK4U5jSyzml0DGe1OhiLA67WNLwKPq4RH_W-0t7I3Gk2iZ_mOeQyxjjmxuBLZ6AKf0XzLg6_ZOaaT0HEVISwFZZ2LzUEQAP0R__J3w5lXKIaID-knzuDTxI_Y687O90nqcfnv13wTCf_t6xHSdt-HCK3D71aiGCIcfxIcwEd-5woI8TgeHtdwzuywBkNwiNWvoCe85lHT5p5U9OKSSvIP-w2uOKwsJF1jEjAd2fLlNCnpwojgyq_4A0aTHRFVEBEELowSdUonjYLAMarTVC0JLm1VFC9T2WQpIDlmkt2Q4-GlUICquQxu_OWgPonIZlSvENtmtjN4jbDSD3VKv5fhrGDdpyKvwMPCGTM2VSz3jEFxhsEg5wvkGLhXumlEzKa-zkS1mJ7idNR0Pl3j2LR-NyoSJ1A2xkcdhaNZnbSVC1uosz4cwB4dVVxBYKi-74JGNrpP3teQ9qsKQhyg3p3VeCLmrdZJhkZyftkhBMipdnVigsPZaCJB-oGai_5LXCcdoNOc4aoJbophkzrxceCB_Tg6oRBReoBi6v4GpbiiEMAniXzEOa2PHofMN_HUGFJL1xNFzQeQggbyjJAymiLDjEte4UcDqp9NKb-vuTxwa1_cRFnoQF-bml87DvQu2kVagExGMOjqTrsDZDHUrpKSlzVIuW5cLoiG7sv7BgXyLUx-yd0BPZTPprRMVEQJp9PXEXpS9YAE7707VkC2MLK7Ja-b3DO3FKDHO4c4Dglp66zBqdaJ8_8QYGfBKK7CLUkwX7DVnmg8ISizp4sdlwsZpb7E_qA7VmS9iW3ZZMBGDmTYffW_GEtXIaJgvr40ZYbfUqp9-eitwLfhprrHHYSZqkNtAY55N7wZkk3Gq1xhnjycdBctdideWqsKl2_YAL3UNMcmViqAFuUeADfuTYT6GZHlFgOC25TA9FVtZrlnPTP4djtuJTJcsrFYY4ASK9MNJK0HdUyEQxaQmvPb3-VoS1VPcMbWGMUcp3wZ67Bbzx3J_mA7lLOSQB9RQauhWFGbKxtlR1UIu0ljLsfEksAe9zN4ZOTtRYxj9C67wGTWu49u7mTCA7laVcFTHE2pk3XgN6avLWqYTnYAec1u0M-7GiEL_NBJ1Fsl5ez_1YnThpZaSPvxlBCqax57BJwELNyHEj4bJCNH9dZBh5W7d4h2AzL9zsWC5x9F0fbJ3ZLFVRsYupzin7jlgQsdUmYwbJC9IMLjS2nA6qXxpjhiBro7EUht0l2o2WQ4BKhiaRoBHVvegZ_Q1t951UTOO5E5DZDao7UJVT1CTjrDiVJ5l5lNWH1zQ2cnm1g1ukXDyltMRNwWQQTd5fpWqyqsbG2pm-M2lvuIfTiCH-8Mnjs5hAe_FuJ7DlRjMm7EgQjid-GazggQwNRbxrTJIRqmSE=\",\n
+        \     \"summary\": []\n    },\n    {\n      \"id\": \"msg_0fa5de34b31c6ffd016af5050addf087d2a58f28a409ce3bfa\",\n
+        \     \"type\": \"message\",\n      \"status\": \"completed\",\n      \"content\":
+        [\n        {\n          \"type\": \"output_text\",\n          \"annotations\":
+        [],\n          \"logprobs\": [],\n          \"text\": \"hello\"\n        }\n
+        \     ],\n      \"phase\": \"final_answer\",\n      \"role\": \"assistant\"\n
+        \   }\n  ],\n  \"parallel_tool_calls\": true,\n  \"presence_penalty\": 0.0,\n
+        \ \"previous_response_id\": null,\n  \"prompt_cache_key\": null,\n  \"prompt_cache_retention\":
+        \"24h\",\n  \"reasoning\": {\n    \"context\": \"all_turns\",\n    \"effort\":
+        \"medium\",\n    \"mode\": \"standard\",\n    \"summary\": null\n  },\n  \"safety_identifier\":
+        null,\n  \"service_tier\": \"default\",\n  \"store\": false,\n  \"temperature\":
+        1.0,\n  \"text\": {\n    \"format\": {\n      \"type\": \"text\"\n    },\n
+        \   \"verbosity\": \"medium\"\n  },\n  \"tool_choice\": \"auto\",\n  \"tool_usage\":
+        {\n    \"image_gen\": {\n      \"input_tokens\": 0,\n      \"input_tokens_details\":
+        {\n        \"image_tokens\": 0,\n        \"text_tokens\": 0\n      },\n      \"output_tokens\":
+        0,\n      \"output_tokens_details\": {\n        \"image_tokens\": 0,\n        \"text_tokens\":
+        0\n      },\n      \"total_tokens\": 0\n    },\n    \"web_search\": {\n      \"num_requests\":
+        0\n    }\n  },\n  \"tools\": [],\n  \"top_logprobs\": 0,\n  \"top_p\": 0.98,\n
+        \ \"truncation\": \"disabled\",\n  \"usage\": {\n    \"input_tokens\": 24,\n
+        \   \"input_tokens_details\": {\n      \"cache_write_tokens\": 0,\n      \"cached_tokens\":
+        0\n    },\n    \"output_tokens\": 54,\n    \"output_tokens_details\": {\n
+        \     \"reasoning_tokens\": 47\n    },\n    \"total_tokens\": 78\n  },\n  \"user\":
+        null,\n  \"metadata\": {}\n}"
+    headers:
+      content-type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+version: 1

@@ -24,25 +24,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain_core.messages.ai import UsageMetadata
-
 from app.llm import prices
 from app.llm.core import prices as core_prices
 from app.llm.core.prices import Price, Rates
-from app.llm.langchain.usage import from_langchain
+from app.llm.core.usage import Usage
 
-
-# Aliases beside usage(): the helpers moved to core (T1) and take the neutral Usage, so LangChain's
-# usage goes through the adapter first, as it does in the gateway. Only these lines changed.
-def cost(price: Price, usage: UsageMetadata) -> int:
-    return core_prices.cost(price, from_langchain(usage))
-
-
+cost = core_prices.cost
 ceiling = core_prices.ceiling
-
-
-def token_details(usage: UsageMetadata | None) -> dict[str, int | None]:
-    return core_prices.token_details(from_langchain(usage) if usage else None)
+token_details = core_prices.token_details
 
 
 SOURCE = "https://example.com/pricing"
@@ -69,17 +58,29 @@ def usage(
     output_tokens: int,
     input_details: dict[str, Any] | None = None,
     output_details: dict[str, Any] | None = None,
-) -> UsageMetadata:
-    result: dict[str, Any] = {
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "total_tokens": input_tokens + output_tokens,
-    }
-    if input_details is not None:
-        result["input_token_details"] = input_details
-    if output_details is not None:
-        result["output_token_details"] = output_details
-    return result  # type: ignore[return-value]
+) -> Usage:
+    return neutral(input_tokens, output_tokens, input_details or {}, output_details or {})
+
+
+def neutral(
+    input_tokens: int, output_tokens: int, given: dict[str, Any], out: dict[str, Any]
+) -> Usage:
+    """The neutral Usage a framework's adapter makes: a detail that is missing or None is 0. The
+    keys are the ones LangChain's usage_metadata uses (the names these cases were written with),
+    mapped by hand, so the cases hold for any framework's adapter."""
+
+    def count(details: dict[str, Any], key: str) -> int:
+        return int(details.get(key) or 0)
+
+    return Usage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        reasoning_tokens=count(out, "reasoning"),
+        cache_read_tokens=count(given, "cache_read"),
+        cache_write_short_tokens=count(given, "ephemeral_5m_input_tokens"),
+        cache_write_long_tokens=count(given, "ephemeral_1h_input_tokens"),
+        cache_write_undivided_tokens=count(given, "cache_creation"),
+    )
 
 
 # --- rounding: up, once, on the total -----------------------------------------------------------
@@ -176,13 +177,6 @@ def test_an_undivided_cache_write_alongside_a_split_is_charged_on_top() -> None:
     assert cost(OPUS, u) == 460
 
 
-def test_a_string_count_is_read_as_a_number() -> None:
-    # Read by the from_langchain adapter since T1 (the neutral Usage holds ints).
-    # int(details.get(key) or 0): a provider sending "40" is read as 40. Sonnet: 100 input, 40
-    # cache read, 60 plain: 60 x 2 + 40 x 0.1 = 124.
-    assert cost(SONNET, usage(100, 0, {"cache_read": "40"})) == 124
-
-
 def test_embedding_prices_charge_input_only() -> None:
     # 7 tokens x 0.02 = 0.14 -> 1; 50,000 tokens x 0.02 = 1,000 exactly.
     assert cost(EMBED, usage(7, 0)) == 1
@@ -230,7 +224,6 @@ def test_ceiling_of_nothing_is_zero_and_a_fraction_of_one_rounds_up() -> None:
 def test_token_details_without_usage_are_none_not_zero() -> None:
     nothing = {"reasoning_tokens": None, "cache_read_tokens": None, "cache_write_tokens": None}
     assert token_details(None) == nothing
-    assert token_details({}) == nothing  # type: ignore[arg-type]
 
 
 def test_token_details_with_usage_but_no_details_record_zero() -> None:

@@ -1,7 +1,7 @@
 """The FastAPI app; `fastapi dev` and `fastapi run` find it through [tool.fastapi].
 
 create_app builds a fresh app (tests build one per test); resources that live as long as the
-process{% if llm == 'langchain' %} (the database engine, model clients){% elif database %} (the database engine){% elif storage %} (the storage client){% endif %} are opened and closed in lifespan.
+process{% if llm != 'none' %} (the database engine, model clients){% elif database %} (the database engine){% elif storage %} (the storage client){% endif %} are opened and closed in lifespan.
 """
 
 from __future__ import annotations
@@ -17,11 +17,13 @@ from fastapi.telemetry import TelemetryConfig
 
 from app import api, {% if database %}db, {% endif %}health
 from app.limits import BodyLimit, SecurityHeaders
-{%- if llm == 'langchain' %}
+{%- if llm != 'none' %}
 from app.llm.core.errors import install_failure_handlers
+{%- if llm == 'langchain' %}
 from app.llm.langchain import checkpoints
 from app.llm.langchain.errors import install_model_error_handlers
-from app.llm.langchain.gateway import Gateway
+{%- endif %}
+from app.llm.{{ llm }}.gateway import Gateway
 {%- endif %}
 from app.log import REQUEST_ID_HEADER, configure_logging, request_context
 from app.problems import UnhandledErrors, install_problem_handlers
@@ -33,7 +35,7 @@ from app.storage import Storage
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-{%- if llm == 'langchain' %}
+{%- if llm != 'none' %}
     engine = db.create_engine(app.state.settings)
     app.state.engine = engine
     app.state.sessionmaker = db.create_sessionmaker(engine)
@@ -47,14 +49,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.budget_sessionmaker = db.create_sessionmaker(budget_engine)
     # Looked up per call, so tests can swap it after startup.
     app.state.gateway = Gateway(settings, lambda: app.state.budget_sessionmaker)
+{%- if llm == 'langchain' %}
     app.state.gateway.checkpointer, checkpoint_pool = await checkpoints.open_checkpointer(
         app.state.settings
     )
+{%- endif %}
     try:
         yield
     finally:
         await app.state.gateway.aclose()
+{%- if llm == 'langchain' %}
         await checkpoint_pool.close()
+{%- endif %}
 {%- if storage %}
         if app.state.storage:
             app.state.storage.close()
@@ -135,6 +141,9 @@ def create_app(
     # Model-call failures: the core's neutral errors, then LangChain's own exceptions.
     install_failure_handlers(app)
     install_model_error_handlers(app)
+{%- elif llm == 'maf' %}
+    # Model-call failures: the core's neutral errors (the MAF adapter raises no others).
+    install_failure_handlers(app)
 {%- endif %}
     app.middleware("http")(request_context)
     # Outside request_context (so it knows the request id), inside CORS and the headers (so an

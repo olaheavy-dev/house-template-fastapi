@@ -3,10 +3,10 @@
 
 # The optional parts this project asked for (copier answers), as uv extras: the image and these
 # targets install only them. Add one by answering again (copier update) and running `make lock`.
-EXTRAS :={% if database %} --extra db{% endif %}{% if llm == 'langchain' %} --extra langchain{% endif %}{% if storage %} --extra storage{% endif %}
+EXTRAS :={% if database %} --extra db{% endif %}{% if llm == 'langchain' %} --extra langchain{% endif %}{% if llm == 'maf' %} --extra maf{% endif %}{% if storage %} --extra storage{% endif %}
 
 BACKEND := uv --directory backend run --locked $(EXTRAS)
-{% if llm == 'langchain' %}comma := ,
+{% if llm != 'none' %}comma := ,
 # Recording and evals call the real model, so they also read keys from backend/.env when it exists.
 # Variables already set (the budget caps below) win over the file. The tests ignore it.
 LIVE := uv --directory backend run --locked $(EXTRAS) $(if $(wildcard backend/.env),--env-file .env)
@@ -15,7 +15,7 @@ INSTALLS += install-fastapi
 CHECKS += check-fastapi
 FAST_CHECKS += check-fast-fastapi
 
-.PHONY: install-fastapi check-fastapi check-fast-fastapi lock dev test{% if database %} db-up{% endif %}{% if storage %} storage-up{% endif %}{% if database %} migrate migration{% endif %}{% if llm == 'langchain' %} record-llm eval{% endif %} image up{% if llm == 'langchain' %} llm-report{% endif %}
+.PHONY: install-fastapi check-fastapi check-fast-fastapi lock dev test{% if database %} db-up{% endif %}{% if storage %} storage-up{% endif %}{% if database %} migrate migration{% endif %}{% if llm != 'none' %} record-llm{% endif %}{% if llm == 'langchain' %} eval{% endif %} image up{% if llm != 'none' %} llm-report{% endif %}
 
 install-fastapi: ## Install the backend's Python and dependencies (from backend/uv.lock)
 	uv --directory backend sync --locked $(EXTRAS)
@@ -25,8 +25,8 @@ check-fastapi: ## Backend: lint, format, types, import contracts and tests{% if 
 	$(BACKEND) ruff format --check
 	$(BACKEND) mypy src tests{% if database %} migrations{% endif %}
 	$(BACKEND) lint-imports
-	{% if llm == 'langchain' %}$(BACKEND) lint-imports --config llm-contracts.toml
-	{% endif %}{% if llm == 'langchain' %}env -u LLM_EVAL {% endif %}$(BACKEND) pytest
+	{% if llm != 'none' %}$(BACKEND) lint-imports --config llm-contracts.toml
+	{% endif %}{% if llm != 'none' %}env -u LLM_EVAL {% endif %}$(BACKEND) pytest
 
 check-fast-fastapi: ## Backend: lint, format and types (the pre-push and stop-hook checks)
 	$(BACKEND) ruff check
@@ -39,8 +39,8 @@ lock: ## Update backend/uv.lock after changing backend/pyproject.toml
 dev: ## Run the API with reload on http://127.0.0.1:8000
 	$(BACKEND) fastapi dev
 
-test: ## Run the backend tests{% if llm == 'langchain' %} (LLM_EVAL is for make eval only, so it is unset here){% endif %}
-	{% if llm == 'langchain' %}env -u LLM_EVAL {% endif %}$(BACKEND) pytest
+test: ## Run the backend tests{% if llm != 'none' %} (LLM_EVAL is for make eval only, so it is unset here){% endif %}
+	{% if llm != 'none' %}env -u LLM_EVAL {% endif %}$(BACKEND) pytest
 
 {% if database %}db-up: ## Start the local PostgreSQL with pgvector (backend/compose/db/compose.yaml) and wait until it's healthy
 	docker compose up -d --wait db
@@ -49,7 +49,7 @@ test: ## Run the backend tests{% if llm == 'langchain' %} (LLM_EVAL is for make 
 	docker compose up -d --wait storage
 	$(BACKEND) python -m app.storage
 
-{% endif %}{% if llm == 'langchain' %}llm-report: ## Model spend from llm_call: make llm-report [days=7] [by=day,model] (by: day, model, prompt, feature)
+{% endif %}{% if llm != 'none' %}llm-report: ## Model spend from llm_call: make llm-report [days=7] [by=day,model] (by: day, model, prompt, feature)
 	$(BACKEND) python -m app.llm.core.report --days $(or $(days),7) --by $(or $(by),day$(comma)model)
 
 {% endif %}image: ## Build the API image from backend/Dockerfile
@@ -64,10 +64,10 @@ migrate: ## Apply migrations to DATABASE_URL (the local db by default)
 migration: ## Write a migration from model changes: make migration name="add courses"
 	@test -n "$(name)" || { echo 'usage: make migration name="what changed"'; exit 2; }
 	$(BACKEND) alembic revision --autogenerate --head app@head -m "$(name)"
-{% endif %}{% if llm == 'langchain' %}
+{% endif %}{% if llm != 'none' %}
 record-llm: ## Re-record the cassettes with the models pinned in tests/models.py, with their provider keys set (shell or backend/.env): make record-llm [budget=0.50]
 	env -u LLM_EVAL LLM_DAILY_BUDGET_USD=$(or $(budget),0.50) $(LIVE) pytest -m vcr --record-mode=rewrite
-
+{% endif %}{% if llm == 'langchain' %}
 eval: ## Run the evals against the real model, with your LLM_MODEL, EMBEDDING_MODEL and its provider key set (shell or backend/.env): make eval [budget=1] (uploads to LangSmith when LANGSMITH_API_KEY is set)
 	LLM_EVAL=1 LLM_DAILY_BUDGET_USD=$(or $(budget),1) $(LIVE) pytest tests/evals -m eval
 {% endif %}

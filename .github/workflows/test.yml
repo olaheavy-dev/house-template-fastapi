@@ -131,19 +131,27 @@ jobs:
             database: "true"
             storage: "true"
             llm: none
-            absent: langchain langgraph langsmith openai anthropic
+            absent: langchain langgraph langsmith openai anthropic agent_framework msgspec
+          # Microsoft Agent Framework instead of LangChain (#35): the image holds none of
+          # LangChain's packages, and `make check` runs the shared parity tests through MAF.
+          - id: llm-maf
+            name: llm=maf
+            database: "true"
+            storage: "true"
+            llm: maf
+            absent: langchain langgraph langsmith
           - id: no-database
             name: database=false
             database: "false"
             storage: "true"
             llm: none
-            absent: sqlalchemy alembic langchain
+            absent: sqlalchemy alembic langchain agent_framework
           - id: minimal
             name: database=false storage=false
             database: "false"
             storage: "false"
             llm: none
-            absent: boto3 sqlalchemy alembic langchain
+            absent: boto3 sqlalchemy alembic langchain agent_framework
           # The oldest supported Python; the other variants run the default (3.14).
           - id: python-312
             name: python_version=3.12

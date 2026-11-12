@@ -1,0 +1,55 @@
+interactions:
+- request:
+    body: '{"max_tokens":1024,"messages":[{"role":"user","content":[{"type":"text","text":"Reply
+      with one word: hello. (Context: write to [EMAIL_1].)"}]}],"model":"claude-haiku-5-5","stream":false}'
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate, zstd
+      anthropic-beta:
+      - mcp-client-2025-04-04
+      anthropic-version:
+      - '2023-06-01'
+      connection:
+      - keep-alive
+      content-length:
+      - '186'
+      content-type:
+      - application/json
+      host:
+      - api.anthropic.com
+      user-agent:
+      - agent-framework-python/1.25.0
+      x-stainless-arch:
+      - arm64
+      x-stainless-async:
+      - async:asyncio
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - MacOS
+      x-stainless-package-version:
+      - 1.17.0
+      x-stainless-read-timeout:
+      - '60.0'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.14.5
+      x-stainless-timeout:
+      - NOT_GIVEN
+    method: POST
+    uri: https://api.anthropic.com/v1/messages?beta=true
+  response:
+    body:
+      string: '{"model":"claude-haiku-5-5","id":"msg_011Cgx51UqqHQeDc8DmYgwTr","type":"message","role":"assistant","content":[{"type":"thinking","thinking":"","signature":"CAQS8wYKEAgTGAI4AUIIdGhpbmtpbmcSDEdN7/ijUcb2xXVGtRoMYBUYgdNFajAAeupyIjDHwgX7/RIazwF8jMd5na7yDxyW0tfoxWSwGd2GeOjky/9DKnylMq4avdVFSN9RRO0qkAau0pjRMZagoHL0N+/3YaddiGTnQlbs5niem4AWay4O5DZD4lo5nC7zXo9/6qZS349fPXUiFYEhym7Rei779kNJb9P+ME4oDKqogQMyQiNNASBHqTJmdcpQp74HgtwDg0bXvJxEqC2XaObMvo38CfGNZWBmkSsvDRFocAakqNxQw2AO6kkr0XL2CChcaBEvhICx0pLouSjFnVJB34cWheXTAQ4r0qMH1vNSyyvAr8SWX9JK2AXnxfW2FFPLNFxuGkL6sfBxRifOPu7BzfelZsV+T6SmghEr1PCBWktzQFenyRhA+hpVyPQZ3tfIQ6pustcQyL82BjOyWgUR5RkZsBbvNR0ssqMGMxJGFULM6hvO6I5K7yCjv7ORi3cSCBgkShvOn8IguoIOPkz1hkvhQut4zS1N+zfo6RUUzcBUnP7JpsdznO5ddvnNxL6aMrgkO/ZMOmM+YdYBK1ICrOupXMp3A84JM0kTUPpZtzwBD8lELmNd0o9LUG+WpjZdVpnzYDvPdoKK0jiIMSgkRDPQ420EsW5kbwz8jBLaCUv3t5xKNje3ltM7yEDByja+hiBKhuUeEkll0tPgzP9pFOC26wPRKXe7oMmHeP9NDOxxA7RcS6f8BV/+L0tcG3lPfJQyGFkF6salJUoFRoKr8LMA4dXGr1xPz7N1hRxgTDNMUl2V4MYSyzwa6q4A0Y1Gq9qQkypmh9GnN+sItP4iZZg0aLS7AqWJQN6WmMlmoIwuvynShmg1I/kMVX2fVak7RT1Cje7wfvVylelTo8AlafqNZR//SvOLFeMZ5FZhmYb7V83fVOVRtmE9VcOlBajtlyNE05VNhgaFZu8CMfRpm6nzogIcxpF4+zAdqJU+yQZBx+Y3NjH1s+R0dhpHctT7GAioEJm3/15gxqHwwnS3J62caaw2bxiEaEd7LtWmZcmCyCo+jHmNPNeBSfWM+tgX/fvhFiPh30dMrn/M7B2Jhogn4K5Di1Nr5H35gNwYiL7XKlE1F6kcm1SZJg9IWUmsyRDoM2biGk6IYlLwDZgO9mq5dLDpGAE="},{"type":"text","text":"Hello"}],"container":null,"stop_reason":"end_turn","stop_sequence":null,"stop_details":null,"usage":{"input_tokens":34,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":103,"output_tokens_details":{"thinking_tokens":98},"service_tier":"standard","inference_geo":"global","speed":"standard"},"diagnostics":null}'
+    headers:
+      content-type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+version: 1

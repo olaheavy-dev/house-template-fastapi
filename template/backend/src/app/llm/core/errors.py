@@ -13,9 +13,11 @@ the client or this module's types: it can echo the prompt.
 
 from __future__ import annotations
 
+import traceback
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import PurePath
 from types import MappingProxyType
 
 import structlog
@@ -112,6 +114,30 @@ class ProviderError(Exception):
         self.retry_after = retry_after
 
 
+def _chain(error: BaseException) -> list[BaseException]:
+    links: list[BaseException] = []
+    current: BaseException | None = error
+    while current is not None and len(links) < 16:
+        links.append(current)
+        current = current.__cause__ or current.__context__
+    return links
+
+
+def _type_names(error: BaseException) -> list[str]:
+    return [type(link).__name__ for link in _chain(error)]
+
+
+def _where(error: BaseException) -> list[str]:
+    """Where each error in the chain was raised, as `file.py:123` (the innermost frame of its
+    traceback): enough to find the bug, with none of the messages."""
+    found: list[str] = []
+    for link in _chain(error):
+        frames = traceback.extract_tb(link.__traceback__)
+        if frames:
+            found.append(f"{PurePath(frames[-1].filename).name}:{frames[-1].lineno}")
+    return found
+
+
 def failure_response(
     request: Request,
     kind: FailureKind | None,
@@ -125,7 +151,12 @@ def failure_response(
     path = request.url.path
     answer = outcome(kind)
     if answer is None:  # an invalid request the app built: a bug, handled like any other
-        log.error("llm_error", kind=source, path=path, exc_info=error)
+        # The type names of the error and of what it was raised from, never a traceback: a
+        # framework's wrapper (MAF's) embeds the provider's text, which can echo the prompt, in the
+        # messages of the chain a traceback prints.
+        log.error(
+            "llm_error", kind=source, path=path, chain=_type_names(error), where=_where(error)
+        )
         return problem_response(500, instance=path)
     log.warning("llm_error", kind=source, status=answer.status, path=path)
     headers = {"Retry-After": retry_after or DEFAULT_RETRY_AFTER} if answer.retry else {}

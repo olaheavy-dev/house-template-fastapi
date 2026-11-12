@@ -847,3 +847,33 @@ def test_updating_a_v0_8_0_project_with_defaults_deletes_nothing_and_adds_migrat
     assert after.pop("backend/uv.lock") == lock
     fresh.pop("backend/uv.lock")
     assert after == fresh
+
+
+@pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
+def test_a_langchain_project_can_switch_to_maf_by_update_and_keeps_its_database_chain(tmp_path):
+    # #35: `copier update -d llm=maf` swaps LangChain's files (the adapter, its tests, its evals and
+    # cassettes, checkpoint_types.py) for MAF's and leaves the shared core, the budget tables and
+    # the migration chain alone; the project then equals a fresh `llm: maf` render (its own
+    # lockfile aside: the user runs `make lock`). Nothing is dropped from the database.
+    dst = committed_baseline_project(tmp_path / "project", llm="langchain")
+    before = tracked(dst)
+    assert "backend/src/app/llm/langchain/gateway.py" in before
+    lock = (dst / "backend" / "uv.lock").read_bytes()
+
+    copier.run_update(dst, answers_file=ANSWERS_FILE, data={"llm": "maf"}, defaults=True,
+                      unsafe=True, overwrite=True, quiet=True, vcs_ref="HEAD")
+
+    after = files_of(dst)
+    assert yaml.safe_load((dst / ANSWERS_FILE).read_text())["llm"] == "maf"
+    assert "backend/src/app/llm/langchain/gateway.py" not in after
+    assert "backend/src/app/llm/maf/gateway.py" in after
+    assert "backend/src/app/llm/core/budget.py" in after
+    migrations = {p for p in after if p.startswith("backend/migrations/versions/")}
+    assert {p for p in before if p.startswith("backend/migrations/versions/")} <= migrations
+    assert not list(dst.rglob("*.rej"))
+    assert [p for p, data in after.items() if b"<<<<<<<" in data] == []
+    fresh = files_of(render_at(tmp_path / "fresh", "HEAD", llm="maf"))
+    after.pop("backend/user_added.txt")
+    assert after.pop("backend/uv.lock") == lock
+    fresh.pop("backend/uv.lock")
+    assert after == fresh

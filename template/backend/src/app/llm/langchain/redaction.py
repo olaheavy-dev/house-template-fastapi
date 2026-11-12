@@ -39,6 +39,14 @@ Limits worth knowing:
   fragments come out empty and the restored string arrives in one chunk per call (per place where
   the provider carries it), restored at each JSON nesting level exactly as a whole answer's would
   be (the text stream is not delayed). Held arguments are dropped if the consumer stops early.
+- Tool definitions and output schemas bound to the call (`tools`, `functions`, `response_format`,
+  `output_format`, `output_config`, `text`) are scanned too: descriptions, titles, property names,
+  allowed and example values. Names, types, formats and `$ref`s are identifiers the provider checks
+  and are left alone. A definition with nothing to replace is sent as the same object; a Pydantic
+  `response_format` with something to replace is sent as a subclass whose JSON schema is the
+  redacted one (the provider SDK's own conversion and parsing are kept), and the parsed object is
+  turned back into the caller's class. A value in a schema keyword that is a rule (`pattern`) is
+  scanned like text, so a pattern that holds personal data stops matching what it meant.
 - Images and other media are not scanned (they are counted in `llm_unscanned_images`). A message's
   `name` field cannot take a placeholder (a provider accepts only plain names there), so a call
   whose `name` matches a detector or a known value is refused, nothing sent.
@@ -90,6 +98,7 @@ from app.llm.core.redaction_data import (
     field_context,
     opens_json,
     walk_data,
+    walk_output_schema,
     walk_text,
 )
 
@@ -221,18 +230,50 @@ def _media_count(content: Any) -> int:
     return 0
 
 
+# Bound parameters that carry a tool definition or an output schema the provider reads.
+DEFINITION_KWARGS = (
+    "tools",
+    "functions",
+    "response_format",
+    "output_format",
+    "output_config",
+    "text",
+)
+
+
+def _walk_definitions(kwargs: Mapping[str, Any], leaf: Leaf) -> dict[str, Any]:
+    """The call's parameters with every tool definition and output schema walked (see the module
+    notes); a value that is unchanged stays the same object."""
+    out = dict(kwargs)
+    for key in DEFINITION_KWARGS:
+        value = kwargs.get(key)
+        if value is None:
+            continue
+        if key in ("tools", "functions"):
+            if not isinstance(value, list | tuple):
+                raise TypeError(type(value).__name__)
+            walked = [walk_output_schema(item, leaf) for item in value]
+            if any(new is not old for new, old in zip(walked, value, strict=True)):
+                out[key] = walked
+        else:
+            out[key] = walk_output_schema(value, leaf)
+    return out
+
+
 class _Prepared:
-    """A request after redaction: the messages to send, and what is needed to put the originals
-    back. Made fresh for every call and never kept: the mapping is personal data."""
+    """A request after redaction: the messages and parameters to send, and what is needed to put
+    the originals back. Made fresh for every call and never kept: the mapping is personal data."""
 
     def __init__(
         self,
         messages: list[BaseMessage],
+        kwargs: dict[str, Any],
         mapping: Mapping[str, str],
         counts: Mapping[str, int],
         unscanned: int,
     ) -> None:
         self.messages = messages
+        self.kwargs = kwargs
         self.mapping = mapping
         self.count = sum(counts.values())
         self.counts = counts
@@ -243,10 +284,16 @@ class _NameFieldHoldsPersonalData(Exception):
     """A message's `name` matched a detector or a known value (only its type name is logged)."""
 
 
-def prepare(redactor: Redactor, messages: Sequence[BaseMessage]) -> _Prepared:
+def prepare(
+    redactor: Redactor,
+    messages: Sequence[BaseMessage],
+    kwargs: Mapping[str, Any] | None = None,
+) -> _Prepared:
     """Redact every string the provider will read, in one Redactor call so that numbering follows
-    first appearance across the whole message list. Any failure raises RedactionFailed and nothing
-    is sent."""
+    first appearance across the whole request: the tool definitions and output schemas bound to
+    the call (`kwargs`), then the messages, the order a provider reads them in, so a placeholder
+    in a fixed definition keeps its number as a thread grows. Any failure raises RedactionFailed
+    and nothing is sent."""
     failure: str | None = None
     try:
         strings: list[str] = []
@@ -257,7 +304,9 @@ def prepare(redactor: Redactor, messages: Sequence[BaseMessage]) -> _Prepared:
             contexts.append(context)
             return text
 
+        kwargs = kwargs or {}
         tools = _tool_names(messages)
+        _walk_definitions(kwargs, collect)
         for message in messages:
             _walk_message(message, collect, tools)
         names = [m.name for m in messages if m.name]
@@ -266,14 +315,16 @@ def prepare(redactor: Redactor, messages: Sequence[BaseMessage]) -> _Prepared:
             raise _NameFieldHoldsPersonalData
         result = redactor.redact(strings, contexts=contexts)
         replacements = iter(result.texts)
-        rebuilt = [
-            _walk_message(message, lambda _text, _context: next(replacements), tools)
-            for message in messages
-        ]
+
+        def replace(_text: str, _context: str) -> str:
+            return next(replacements)
+
+        new_kwargs = _walk_definitions(kwargs, replace)
+        rebuilt = [_walk_message(message, replace, tools) for message in messages]
         if next(replacements, None) is not None:  # the two walks disagree: a bug, send nothing
             raise RuntimeError("the redacted texts did not match the message strings")
         unscanned = sum(_media_count(message.content) for message in messages)
-        return _Prepared(rebuilt, result.mapping, result.counts, unscanned)
+        return _Prepared(rebuilt, new_kwargs, result.mapping, result.counts, unscanned)
     except RedactionFailed:
         raise
     except Exception as exc:  # fail closed, and say only the type: the text may be in the error
@@ -844,13 +895,13 @@ class RedactingChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         context = _context_of(run_manager) or self._pending_context()
-        prepared = prepare(self._redactor, messages)
+        prepared = prepare(self._redactor, messages, kwargs)
         _note(prepared)
         answer = await self._inner.ainvoke(
             prepared.messages,
             config=_inner_config(context, prepared.count),
             stop=stop,
-            **kwargs,
+            **prepared.kwargs,
         )
         if not isinstance(answer, AIMessage):
             raise TypeError("the model did not return an AIMessage")
@@ -931,7 +982,7 @@ class RedactingChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
         context = _context_of(run_manager) or self._pending_context()
-        prepared = prepare(self._redactor, messages)
+        prepared = prepare(self._redactor, messages, kwargs)
         _note(prepared)
         restorers = _StreamRestorers(prepared.mapping, json_text=_json_output(kwargs))
         stream = cast(
@@ -940,7 +991,7 @@ class RedactingChatModel(BaseChatModel):
                 prepared.messages,
                 config=_inner_config(context, prepared.count),
                 stop=stop,
-                **kwargs,
+                **prepared.kwargs,
             ),
         )
         # aclosing: a consumer that stops early (or is cancelled) closes the inner stream too, so

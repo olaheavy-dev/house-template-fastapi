@@ -12,7 +12,7 @@ from unittest import mock
 import pytest
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableLambda
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 from app.llm.core.redaction import redaction_scope
 from app.llm.langchain.redaction import RedactionUnavailable
@@ -220,3 +220,51 @@ async def test_a_refusal_block_that_quotes_a_placeholder_is_restored_in_a_stream
     blocks = [b for c in chunks if isinstance(c.content, list) for b in c.content]
     [block] = [b for b in blocks if isinstance(b, dict) and b.get("type") == "refusal"]
     assert block["refusal"] == f"I cannot help {TRICKY} with that."
+
+
+class Lead(BaseModel):
+    """A lead. Never write to jo.bloggs@example.com."""
+
+    email: str = Field(description="The lead's address", examples=["jo.bloggs@example.com"])
+
+
+LEAD_SCHEMA: dict[str, Any] = {
+    "title": "Lead",
+    "description": f"A lead. Never write to {EMAIL}.",
+    "type": "object",
+    "properties": {"email": {"type": "string", "enum": [EMAIL, "office"]}},
+    "required": ["email"],
+    "additionalProperties": False,
+}
+
+
+@pytest.mark.parametrize("schema_kind", ["pydantic", "dict"])
+@pytest.mark.parametrize(("provider", "method", "extra"), METHODS)
+async def test_an_output_schema_reaches_the_wire_with_placeholders_and_its_name_as_it_is(
+    provider: str, method: str, extra: dict[str, Any], schema_kind: str
+) -> None:
+    # #112's review: the schema is text the provider reads. Each SDK builds the request by its own
+    # code (OpenAI's strict conversion of the class, Anthropic's output format, a tool for
+    # function calling), so this goes through the real SDKs.
+    _, model = wire.wrapped(provider)
+    schema: Any = Lead if schema_kind == "pydantic" else LEAD_SCHEMA
+    runnable = model.with_structured_output(schema, method=method, **extra)
+    payload = {"email": "[EMAIL_1]"}
+
+    def reply(_body: dict[str, Any]) -> dict[str, Any]:
+        if method == "function_calling":
+            return wire.tool_reply(provider, "Lead", payload)
+        return wire.text_reply(provider, json.dumps(payload))
+
+    with wire.captured(reply) as sent:
+        out = await runnable.ainvoke([HumanMessage("Extract the lead.")])
+    assert EMAIL not in sent.text
+    if method != "json_mode":  # JSON mode sends no schema at all
+        assert "[EMAIL_1]" in sent.text
+        assert '"Lead"' in sent.text  # the schema's or the tool's name, as it was
+    if schema_kind == "pydantic":
+        assert type(out) is Lead  # the caller's class, not the redacted subclass that was sent
+    # In JSON mode nothing was sent that held the email, so [EMAIL_1] is one the model invented
+    # and stays as it wrote it.
+    expected = "[EMAIL_1]" if method == "json_mode" else EMAIL
+    assert as_dict(out) == {"email": expected}

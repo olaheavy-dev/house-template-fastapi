@@ -1,11 +1,11 @@
 """Test fixtures: an app per test, driven in-process through httpx with its lifespan running{% if database %},
-a real database for the tests that ask for one (db_session, db_client){% if llm == 'langchain' %}, and recorded model
+a real database for the tests that ask for one (db_session, db_client){% if llm != 'none' %}, and recorded model
 responses for the tests marked vcr (cassettes in tests/cassettes/, replayed, never re-recorded:
 `make record-llm` records them){% endif %}{% endif %}."""
 
 from __future__ import annotations
 
-{% if llm == 'langchain' %}import os
+{% if llm != 'none' %}import os
 {% endif %}{% if storage %}import uuid
 {% endif %}from collections.abc import AsyncIterator{% if database or storage %}, Iterator{% endif %}
 from typing import Any
@@ -33,7 +33,7 @@ from tests import db
 {%- elif storage %}
 from tests import storage
 {%- endif %}
-{%- if llm == 'langchain' %}
+{%- if llm != 'none' %}
 from tests.harness import Harness, load
 from tests.models import CHAT_MODEL, EMBEDDING_MODEL
 from tests.recording import missing_recording_keys
@@ -51,10 +51,10 @@ os.environ["LANGSMITH_DISABLE_RUN_COMPRESSION"] = "true"
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
-{% if llm == 'langchain' %}
+{% if llm != 'none' %}
 
 def is_eval_run() -> bool:
-    """`make eval` (LLM_EVAL=1): the evals call the project's own model, so they follow the
+    """{% if llm == 'langchain' %}`make eval` (LLM_EVAL=1): the evals call the project's own model, so they follow the{% else %}LLM_EVAL=1 (LangChain's evals; this project has none): they follow the{% endif %}
     LLM_MODEL and EMBEDDING_MODEL it set (shell or backend/.env). `make check` unsets LLM_EVAL, so
     a shell that exports it cannot turn the normal tests live. Recording does not follow them: it
     uses the models pinned in tests/models.py, so replay keeps matching what was recorded."""
@@ -106,7 +106,7 @@ FRAMEWORKS = ["{{ llm }}"]
 def framework(request: pytest.FixtureRequest) -> Harness:
     """The harness of the framework under test; a parity test using it runs once per framework."""
     return load(request.param)
-{% endif %}{% if llm == 'langchain' %}
+{% endif %}{% if llm != 'none' %}
 
 @pytest.fixture
 def settings() -> Settings:
@@ -167,7 +167,7 @@ def expected_readiness_checks() -> set[str]:
 def database_settings() -> dict[str, Any]:
     """Settings that point an app at the test database (empty in a project with no database)."""
     return {}
-{% endif %}{% if llm == 'langchain' %}
+{% endif %}{% if llm != 'none' %}
 
 # Sent with every recorded request, so never written to a cassette.
 SECRET_HEADERS = ["authorization", "x-api-key", "openai-organization", "openai-project"]
@@ -194,14 +194,14 @@ def vcr_config() -> dict[str, Any]:
         # The app's own in-process test client goes through httpx too; never record it.
         "ignore_hosts": ["test"],
     }
-{% endif %}{% if llm == 'langchain' %}
+{% endif %}{% if llm != 'none' %}
 
 @pytest.fixture
 def allowed_hosts() -> list[str]:
     """Hosts a block_network test may still reach: this machine (the test database, Docker's
     socket). Model providers are blocked unless a test is recording."""
     return ["127.0.0.1", "localhost", "::1", "/.*"]
-
+{% endif %}{% if llm == 'langchain' %}
 
 @pytest.fixture(autouse=True)
 def restore_the_process_wide_langsmith_client() -> Iterator[None]:
@@ -293,7 +293,7 @@ async def db_client(
         update={"database_url": SecretStr(database_url)}
     )
     async with LifespanManager(app) as manager:
-        app.state.sessionmaker = {% if llm == 'langchain' %}app.state.budget_sessionmaker = {% endif %}async_sessionmaker(
+        app.state.sessionmaker = {% if llm != 'none' %}app.state.budget_sessionmaker = {% endif %}async_sessionmaker(
             bind=db_session.bind, join_transaction_mode="create_savepoint", expire_on_commit=False
         )
         transport = httpx.ASGITransport(app=manager.app)

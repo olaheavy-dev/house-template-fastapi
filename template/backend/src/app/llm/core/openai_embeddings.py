@@ -33,10 +33,17 @@ KINDS: tuple[tuple[type[Exception], FailureKind], ...] = (
 )
 
 
-def openai_client(api_key: SecretStr, *, timeout: float, max_retries: int) -> openai.AsyncOpenAI:
-    """OpenAI's client with the gateway's timeout and its SDK retries as the only retry layer."""
+def openai_client(
+    api_key: SecretStr, *, timeout: float, max_retries: int, http_client: Any = None
+) -> openai.AsyncOpenAI:
+    """OpenAI's client with the gateway's timeout and its SDK retries as the only retry layer.
+    `http_client` is a test seam (an httpx client over a fake transport, so the real SDK's retries
+    and timeouts run with no network); production passes none."""
     return openai.AsyncOpenAI(
-        api_key=api_key.get_secret_value(), timeout=timeout, max_retries=max_retries
+        api_key=api_key.get_secret_value(),
+        timeout=timeout,
+        max_retries=max_retries,
+        http_client=http_client,
     )
 
 

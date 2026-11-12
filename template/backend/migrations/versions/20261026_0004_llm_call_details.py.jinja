@@ -1,4 +1,4 @@
-{% if llm == 'langchain' %}"""Model call details: reasoning and cache tokens, latency, feature and user tags; the
+{% if llm != 'none' %}"""Model call details: reasoning and cache tokens, latency, feature and user tags; the
 daily budget warning flag
 
 Every new column is nullable: calls recorded before this migration keep NULL for them (their

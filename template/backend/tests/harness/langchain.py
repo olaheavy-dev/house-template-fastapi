@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.exceptions import (
@@ -22,6 +22,9 @@ from langchain_core.language_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, BaseMessage, convert_to_messages
 from langchain_core.messages.ai import UsageMetadata
 from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.runnables import Runnable, RunnableLambda
+from langchain_core.utils.function_calling import convert_to_openai_tool
+from pydantic import BaseModel as PydanticModel
 from pydantic import Field
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -71,6 +74,22 @@ class ScriptedModel(GenericFakeChatModel):
 
     script: list[Reply | Failure] = Field(default_factory=list)
     seen: list[list[BaseMessage]] = Field(default_factory=list)
+    seen_kwargs: list[dict[str, Any]] = Field(default_factory=list)
+
+    def bind_tools(
+        self, tools: Sequence[Any], *, tool_choice: Any = None, **kwargs: Any
+    ) -> Runnable[Any, Any]:
+        """As ChatOpenAI binds tools: OpenAI-shaped function definitions."""
+        return self.bind(tools=[convert_to_openai_tool(tool) for tool in tools], **kwargs)
+
+    def with_structured_output(  # type: ignore[override]
+        self, schema: type[PydanticModel], *, include_raw: bool = False, **kwargs: Any
+    ) -> Runnable[Any, Any]:
+        """As ChatOpenAI's json_schema method: the model class itself is bound (the provider SDK
+        builds the schema from it), and the answer's text is parsed into it."""
+        return self.bind(response_format=schema) | RunnableLambda(
+            lambda message: schema.model_validate_json(message.text)
+        )
 
     async def _agenerate(
         self,
@@ -80,6 +99,7 @@ class ScriptedModel(GenericFakeChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         self.seen.append(list(messages))
+        self.seen_kwargs.append(dict(kwargs))
         item = self.script.pop(0)
         if isinstance(item, Failure):
             raise _error(item)
@@ -139,6 +159,36 @@ class LangChainHarness:
         config: Any = {"metadata": dict(tags)} if tags else None
         answer = await model.ainvoke(convert_to_messages(list(messages)), config=config)
         return answer.text
+
+    async def ask_with_tool(
+        self, gateway: Gateway, messages: Sequence[Message], tool: Callable[..., Any]
+    ) -> str:
+        model = gateway.model().bind_tools([tool])
+        answer = await model.ainvoke(convert_to_messages(list(messages)))
+        return str(answer.text)
+
+    def last_request_tools(self, gateway: Gateway) -> list[dict[str, Any]]:
+        kwargs = self._scripted(gateway).seen_kwargs[-1]
+        return [
+            {
+                "name": tool["function"]["name"],
+                "description": tool["function"].get("description"),
+                "parameters": tool["function"].get("parameters"),
+            }
+            for tool in kwargs.get("tools") or []
+        ]
+
+    async def ask_structured(
+        self, gateway: Gateway, messages: Sequence[Message], schema: type[PydanticModel]
+    ) -> Any:
+        runnable = gateway.model().with_structured_output(schema)
+        return await runnable.ainvoke(convert_to_messages(list(messages)))
+
+    def last_request_schema(self, gateway: Gateway) -> dict[str, Any] | None:
+        response_format = self._scripted(gateway).seen_kwargs[-1].get("response_format")
+        if isinstance(response_format, type) and issubclass(response_format, PydanticModel):
+            return response_format.model_json_schema()  # what the provider SDK would send
+        return cast("dict[str, Any] | None", response_format)
 
     def last_request_messages(self, gateway: Gateway) -> list[Message] | None:
         seen = self._scripted(gateway).seen

@@ -1,7 +1,9 @@
-"""What every model framework must do with the text it sends for embeddings (#78): remove
-personal data first, one way, each text on its own, before the budget reserves anything. The
-database is real; OpenAI's embeddings endpoint is faked (tests/harness/), so each test runs once per
-framework the project chose and imports none.
+"""What every model framework must do with the text it sends (#78): remove personal data first,
+before the budget reserves anything, and put the originals back in the answer. Two parts: chat
+calls (the end of this file's first half) and the text sent for embeddings, which is cleaned one
+way, each text on its own. The database is real; the chat provider and OpenAI's embeddings endpoint
+are faked (tests/harness/), so each test runs once per framework the project chose and imports
+none.
 
 The values are synthetic: the email and phone are from reserved or never-allocated ranges, the name
 is made up. A placeholder is [KIND_n]; "[EMAIL_1]" is how every email below is sent.
@@ -11,10 +13,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import date
-from typing import Any
+from typing import Annotated, Any
 
 import anyio
 import pytest
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
@@ -23,11 +26,14 @@ from app.llm.core.budget import LlmCall
 from app.llm.core.redaction import RedactionFailed, Redactor, redaction_scope
 from app.settings import Settings
 from tests.evals.redaction_corpus import MUST_NOT_CHANGE
-from tests.harness import FakeEmbeddingsApi, Harness
+from tests.harness import FakeEmbeddingsApi, Harness, Reply, user
 
 pytestmark = pytest.mark.anyio
 
 DAY = date(2026, 1, 3)
+CHAT_DAY = date(2026, 1, 4)
+CHAT_MODEL = "anthropic:claude-sonnet-5-5"
+IMAGE = {"type": "image", "url": "https://example.com/floorplan.png"}
 EMAIL = "priya.shah@example.com"
 PHONE = "07700 900123"  # Ofcom's drama range, never allocated
 NAME = "Priya Shah"
@@ -55,6 +61,227 @@ def make(
         return gateway, fake
 
     return build
+
+
+# --- chat calls --------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def chat(
+    framework: Harness, settings: Settings, sessions: async_sessionmaker[AsyncSession]
+) -> Callable[..., Any]:
+    """A gateway (redaction on unless asked) priced for CHAT_MODEL, on its own day of the ledger."""
+
+    def build(*script: Reply, **options: Any) -> Any:
+        gateway = framework.gateway(
+            settings.model_copy(update={"llm_model": CHAT_MODEL, **options}), lambda: sessions
+        )
+        meter = framework.meter(gateway)
+        meter.cap, meter.today = 1_000_000, lambda: CHAT_DAY
+        framework.install_scripted(gateway, list(script) or [Reply("ok")] * 4)
+        return gateway
+
+    return build
+
+
+async def chat_rows(session: AsyncSession) -> list[LlmCall]:
+    rows = await session.scalars(
+        select(LlmCall).where(LlmCall.day == CHAT_DAY).order_by(LlmCall.created_at)
+    )
+    return list(rows)
+
+
+async def test_the_chat_provider_gets_placeholders_by_default_never_the_values(
+    framework: Harness, chat: Callable[..., Any]
+) -> None:
+    gateway = chat()
+    await framework.ask(gateway, [user(f"Write to {EMAIL} or call {PHONE}")])
+    assert framework.last_request_messages(gateway) == [
+        user("Write to [EMAIL_1] or call [PHONE_1]")
+    ]
+
+
+async def test_the_originals_are_put_back_in_the_answer_and_an_invented_placeholder_stays(
+    framework: Harness, chat: Callable[..., Any]
+) -> None:
+    gateway = chat(Reply("Done: I wrote to [EMAIL_1] and [EMAIL_7]."))
+    with capture_logs() as logs:
+        answer = await framework.ask(gateway, [user(f"Please email {EMAIL}")])
+    # The round trip (test 14): [EMAIL_1] is the email again; [EMAIL_7] was never sent, so it is
+    # left as the model wrote it and counted once as unrestored (a count, never a value).
+    assert answer == f"Done: I wrote to {EMAIL} and [EMAIL_7]."
+    assert [log["count"] for log in logs if log["event"] == "llm_unrestored_placeholders"] == [1]
+
+
+async def test_the_values_the_app_names_are_removed_from_a_chat_call_too(
+    framework: Harness, chat: Callable[..., Any]
+) -> None:
+    gateway = chat(Reply("Hello [NAME_1]"))
+    async with redaction_scope(known={"NAME": [NAME]}, allow=["020 7946 0321"]):
+        answer = await framework.ask(gateway, [user(f"{NAME} rang 020 7946 0321")])
+    assert framework.last_request_messages(gateway) == [user("[NAME_1] rang 020 7946 0321")]
+    assert answer == f"Hello {NAME}"
+
+
+async def test_text_about_a_property_is_sent_to_the_model_as_it_is(
+    framework: Harness, chat: Callable[..., Any]
+) -> None:
+    gateway = chat()
+    await framework.ask(gateway, [user(text) for text in MUST_NOT_CHANGE])
+    assert framework.last_request_messages(gateway) == [user(text) for text in MUST_NOT_CHANGE]
+
+
+async def test_a_chat_call_that_cannot_be_cleaned_is_a_503_and_nothing_is_sent_or_written(
+    framework: Harness, chat: Callable[..., Any], db_session: AsyncSession
+) -> None:
+    class Breaks:
+        kind = "EMAIL"
+
+        def find(self, text: str) -> Any:
+            raise RuntimeError(f"cannot read {text}")  # an error whose message holds the text
+
+    gateway = chat()
+    framework.set_redactor(gateway, Redactor([Breaks()]))
+    with capture_logs() as logs, pytest.raises(RedactionFailed) as raised:
+        await framework.ask(gateway, [user(f"fine, then {EMAIL}")])
+    # Test 21: a 503, the provider was never asked, no ledger row, and only the error's type name
+    # was logged.
+    assert raised.value.status == 503
+    assert framework.scripted_left(gateway) == 4
+    assert await chat_rows(db_session) == []
+    assert EMAIL not in str(raised.value) + repr(logs)
+    assert [log["error_type"] for log in logs if log["event"] == "llm_redaction_failed"] == [
+        "RuntimeError"
+    ]
+
+
+async def test_a_chat_calls_row_counts_the_values_replaced_and_is_null_only_when_redaction_is_off(
+    framework: Harness, chat: Callable[..., Any], db_session: AsyncSession
+) -> None:
+    gateway = chat()
+    await framework.ask(gateway, [user(f"{EMAIL}, {PHONE}"), user(f"and again {EMAIL}")])  # 3
+    await framework.ask(gateway, [user("a freehold")])  # redaction ran, found nothing
+    off = chat(llm_redaction="off")
+    await framework.ask(off, [user(EMAIL)])  # redaction off
+    assert [row.redacted_count for row in await chat_rows(db_session)] == [3, 0, None]
+
+
+async def test_with_redaction_off_the_messages_are_sent_exactly_as_they_are(
+    framework: Harness, chat: Callable[..., Any]
+) -> None:
+    gateway = chat(llm_redaction="off")
+    await framework.ask(gateway, [user(f"Write to {EMAIL}")])
+    assert framework.last_request_messages(gateway) == [user(f"Write to {EMAIL}")]
+
+
+async def test_a_call_is_reserved_for_the_text_that_is_sent_not_the_text_given(
+    framework: Harness, chat: Callable[..., Any], db_session: AsyncSession
+) -> None:
+    # Test 28. The email is 22 bytes and its placeholder 9: the redacted request is the bytes of
+    # the second call, so the ledger reserves the same for both, and less than with redaction off.
+    gateway = chat()
+    await framework.ask(gateway, [user(f"Write to {EMAIL} please")])
+    await framework.ask(gateway, [user("Write to [EMAIL_1] please")])
+    off = chat(llm_redaction="off")
+    await framework.ask(off, [user(f"Write to {EMAIL} please")])
+    redacted, as_written, unredacted = [r.reserved_micro_usd for r in await chat_rows(db_session)]
+    assert redacted == as_written
+    assert unredacted > redacted
+
+
+async def test_an_image_is_counted_as_unscanned_and_the_text_beside_it_is_still_cleaned(
+    framework: Harness, chat: Callable[..., Any]
+) -> None:
+    gateway = chat()
+    with capture_logs() as logs:
+        await framework.ask(gateway, [user([IMAGE, {"type": "text", "text": f"Mail {EMAIL}"}])])
+    # Test 30: the image is sent as it is and counted (never read); the text beside it is cleaned.
+    assert [log["count"] for log in logs if log["event"] == "llm_unscanned_images"] == [1]
+    [sent] = framework.last_request_messages(gateway) or []
+    assert "Mail [EMAIL_1]" in repr(sent["content"])
+    assert EMAIL not in repr(sent["content"])
+
+
+async def test_the_logs_of_a_chat_call_hold_no_value(
+    framework: Harness, chat: Callable[..., Any]
+) -> None:
+    gateway = chat(Reply("[NAME_1] [EMAIL_1] [PHONE_1] [NAME_2]"))
+    with capture_logs() as logs:
+        async with redaction_scope(known={"NAME": [NAME]}, allow=[f"{NAME} Jr"]):
+            await framework.ask(gateway, [user(f"{NAME} Jr, {NAME}, {EMAIL}, {PHONE}")])
+    text = repr(logs)
+    for value in (EMAIL, PHONE, NAME):
+        assert value not in text
+
+
+def lookup_lead(
+    who: Annotated[str, Field(description="Their address, as priya.shah@example.com is")],
+) -> str:
+    """Look up a lead. Leads for priya.shah@example.com go to the office."""
+    return who
+
+
+def find_property(postcode: str) -> str:
+    """Find a property by its postcode."""
+    return postcode
+
+
+class Lead(BaseModel):
+    """A lead. Never write to priya.shah@example.com."""
+
+    email: str = Field(description="The lead's address", examples=["priya.shah@example.com"])
+
+
+async def test_a_tools_definition_is_sent_with_placeholders_and_its_name_as_it_is(
+    framework: Harness, chat: Callable[..., Any], db_session: AsyncSession
+) -> None:
+    gateway = chat(Reply("Ask [EMAIL_1]"))
+    answer = await framework.ask_with_tool(gateway, [user(f"Is {EMAIL} a lead?")], lookup_lead)
+    [tool] = framework.last_request_tools(gateway)
+    # The description is text the provider reads; the name is an identifier it checks. The same
+    # email in the definition and in the message is one value with one placeholder, numbered in
+    # the order the provider reads them (definitions first).
+    assert tool["name"] == "lookup_lead"
+    assert tool["description"] == "Look up a lead. Leads for [EMAIL_1] go to the office."
+    assert tool["parameters"]["properties"]["who"]["description"] == (
+        "Their address, as [EMAIL_1] is"
+    )
+    assert EMAIL not in repr(tool)
+    assert framework.last_request_messages(gateway) == [user("Is [EMAIL_1] a lead?")]
+    assert answer == f"Ask {EMAIL}"
+    [row] = await chat_rows(db_session)
+    assert row.redacted_count == 3
+
+
+async def test_an_output_schema_is_sent_with_placeholders_and_parsed_into_the_callers_class(
+    framework: Harness, chat: Callable[..., Any]
+) -> None:
+    gateway = chat(Reply('{"email": "[EMAIL_1]"}'))
+    parsed = await framework.ask_structured(gateway, [user("Extract the lead.")], Lead)
+    schema = framework.last_request_schema(gateway)
+    assert schema is not None
+    assert EMAIL not in repr(schema)
+    assert schema["description"] == "A lead. Never write to [EMAIL_1]."
+    assert schema["properties"]["email"]["examples"] == ["[EMAIL_1]"]
+    assert schema["title"] == "Lead"
+    # The answer is the caller's own class, with the original back in its field.
+    assert type(parsed) is Lead
+    assert parsed.email == EMAIL
+
+
+async def test_definitions_with_nothing_to_replace_or_with_redaction_off_are_sent_as_given(
+    framework: Harness, chat: Callable[..., Any]
+) -> None:
+    gateway = chat()
+    await framework.ask_with_tool(gateway, [user("hi")], find_property)
+    [tool] = framework.last_request_tools(gateway)
+    assert tool["description"] == "Find a property by its postcode."
+    off = chat(Reply("ok"), Reply('{"email": "x"}'), llm_redaction="off")
+    await framework.ask_with_tool(off, [user("hi")], lookup_lead)
+    [tool] = framework.last_request_tools(off)
+    assert EMAIL in tool["description"]
+    await framework.ask_structured(off, [user("hi")], Lead)
+    assert framework.last_request_schema(off) == Lead.model_json_schema()
 
 
 async def counts(session: AsyncSession) -> list[int | None]:
