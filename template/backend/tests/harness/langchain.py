@@ -269,15 +269,19 @@ class LangChainHarness:
         tools: Sequence[Callable[..., Any]],
         *,
         tags: dict[str, Any] | None = None,
+        instructions: str | None = None,
     ) -> tuple[str, bool]:
-        agent = gateway.agent(list(tools))
-        state = await agent.ainvoke(
-            {"messages": [HumanMessage(question)]},
-            config={
-                "configurable": {"thread_id": f"parity-{uuid.uuid4()}"},
-                "metadata": dict(tags or {}),
-            },
-        )
+        agent = gateway.agent(list(tools), system_prompt=instructions)
+        thread_id = f"parity-{uuid.uuid4()}"
+        try:
+            state = await agent.ainvoke(
+                {"messages": [HumanMessage(question)]},
+                config={"configurable": {"thread_id": thread_id}, "metadata": dict(tags or {})},
+            )
+        finally:
+            # The test database can outlive the run (TEST_DATABASE_URL): keep no thread.
+            if gateway.checkpointer is not None:
+                await gateway.checkpointer.adelete_thread(thread_id)
         return str(state["messages"][-1].text), steps.step_limit_reached(state)
 
     async def open_threads(
@@ -294,8 +298,9 @@ class LangChainHarness:
         user_ref: str,
         conversation_id: str,
         messages: Sequence[Message],
+        tools: Sequence[Callable[..., Any]] = (),
     ) -> str:
-        state = await gateway.agent([]).ainvoke(
+        state = await gateway.agent(list(tools)).ainvoke(
             {"messages": convert_to_messages(list(messages))},
             config={"configurable": {"thread_id": f"{user_ref}:{conversation_id}"}},
         )
@@ -347,9 +352,14 @@ class LangChainHarness:
         )
 
     async def embed_query(
-        self, gateway: Gateway, text: str, *, user_ref: str | None = None
+        self,
+        gateway: Gateway,
+        text: str,
+        *,
+        feature: str | None = None,
+        user_ref: str | None = None,
     ) -> list[float]:
-        return await gateway.embeddings().aembed_query(text, user_ref=user_ref)
+        return await gateway.embeddings().aembed_query(text, feature=feature, user_ref=user_ref)
 
     def raised_by_embeddings(self, failure: Failure) -> type[BaseException]:
         # The same family as chat calls: the embeddings adapter turns the core's ProviderError

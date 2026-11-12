@@ -198,9 +198,11 @@ class Harness(Protocol):
         tools: Sequence[Callable[..., Any]],
         *,
         tags: dict[str, Any] | None = None,
+        instructions: str | None = None,
     ) -> tuple[str, bool]:
-        """One run of the gateway's agent with `tools`: its final answer's text, and whether the
-        run ended on the forced final answer (the neutral step_limit_reached flag)."""
+        """One run of the gateway's agent with `tools` (and its system prompt, `instructions`): its
+        final answer's text, and whether the run ended on the forced final answer (the neutral
+        step_limit_reached flag). Nothing of the run is kept."""
         ...
 
     async def open_threads(self, gateway: Any, settings: Settings) -> Callable[[], Awaitable[None]]:
@@ -215,9 +217,10 @@ class Harness(Protocol):
         user_ref: str,
         conversation_id: str,
         messages: Sequence[Message],
+        tools: Sequence[Callable[..., Any]] = (),
     ) -> str:
         """One turn of a stored conversation, keyed by the user and the conversation id (derived on
-        the server, as the app must); returns the answer's text."""
+        the server, as the app must), by an agent with `tools`; returns the answer's text."""
         ...
 
     async def forget_threads(self, gateway: Any, *, user_ref: str, conversation_id: str) -> None:
@@ -257,7 +260,12 @@ class Harness(Protocol):
     ) -> list[list[float]]: ...
 
     async def embed_query(
-        self, gateway: Any, text: str, *, user_ref: str | None = None
+        self,
+        gateway: Any,
+        text: str,
+        *,
+        feature: str | None = None,
+        user_ref: str | None = None,
     ) -> list[float]: ...
 
     def raised_by_embeddings(self, failure: Failure) -> type[BaseException]:

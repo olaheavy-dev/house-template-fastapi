@@ -15,7 +15,7 @@ INSTALLS += install-fastapi
 CHECKS += check-fastapi
 FAST_CHECKS += check-fast-fastapi
 
-.PHONY: install-fastapi check-fastapi check-fast-fastapi lock dev test{% if database %} db-up{% endif %}{% if storage %} storage-up{% endif %}{% if database %} migrate migration{% endif %}{% if llm != 'none' %} record-llm{% endif %}{% if llm == 'langchain' %} eval{% endif %} image up{% if llm != 'none' %} llm-report{% endif %}
+.PHONY: install-fastapi check-fastapi check-fast-fastapi lock dev test{% if database %} db-up{% endif %}{% if storage %} storage-up{% endif %}{% if database %} migrate migration{% endif %}{% if llm != 'none' %} record-llm eval{% endif %} image up{% if llm != 'none' %} llm-report{% endif %}
 
 install-fastapi: ## Install the backend's Python and dependencies (from backend/uv.lock)
 	uv --directory backend sync --locked $(EXTRAS)
@@ -67,7 +67,7 @@ migration: ## Write a migration from model changes: make migration name="add cou
 {% endif %}{% if llm != 'none' %}
 record-llm: ## Re-record the cassettes with the models pinned in tests/models.py, with their provider keys set (shell or backend/.env): make record-llm [budget=0.50]
 	env -u LLM_EVAL LLM_DAILY_BUDGET_USD=$(or $(budget),0.50) $(LIVE) pytest -m vcr --record-mode=rewrite
-{% endif %}{% if llm == 'langchain' %}
+
 eval: ## Run the evals against the real model, with your LLM_MODEL, EMBEDDING_MODEL and its provider key set (shell or backend/.env): make eval [budget=1] (uploads to LangSmith when LANGSMITH_API_KEY is set)
 	LLM_EVAL=1 LLM_DAILY_BUDGET_USD=$(or $(budget),1) $(LIVE) pytest tests/evals -m eval
 {% endif %}
