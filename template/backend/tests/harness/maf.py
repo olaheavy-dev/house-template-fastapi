@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import anthropic
 import httpx2
@@ -19,12 +19,14 @@ from agent_framework import (
     ChatResponseUpdate,
     Content,
     FunctionInvocationLayer,
+    FunctionTool,
     Message,
     ResponseStream,
     UsageDetails,
 )
 from agent_framework.observability import ChatTelemetryLayer
 from agent_framework_anthropic._chat_client import _wrap_anthropic_error
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.llm.core.budget import CallTags, Meter
@@ -253,6 +255,36 @@ class MafHarness:
                 options=options,
             )
         return response.text
+
+    async def ask_with_tool(
+        self, gateway: Gateway, messages: Sequence[Neutral], tool: Callable[..., Any]
+    ) -> str:
+        response = await gateway.client().get_response(
+            [to_maf(message) for message in messages], options={"tools": [tool]}
+        )
+        return response.text
+
+    def last_request_tools(self, gateway: Gateway) -> list[dict[str, Any]]:
+        tools = self._scripted(gateway).seen_options[-1].get("tools") or []
+        return [
+            {"name": tool.name, "description": tool.description, "parameters": tool.parameters()}
+            for tool in tools
+            if isinstance(tool, FunctionTool)
+        ]
+
+    async def ask_structured(
+        self, gateway: Gateway, messages: Sequence[Neutral], schema: type[BaseModel]
+    ) -> Any:
+        response = await gateway.client().get_response(
+            [to_maf(message) for message in messages], options={"response_format": schema}
+        )
+        return response.value
+
+    def last_request_schema(self, gateway: Gateway) -> dict[str, Any] | None:
+        response_format = self._scripted(gateway).seen_options[-1].get("response_format")
+        if isinstance(response_format, type) and issubclass(response_format, BaseModel):
+            return response_format.model_json_schema()  # what the provider client would send
+        return cast("dict[str, Any] | None", response_format)
 
     def last_request_messages(self, gateway: Gateway) -> list[Neutral] | None:
         seen = self._scripted(gateway).seen

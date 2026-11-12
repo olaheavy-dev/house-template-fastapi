@@ -1,13 +1,14 @@
 """Personal-data redaction for MAF chat calls (#78, docs/decisions/0006).
 
-`RedactionMiddleware` is the outer of the gateway's two chat middleware. Before a request goes
-down the chain it replaces contact, bank and ID numbers and the values the app named
-(`redaction_scope`) by placeholders such as [EMAIL_1] in every string the provider will read (the
-messages, a tool call's arguments, a tool's result, and the `instructions` option an agent sends
-its system prompt in); after the answer comes back it puts the originals back. The budget
-middleware inside it therefore sizes and records the redacted request, and gets the number of
-values replaced through the call's `context.metadata`, a per-call dict, so concurrent calls cannot
-mix their counts or mappings (nothing is stored on the middleware but the redactor).
+`RedactionMiddleware` is the outer of the gateway's two chat middleware. Before a request goes down
+the chain it replaces contact, bank and ID numbers and the values the app named (`redaction_scope`)
+by placeholders such as [EMAIL_1] in every string the provider will read (the messages, a tool
+call's arguments, a tool's result, the `instructions` option an agent sends its system prompt in,
+and the tool definitions and output schema the call offers); after the answer comes back it puts the
+originals back. The budget middleware inside it therefore sizes and records the redacted request,
+and gets the number of values replaced through the call's `context.metadata`, a per-call dict, so
+concurrent calls cannot mix their counts or mappings (nothing is stored on the middleware but the
+redactor).
 
 The walkers apply the core's rules (app/llm/core/redaction_data.py) to MAF's `Message` and
 `Content`, and fail closed: a content type they do not know is not guessed at, and any error means
@@ -25,6 +26,16 @@ per call or per agent is refused by the gateway's clients (it would run after re
 budget; see NoExtraChatMiddleware in gateway.py). A message's `author_name` cannot take a
 placeholder, so a call whose name matches a detector or a known value is refused. Streamed calls
 are not supported yet and are refused.
+
+Tool definitions and the output schema: a tool's description and parameter schema, and a
+`response_format` (a mapping or a Pydantic model), are scanned like text, but a name, a JSON Schema
+type, format or `$ref` is an identifier the provider checks and is left alone
+(app/llm/core/redaction_data.py). A tool with nothing to replace is sent as the same object; one
+with something to replace is sent as a copy carrying the redacted description and schema (the tool
+the caller holds, and the function MAF runs, are not changed). A Pydantic `response_format` with
+something to replace is sent as a subclass whose JSON schema is the redacted one, so each client
+keeps its own conversion; the answer's value is parsed again into the caller's class. A schema rule
+that holds personal data (`pattern`) is scanned like text and stops matching what it meant.
 """
 
 from __future__ import annotations
@@ -34,7 +45,14 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any
 
 import structlog
-from agent_framework import ChatContext, ChatMiddleware, ChatResponse, Content, Message
+from agent_framework import (
+    ChatContext,
+    ChatMiddleware,
+    ChatResponse,
+    Content,
+    FunctionTool,
+    Message,
+)
 
 from app.llm.core import metrics
 from app.llm.core.redaction import RedactionFailed, Redactor
@@ -43,6 +61,8 @@ from app.llm.core.redaction_data import (
     Restorer,
     field_context,
     walk_data,
+    walk_definition,
+    walk_output_schema,
     walk_text,
 )
 
@@ -177,6 +197,43 @@ def _walk_instructions(value: Any, leaf: Leaf) -> Any:
     raise _UnknownContent(type(value).__name__)
 
 
+def _walk_tool(tool: Any, leaf: Leaf) -> Any:
+    """A tool as it is offered: a FunctionTool's description and parameter schema (the name is left
+    alone), or a mapping MAF passes through as it is. Unchanged, the same object; changed, a copy.
+    Anything else is refused: MAF would send it in a shape this code cannot see."""
+    if isinstance(tool, FunctionTool):
+        spec = {"description": tool.description or "", "parameters": tool.parameters()}
+        walked = walk_definition(spec, leaf)
+        if walked == spec:
+            return tool
+        new = copy.copy(tool)
+        if tool.description is not None:
+            new.description = walked["description"]
+        # What parameters() returns from now on (agent-framework-core 1.25.0 caches it there; a
+        # test pins the attribute, so a version that renames it fails the test, not a call).
+        new._cached_parameters = walked["parameters"]
+        return new
+    if isinstance(tool, Mapping):
+        return walk_output_schema(tool if isinstance(tool, dict) else dict(tool), leaf)
+    raise _UnknownContent(type(tool).__name__)
+
+
+def _walk_definitions(options: Mapping[str, Any], leaf: Leaf) -> dict[str, Any]:
+    """The options with the tools and the output schema walked; unchanged values are the same
+    objects."""
+    out = dict(options)
+    tools = options.get("tools")
+    if tools is not None:
+        if not isinstance(tools, list | tuple):
+            raise _UnknownContent(type(tools).__name__)
+        walked = [_walk_tool(tool, leaf) for tool in tools]
+        if any(new is not old for new, old in zip(walked, tools, strict=True)):
+            out["tools"] = walked
+    if options.get("response_format") is not None:
+        out["response_format"] = walk_output_schema(options["response_format"], leaf)
+    return out
+
+
 def _media_count(content: Content) -> int:
     if content.type in _MEDIA:
         return 1
@@ -213,8 +270,10 @@ def prepare(
     redactor: Redactor, messages: Sequence[Message], options: Mapping[str, Any] | None = None
 ) -> Prepared:
     """Redact every string the provider will read, in one Redactor call so that numbering follows
-    first appearance across the whole request (the instructions, then the messages). Any failure
-    raises RedactionFailed and nothing is sent."""
+    first appearance across the whole request (the tool definitions and output schema, then the
+    instructions, then the messages: the order a provider reads them in, so a placeholder in a
+    fixed definition keeps its number as a thread grows). Any failure raises RedactionFailed and
+    nothing is sent."""
     failure: str | None = None
     try:
         options = options or {}
@@ -227,6 +286,7 @@ def prepare(
             return text
 
         tools = _tool_names(messages)
+        _walk_definitions(options, collect)
         if options.get("instructions") is not None:
             _walk_instructions(options["instructions"], collect)
         for message in messages:
@@ -241,7 +301,7 @@ def prepare(
         def replace(_text: str, _context: str) -> str:
             return next(replacements)
 
-        new_options = dict(options)
+        new_options = _walk_definitions(options, replace)
         if options.get("instructions") is not None:
             new_options["instructions"] = _walk_instructions(options["instructions"], replace)
         rebuilt = [_walk_message(message, replace, tools) for message in messages]
@@ -302,7 +362,8 @@ class RedactionMiddleware(ChatMiddleware):
             context.metadata[REDACTED_COUNT] = None
             await call_next()
             return
-        prepared = prepare(redactor, context.messages, context.options)
+        given = context.options
+        prepared = prepare(redactor, context.messages, given)
         metrics.record_redactions(prepared.counts)
         if prepared.unscanned:
             log.warning("llm_unscanned_images", count=prepared.unscanned)
@@ -319,7 +380,7 @@ class RedactionMiddleware(ChatMiddleware):
             raise RedactionUnavailable("the model call returned something other than a response")
         restorer = _Restorer(prepared.mapping, json_text=_json_output(prepared.options))
         restorer.response(response)
-        _reparse(response, prepared.options)
+        _reparse(response, given or {})
         if restorer.unrestored:
             log.warning("llm_unrestored_placeholders", count=restorer.unrestored)
 
@@ -327,7 +388,8 @@ class RedactionMiddleware(ChatMiddleware):
 def _reparse(response: ChatResponse[Any], options: Mapping[str, Any]) -> None:
     """A structured answer's `value` is parsed from what the provider sent, which is the redacted
     text (OpenAI's parse path sets it, and MAF caches it): forget it, so it is parsed again from
-    the restored text on first use. These attributes are private to agent-framework-core 1.25.0;
+    the restored text on first use, into the caller's own `response_format` (not the redacted
+    subclass that was sent). These attributes are private to agent-framework-core 1.25.0;
     a test pins them, and a version bump that renames them fails it."""
     schema = options.get("response_format")
     if schema is not None:

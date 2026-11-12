@@ -53,7 +53,8 @@ REMOVED_FILES = {
 # executables today).
 INTENDED: dict[str, str] = {
     ".claude/rules/fastapi.md":
-        "names the maf extra and the `llm: maf` answer in the extras sentence (#35)",
+        "names the maf extra and the `llm: maf` answer in the extras sentence; tool definitions and "
+        "output schemas are redacted (#35)",
     "backend/pyproject.toml":
         "the maf extra with exact pins, [tool.uv] conflicts, the MAF packages in the import contract (#35)",
     "backend/src/app/llm/core/openai_embeddings.py":
@@ -61,7 +62,21 @@ INTENDED: dict[str, str] = {
     "backend/src/app/settings.py":
         "hide_input_in_errors: a validation error never echoes the value given (#35)",
     "backend/tests/test_llm_parity_redaction.py":
-        "shared chat redaction tests, run once per framework (#35)",
+        "shared chat redaction tests, run once per framework, tool definitions and schemas included (#35)",
+    "backend/src/app/llm/core/redaction_data.py":
+        "walk_definition and with_schema: tool definitions and output schemas are redacted (#112 review)",
+    "backend/src/app/llm/langchain/redaction.py":
+        "bound tool definitions and output schemas are redacted before the call (#112 review)",
+    "backend/tests/harness/__init__.py":
+        "the harness can offer a tool and ask for structured output (#112 review)",
+    "backend/tests/harness/langchain.py":
+        "the scripted model binds tools and structured output as ChatOpenAI does (#112 review)",
+    "backend/tests/test_llm_core_redaction_definitions.py":
+        "the core's rules for redacting tool definitions and output schemas (#112 review)",
+    "backend/tests/test_llm_redaction_structured.py":
+        "an output schema reaches the wire with placeholders, through every method (#112 review)",
+    "backend/tests/test_llm_redaction_tools.py":
+        "a tool's definition reaches the wire with placeholders, also when streamed (#112 review)",
     "backend/llm-contracts.toml":
         "the core contract also forbids the MAF provider packages; the comment is accurate (#35)",
     "backend/src/app/llm/core/errors.py":

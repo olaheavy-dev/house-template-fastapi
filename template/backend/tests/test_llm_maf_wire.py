@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import json
 from datetime import date
-from typing import Any
+from typing import Annotated, Any
 
 import pytest
 from agent_framework import Message
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -224,3 +224,41 @@ def test_the_response_attributes_the_value_fix_resets_exist_in_the_pinned_core()
     response: Any = ChatResponse(messages=[Message("assistant", ["{}"])], response_format=Contact)
     for name in ("_value", "_value_parsed", "_response_format"):
         assert hasattr(response, name), name
+
+
+class Lead(BaseModel):
+    """A lead. Never write to priya.shah@example.com."""
+
+    email: str = Field(description="The lead's address", examples=["priya.shah@example.com"])
+
+
+def lookup_lead(
+    who: Annotated[str, Field(description="Their address, as priya.shah@example.com is")],
+) -> str:
+    """Look up a lead. Leads for priya.shah@example.com go to the office."""
+    return who
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic"])
+async def test_tool_definitions_and_the_output_schema_reach_the_wire_with_placeholders(
+    make: Any, provider: str
+) -> None:
+    # #112's review, through each real client and SDK: the tool and the schema are built by the
+    # client's own code from the redacted copy and the redacted subclass, so the body holds
+    # placeholders, the names as they were, and the value is the caller's class again.
+    fake = FakeProviderHttp(provider, text='{"email": "[EMAIL_1]"}')
+    gateway = make(OPENAI if provider == "openai" else ANTHROPIC, fake)
+    response = await gateway.client().get_response(
+        [Message("user", ["Extract the lead."])],
+        options={"tools": [lookup_lead], "response_format": Lead, "tool_choice": "none"},
+    )
+    [body] = fake.bodies
+    sent = json.dumps(body)
+    assert EMAIL not in sent
+    # The tool's description and its parameter's, the schema's description and its example.
+    assert sent.count("[EMAIL_1]") == 4
+    assert '"lookup_lead"' in sent
+    if provider == "openai":
+        assert body["text"]["format"]["name"] == "Lead"
+    assert type(response.value) is Lead
+    assert response.value.email == EMAIL

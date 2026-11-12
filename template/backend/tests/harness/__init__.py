@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Protocol
 
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.llm.core.budget import Meter
@@ -131,6 +132,30 @@ class Harness(Protocol):
     ) -> str:
         """One call; returns the answer's text. `tags` are the call's metadata: prompt,
         prompt_sha, feature, user_ref."""
+        ...
+
+    async def ask_with_tool(
+        self, gateway: Any, messages: Sequence[Message], tool: Callable[..., Any]
+    ) -> str:
+        """One call that offers `tool` (a plain function: its name, docstring and parameters are
+        the definition) the way the framework offers a tool; returns the answer's text."""
+        ...
+
+    def last_request_tools(self, gateway: Any) -> list[dict[str, Any]]:
+        """The tool definitions the provider was last given, after redaction, as
+        `{"name", "description", "parameters"}` (the parameters a JSON schema)."""
+        ...
+
+    async def ask_structured(
+        self, gateway: Any, messages: Sequence[Message], schema: type[BaseModel]
+    ) -> Any:
+        """One call that asks for an answer in `schema` the way the framework asks for structured
+        output; returns the parsed answer."""
+        ...
+
+    def last_request_schema(self, gateway: Any) -> dict[str, Any] | None:
+        """The output schema the provider was last given, after redaction, as a JSON schema, or
+        None when the call asked for none."""
         ...
 
     def last_request_messages(self, gateway: Any) -> list[Message] | None:

@@ -13,10 +13,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import date
-from typing import Any
+from typing import Annotated, Any
 
 import anyio
 import pytest
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
@@ -211,6 +212,76 @@ async def test_the_logs_of_a_chat_call_hold_no_value(
     text = repr(logs)
     for value in (EMAIL, PHONE, NAME):
         assert value not in text
+
+
+def lookup_lead(
+    who: Annotated[str, Field(description="Their address, as priya.shah@example.com is")],
+) -> str:
+    """Look up a lead. Leads for priya.shah@example.com go to the office."""
+    return who
+
+
+def find_property(postcode: str) -> str:
+    """Find a property by its postcode."""
+    return postcode
+
+
+class Lead(BaseModel):
+    """A lead. Never write to priya.shah@example.com."""
+
+    email: str = Field(description="The lead's address", examples=["priya.shah@example.com"])
+
+
+async def test_a_tools_definition_is_sent_with_placeholders_and_its_name_as_it_is(
+    framework: Harness, chat: Callable[..., Any], db_session: AsyncSession
+) -> None:
+    gateway = chat(Reply("Ask [EMAIL_1]"))
+    answer = await framework.ask_with_tool(gateway, [user(f"Is {EMAIL} a lead?")], lookup_lead)
+    [tool] = framework.last_request_tools(gateway)
+    # The description is text the provider reads; the name is an identifier it checks. The same
+    # email in the definition and in the message is one value with one placeholder, numbered in
+    # the order the provider reads them (definitions first).
+    assert tool["name"] == "lookup_lead"
+    assert tool["description"] == "Look up a lead. Leads for [EMAIL_1] go to the office."
+    assert tool["parameters"]["properties"]["who"]["description"] == (
+        "Their address, as [EMAIL_1] is"
+    )
+    assert EMAIL not in repr(tool)
+    assert framework.last_request_messages(gateway) == [user("Is [EMAIL_1] a lead?")]
+    assert answer == f"Ask {EMAIL}"
+    [row] = await chat_rows(db_session)
+    assert row.redacted_count == 3
+
+
+async def test_an_output_schema_is_sent_with_placeholders_and_parsed_into_the_callers_class(
+    framework: Harness, chat: Callable[..., Any]
+) -> None:
+    gateway = chat(Reply('{"email": "[EMAIL_1]"}'))
+    parsed = await framework.ask_structured(gateway, [user("Extract the lead.")], Lead)
+    schema = framework.last_request_schema(gateway)
+    assert schema is not None
+    assert EMAIL not in repr(schema)
+    assert schema["description"] == "A lead. Never write to [EMAIL_1]."
+    assert schema["properties"]["email"]["examples"] == ["[EMAIL_1]"]
+    assert schema["title"] == "Lead"
+    # The answer is the caller's own class, with the original back in its field.
+    assert type(parsed) is Lead
+    assert parsed.email == EMAIL
+
+
+async def test_definitions_with_nothing_to_replace_or_with_redaction_off_are_sent_as_given(
+    framework: Harness, chat: Callable[..., Any]
+) -> None:
+    gateway = chat()
+    await framework.ask_with_tool(gateway, [user("hi")], find_property)
+    [tool] = framework.last_request_tools(gateway)
+    assert tool["description"] == "Find a property by its postcode."
+    off = chat(Reply("ok"), Reply('{"email": "x"}'), llm_redaction="off")
+    await framework.ask_with_tool(off, [user("hi")], lookup_lead)
+    [tool] = framework.last_request_tools(off)
+    assert EMAIL in tool["description"]
+    await framework.ask_structured(off, [user("hi")], Lead)
+    assert framework.last_request_schema(off) == Lead.model_json_schema()
 
 
 async def counts(session: AsyncSession) -> list[int | None]:

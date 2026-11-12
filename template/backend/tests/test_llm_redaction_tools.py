@@ -579,3 +579,65 @@ def test_a_media_block_is_sent_exactly_as_it_was_even_when_its_text_looks_person
     assert sent.content[1] == image
     assert prepared.count == 0
     assert prepared.unscanned == 1
+
+
+def lookup_lead(who: str) -> str:
+    """Look up a lead. Leads for jo.bloggs@example.com go to the office."""
+    return who
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+async def test_a_tools_definition_reaches_the_wire_with_placeholders_and_its_name_as_it_is(
+    provider: str,
+) -> None:
+    # #112's review: a tool's description is text the provider reads. The email in the definition
+    # and in the message is one value, so both are [EMAIL_1]; the answer gets it back.
+    _, model = wire.wrapped(provider)
+    with wire.captured(lambda _b: wire.text_reply(provider, "Ask [EMAIL_1]")) as sent:
+        answer = await model.bind_tools([lookup_lead]).ainvoke(
+            [HumanMessage(f"Is {EMAIL} a lead?")]
+        )
+    assert EMAIL not in sent.text
+    assert sent.text.count("[EMAIL_1]") == 2
+    assert '"lookup_lead"' in sent.text
+    assert answer.text == f"Ask {EMAIL}"
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+async def test_a_tool_binding_with_nothing_to_redact_sends_the_same_definition_objects(
+    provider: str,
+) -> None:
+    # Nothing to replace: the bound definitions are passed on as the very objects bound, so the
+    # request is byte for byte what the provider model alone would send.
+    inner, model = wire.wrapped(provider)
+    bound = model.bind_tools([lookup])
+    assert isinstance(bound, RunnableBinding)
+    sent: list[Any] = []
+    real = type(inner)._agenerate
+
+    async def spy(self: Any, *args: Any, **kwargs: Any) -> Any:
+        sent.append(kwargs.get("tools"))
+        return await real(self, *args, **kwargs)
+
+    reply = wire.tool_reply(provider, "lookup", {"who": "x", "mail": "y"})
+    with mock.patch.object(type(inner), "_agenerate", spy), wire.captured(lambda _b: reply):
+        await bound.ainvoke([HumanMessage("find the property")])
+    assert sent == [bound.kwargs["tools"]]
+    assert sent[0] is bound.kwargs["tools"]
+
+
+@pytest.mark.parametrize("provider", wire.STREAMING_PROVIDERS)
+async def test_a_streamed_call_sends_its_tools_definition_with_placeholders(provider: str) -> None:
+    from tests.test_llm_redaction_stream import stream_reply
+
+    _, model = wire.wrapped(provider)
+    with wire.captured(stream_reply(provider, ["Ask ", "[EMAIL_1]"])) as sent:
+        chunks = [
+            chunk
+            async for chunk in model.bind_tools([lookup_lead]).astream(
+                [HumanMessage(f"Is {EMAIL} a lead?")]
+            )
+        ]
+    assert EMAIL not in sent.text
+    assert sent.text.count("[EMAIL_1]") == 2
+    assert "".join(chunk.text for chunk in chunks) == f"Ask {EMAIL}"

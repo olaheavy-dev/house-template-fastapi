@@ -9,7 +9,7 @@ from datetime import date
 from typing import Any
 
 import pytest
-from agent_framework import ChatResponse, Content, Message
+from agent_framework import ChatResponse, Content, FunctionTool, Message, tool
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
@@ -212,14 +212,101 @@ async def test_a_document_is_refused_by_the_budget_and_an_image_is_only_counted(
     assert len(client.seen) == 1
 
 
-async def test_a_provider_run_tool_object_the_budget_cannot_recognise_is_refused(
+async def test_a_tool_object_of_an_unknown_type_is_refused_before_anything_is_sent(
     gateway: Gateway,
 ) -> None:
     from app.llm.core.bounds import UnpricedRequest
 
-    script(gateway)
+    # Redaction cannot read the text of a tool type it does not know, so it refuses first (fail
+    # closed); with redaction off, the budget still refuses it as a tool it cannot price.
+    client = script(gateway)
+    with pytest.raises(RedactionFailed):
+        await gateway.client().get_response(
+            [Message("user", ["hi"])],
+            options={"tools": [object()]},
+        )
+    HARNESS.set_redactor(gateway, None)
     with pytest.raises(UnpricedRequest):
         await gateway.client().get_response(
             [Message("user", ["hi"])],
             options={"tools": [object()]},
         )
+    assert client.seen == []
+
+
+def lead_tool(calls: list[str]) -> FunctionTool:
+    def lookup_lead(who: str) -> str:
+        """Look up a lead. Leads for priya.shah@example.com go to the office."""
+        calls.append(who)
+        return "found"
+
+    return tool(lookup_lead)
+
+
+async def test_a_tools_definition_is_sent_as_a_redacted_copy_and_the_callers_tool_runs(
+    gateway: Gateway,
+) -> None:
+    calls: list[str] = []
+    the_tool = lead_tool(calls)
+    original = (the_tool.description, the_tool.parameters())
+    asks = ChatResponse(
+        messages=calls_of(
+            Content.from_function_call("c1", "lookup_lead", arguments={"who": "[EMAIL_1]"})
+        )
+    )
+    client = script(gateway, asks, ChatResponse(messages=[Message("assistant", ["done"])]))
+    await gateway.client().get_response(
+        [Message("user", [f"Is {EMAIL} a lead?"])], options={"tools": [the_tool]}
+    )
+    [sent] = client.seen_options[0]["tools"]
+    assert sent is not the_tool
+    assert sent.name == "lookup_lead"
+    assert sent.description == "Look up a lead. Leads for [EMAIL_1] go to the office."
+    # The caller's tool is unchanged, and it is the one MAF ran, with the original value.
+    assert (the_tool.description, the_tool.parameters()) == original
+    assert calls == [EMAIL]
+
+
+async def test_a_tool_with_nothing_to_replace_is_sent_as_the_same_object(gateway: Gateway) -> None:
+    def find_property(postcode: str) -> str:
+        """Find a property by its postcode."""
+        return postcode
+
+    the_tool = tool(find_property)
+    client = script(gateway)
+    await gateway.client().get_response([Message("user", ["hi"])], options={"tools": [the_tool]})
+    assert client.seen_options[0]["tools"][0] is the_tool
+
+
+async def test_a_mapping_tool_is_redacted_too(gateway: Gateway) -> None:
+    from app.llm.core.bounds import UnpricedRequest
+
+    # MAF passes a mapping through as it is; the budget refuses a provider-run one, so whatever
+    # redaction made of it, nothing is sent. A function-shaped mapping goes through, redacted.
+    client = script(gateway)
+    hosted = {"type": "web_search", "description": f"about {EMAIL}"}
+    with pytest.raises(UnpricedRequest):
+        await gateway.client().get_response([Message("user", ["hi"])], options={"tools": [hosted]})
+    assert client.seen == []
+    as_function: dict[str, Any] = {
+        "type": "function",
+        "function": {"name": "lookup", "description": f"for {EMAIL}", "parameters": {}},
+    }
+    await gateway.client().get_response([Message("user", ["hi"])], options={"tools": [as_function]})
+    [sent] = client.seen_options[0]["tools"]
+    assert sent["function"] == {"name": "lookup", "description": "for [EMAIL_1]", "parameters": {}}
+    assert as_function["function"]["description"] == f"for {EMAIL}"
+
+
+def test_the_function_tool_attribute_the_copy_sets_exists_in_the_pinned_core() -> None:
+    # redaction._walk_tool sets a private attribute of agent-framework-core 1.25.0 on its copy:
+    # a bump that renames it must fail here, not send the unredacted schema.
+    import copy
+
+    the_tool = lead_tool([])
+    the_tool.parameters()
+    assert hasattr(the_tool, "_cached_parameters")
+    copied = copy.copy(the_tool)
+    copied._cached_parameters = {"type": "object", "description": "[EMAIL_1]"}
+    assert copied.parameters() == {"type": "object", "description": "[EMAIL_1]"}
+    assert "[EMAIL_1]" not in str(the_tool.parameters())

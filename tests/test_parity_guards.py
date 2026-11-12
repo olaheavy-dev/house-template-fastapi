@@ -169,6 +169,7 @@ CORE = {
     "test_llm_core_errors.py",
     "test_llm_prices.py",
     "test_llm_core_redaction.py",
+    "test_llm_core_redaction_definitions.py",
     "test_llm_core_steps.py",
     "test_llm_core.py",
     "test_llm_errors.py",
