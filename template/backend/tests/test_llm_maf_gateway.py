@@ -127,10 +127,11 @@ async def test_call_options_tags_the_ledger_row_and_only_inside_the_block(
         await ask(gateway)
     assert current_tags().feature is None  # the block restored what was there
     await ask(gateway)
-    first, second = list(
-        await db_session.scalars(
-            select(LlmCall).where(LlmCall.day == DAY).order_by(LlmCall.created_at)
-        )
+    # Told apart by the tag, not created_at: the rows of one test share it (now() is the
+    # transaction's start), so their order is not defined.
+    first, second = sorted(
+        await db_session.scalars(select(LlmCall).where(LlmCall.day == DAY)),
+        key=lambda row: row.feature is None,
     )
     assert (first.prompt, first.prompt_sha, first.feature, first.user_ref) == (
         "sums",

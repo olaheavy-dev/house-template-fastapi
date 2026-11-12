@@ -26,6 +26,7 @@ from typing import Any
 
 import pytest
 from agent_framework import Message
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -117,6 +118,62 @@ async def test_an_anthropic_call_is_redacted_sets_its_limit_and_settles(
     assert "store" not in body
     assert body["max_tokens"] == settings.llm_max_tokens
     assert EMAIL not in json.dumps(body)
+    assert call.redacted_count == 1
+    settled_at_its_price(call)
+
+
+class Lead(BaseModel):
+    """A lead to write to."""
+
+    email: str
+
+
+async def streamed(
+    settings: Settings, db_session: AsyncSession, model: str, vcr: Any
+) -> tuple[LlmCall, dict[str, Any], str, Any]:
+    """One streamed call that asks for a schema (#35 PR 3): the text as the consumer read it, the
+    final response's value, the ledger row and the request body."""
+    sessions = async_sessionmaker(
+        bind=db_session.bind, join_transaction_mode="create_savepoint", expire_on_commit=False
+    )
+    gateway = Gateway(settings.model_copy(update={"llm_model": model}), lambda: sessions)
+    gateway.meter.cap, gateway.meter.today = 1_000_000, lambda: DAY
+    pieces: list[str] = []
+    stream = gateway.client().get_response(
+        [Message("user", [f"Give the lead's email as JSON. The lead is {EMAIL}."])],
+        stream=True,
+        options={"response_format": Lead},
+    )
+    async with stream:
+        async for update in stream:
+            pieces += [
+                c.text
+                for c in update.contents
+                if c.type == "text" and c.text and c.merge_mode != "replace"
+            ]
+        final = await stream.get_final_response()
+    await gateway.aclose()
+    [call] = (await db_session.scalars(select(LlmCall).where(LlmCall.day == DAY))).all()
+    [request] = vcr.requests
+    return call, json.loads(request.body), "".join(pieces), final.value
+
+
+@pytest.mark.vcr
+@pytest.mark.block_network
+@pytest.mark.usefixtures("cassette_or_skip")
+@pytest.mark.parametrize("model", [CHAT_MODEL, ANTHROPIC_MODEL], ids=["openai", "anthropic"])
+async def test_a_streamed_structured_call_is_redacted_restored_and_settled(
+    settings: Settings, db_session: AsyncSession, vcr: Any, model: str
+) -> None:
+    # The real APIs' streams: the request holds the placeholder, the text read and the parsed
+    # value hold the original, and the row settles from the usage the stream reported at its end
+    # (Anthropic's cumulative snapshots counted once).
+    call, body, text, value = await streamed(settings, db_session, model, vcr)
+    assert body["stream"] is True
+    assert EMAIL not in json.dumps(body)
+    assert type(value) is Lead
+    assert value.email == EMAIL
+    assert EMAIL in text
     assert call.redacted_count == 1
     settled_at_its_price(call)
 

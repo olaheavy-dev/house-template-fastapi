@@ -24,8 +24,19 @@ the budget). Options outside a fixed list (ALLOWED_OPTIONS in middleware.py) are
 free-text ones (`user`, `metadata`, `extra_body`) never reach the provider. Chat middleware added
 per call or per agent is refused by the gateway's clients (it would run after redaction and the
 budget; see NoExtraChatMiddleware in gateway.py). A message's `author_name` cannot take a
-placeholder, so a call whose name matches a detector or a known value is refused. Streamed calls
-are not supported yet and are refused.
+placeholder, so a call whose name matches a detector or a known value is refused.
+
+Streams: text is restored as it arrives (a placeholder split across updates is held back until it
+is whole, by the core's StreamRestorer); a tool call's argument fragments are passed on empty and
+the restored arguments come in one update per call at the end of the stream (`merge_mode`
+"replace"), restored at each JSON nesting level as a whole answer's are (#102). The final response
+is the provider's own, restored whole, so it reads exactly like the streamed text.
+
+A call that asked for a schema (`response_format`) has its final answer checked here, after the
+originals are back, whether redaction is on or off: an answer that does not parse into the schema
+(or has no value, as a refusal) is the core's SchemaMismatch, a 502 settled at its cost. MAF would
+otherwise parse it lazily, on the caller's first `.value`, outside the gateway. A response that
+asks for tool calls is not an answer yet (a model call inside a tool loop) and is not checked.
 
 Tool definitions and the output schema: a tool's description and parameter schema, and a
 `response_format` (a mapping or a Pydantic model), are scanned like text, but a name, a JSON Schema
@@ -41,25 +52,30 @@ that holds personal data (`pattern`) is scanned like text and stops matching wha
 from __future__ import annotations
 
 import copy
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from typing import Any
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from typing import Any, cast
 
 import structlog
 from agent_framework import (
     ChatContext,
     ChatMiddleware,
     ChatResponse,
+    ChatResponseUpdate,
     Content,
     FunctionTool,
     Message,
+    ResponseStream,
 )
 
 from app.llm.core import metrics
-from app.llm.core.redaction import RedactionFailed, Redactor
+from app.llm.core.errors import schema_mismatch
+from app.llm.core.redaction import RedactionFailed, Redactor, StreamRestorer
 from app.llm.core.redaction_data import (
     Leaf,
     Restorer,
+    escaped,
     field_context,
+    opens_json,
     walk_data,
     walk_definition,
     walk_output_schema,
@@ -71,7 +87,6 @@ __all__ = [
     "Prepared",
     "RedactionMiddleware",
     "RedactionUnavailable",
-    "StreamingNotSupported",
     "prepare",
 ]
 
@@ -96,11 +111,6 @@ class RedactionUnavailable(RuntimeError):
     """The gateway cannot guarantee that every request it sends is redacted, so it refuses (fail
     closed): a client whose middleware chain lacks the redaction, or a result of a shape this code
     does not know."""
-
-
-class StreamingNotSupported(RuntimeError):
-    """A streamed call reached the gateway's middleware. Streams are not supported yet: a stream
-    would show the caller placeholders and its usage would not be settled."""
 
 
 class _UnknownContent(Exception):
@@ -346,21 +356,163 @@ class _Restorer(Restorer):
         return response
 
 
+class _StreamRestorers:
+    """Restores the updates of one streamed call (see the module notes). Made for one call."""
+
+    def __init__(self, mapping: Mapping[str, str], *, json_text: bool) -> None:
+        self._plain = mapping
+        self._escaped = escaped(mapping)
+        self._json_text = json_text
+        self._text: dict[str | None, StreamRestorer] = {}
+        self._undecided: dict[str | None, str] = {}
+        self._held: dict[str, list[str]] = {}
+        self._first: dict[str, Content] = {}
+        self._last_call: str | None = None
+        self._values = _Restorer(mapping, json_text=json_text)
+
+    def _feed(self, key: str | None, delta: str) -> str:
+        """A text delta. Whether this message's text is JSON is decided at its first text that is
+        not whitespace (opens_json), as in LangChain's stream; a lone `[` waits for more."""
+        stream = self._text.get(key)
+        if stream is not None:
+            return stream.feed(delta)
+        text = self._undecided.pop(key, "") + delta
+        stripped = text.lstrip()
+        if not stripped:
+            return text
+        if stripped.startswith("[") and not stripped[1:].strip():
+            self._undecided[key] = text
+            return ""
+        raw = self._json_text or opens_json(text)
+        stream = self._text[key] = StreamRestorer(self._escaped if raw else self._plain)
+        return stream.feed(text)
+
+    def _replace(self, key: str | None, text: str) -> str:
+        """A text that replaces everything streamed for its message so far (OpenAI's
+        `response.output_text.done` arrives as one, `merge_mode` "replace"): restored whole, and
+        what was held back for the message is dropped, since this text supersedes it."""
+        self._text.pop(key, None)
+        self._undecided.pop(key, None)
+        return self._values.answer(text)
+
+    def _hold(self, content: Content) -> Content:
+        """A fragment of a tool call's argument string: kept, and passed on empty. A fragment that
+        replaces the call's arguments starts them again."""
+        call_id = content.call_id or self._last_call
+        if not call_id:
+            raise RedactionUnavailable("a streamed tool call fragment belongs to no call")
+        self._last_call = call_id
+        if content.merge_mode == "replace":
+            self._held.pop(call_id, None)
+        self._held.setdefault(call_id, []).append(str(content.arguments))
+        self._first.setdefault(call_id, content)
+        empty = copy.copy(content)
+        empty.arguments = ""
+        return empty
+
+    def update(self, update: ChatResponseUpdate) -> ChatResponseUpdate:
+        contents: list[Content] = []
+        for content in update.contents:
+            if content.type == _TEXT and isinstance(content.text, str):
+                new = copy.copy(content)
+                if content.merge_mode == "replace":
+                    new.text = self._replace(update.message_id, content.text)
+                else:
+                    new.text = self._feed(update.message_id, content.text)
+                contents.append(new)
+            elif content.type == "function_call" and isinstance(content.arguments, str):
+                contents.append(self._hold(content))
+            elif content.type == "function_call" and content.arguments is not None:
+                new = copy.copy(content)
+                new.arguments = self._values.data(content.arguments)
+                contents.append(new)
+            else:  # thinking, usage, media, approvals: as they are
+                contents.append(content)
+        restored = copy.copy(update)
+        restored.contents = contents
+        return restored
+
+    def tails(self) -> list[ChatResponseUpdate]:
+        """What was held back, as updates: the end of each message's text, then each tool call's
+        restored arguments, which replace the empty ones streamed so far."""
+        out: list[ChatResponseUpdate] = []
+        for key, text in self._undecided.items():  # a lone `[` nothing followed: plain text
+            stream = self._text.setdefault(key, StreamRestorer(self._plain))
+            shown = stream.feed(text)
+            if shown:
+                out.append(_text_update(key, shown))
+        self._undecided.clear()
+        for key, stream in self._text.items():
+            tail = stream.flush()
+            if tail:
+                out.append(_text_update(key, tail))
+        for call_id, fragments in self._held.items():
+            whole = copy.copy(self._first[call_id])
+            whole.arguments = self._values.raw("".join(fragments))
+            whole.merge_mode = "replace"
+            out.append(ChatResponseUpdate(role="assistant", contents=[whole]))
+        self._held.clear()
+        return out
+
+
+def _text_update(message_id: str | None, text: str) -> ChatResponseUpdate:
+    return ChatResponseUpdate(
+        role="assistant", contents=[Content.from_text(text)], message_id=message_id
+    )
+
+
+def _restored_stream(
+    inner: object, prepared: Prepared, given: Mapping[str, Any]
+) -> ResponseStream[ChatResponseUpdate, ChatResponse[Any]]:
+    """The budget middleware's stream with the originals put back in its updates and in its final
+    response."""
+    if not isinstance(inner, ResponseStream):
+        raise RedactionUnavailable("a streamed call returned something other than a stream")
+    source = cast("ResponseStream[ChatResponseUpdate, ChatResponse[Any]]", inner)
+    json_text = _json_output(prepared.options)
+    restorers = _StreamRestorers(prepared.mapping, json_text=json_text)
+
+    async def updates() -> AsyncGenerator[ChatResponseUpdate]:
+        try:
+            async for update in source:
+                yield restorers.update(update)
+        finally:
+            await source.close()
+        for tail in restorers.tails():
+            yield tail
+
+    async def final(_updates: Sequence[ChatResponseUpdate]) -> ChatResponse[Any]:
+        response = await source.get_final_response()
+        restorer = _Restorer(prepared.mapping, json_text=json_text)
+        restorer.response(response)
+        _reparse(response, given)
+        if restorer.unrestored:
+            log.warning("llm_unrestored_placeholders", count=restorer.unrestored)
+        _check_structured(response, given)
+        return response
+
+    return ResponseStream(updates(), finalizer=final)
+
+
 class RedactionMiddleware(ChatMiddleware):
-    """Redacts the request and restores the answer of every non-streamed chat call. `redactor` is
-    None when LLM_REDACTION=off: nothing is changed and no count is recorded (the call's
-    `redacted_count` stays NULL)."""
+    """Redacts the request and restores the answer of every chat call, streamed or not.
+    `redactor` is None when LLM_REDACTION=off: nothing is changed and no count is recorded (the
+    call's `redacted_count` stays NULL)."""
 
     def __init__(self, redactor: Redactor | None) -> None:
         self.redactor = redactor
 
     async def process(self, context: ChatContext, call_next: Callable[[], Awaitable[None]]) -> None:
-        if context.stream:
-            raise StreamingNotSupported("streamed calls are not supported by this gateway yet")
         redactor = self.redactor
         if redactor is None:
             context.metadata[REDACTED_COUNT] = None
+            options = dict(context.options or {})
             await call_next()
+            result = context.result
+            if isinstance(result, ResponseStream):
+                result.with_result_transform(lambda response: _parse_and_check(response, options))
+            elif isinstance(result, ChatResponse):
+                _parse_and_check(result, options)
             return
         given = context.options
         prepared = prepare(redactor, context.messages, given)
@@ -375,6 +527,9 @@ class RedactionMiddleware(ChatMiddleware):
         context.options = prepared.options
         context.metadata[REDACTED_COUNT] = prepared.count
         await call_next()
+        if context.stream:
+            context.result = _restored_stream(context.result, prepared, given or {})
+            return
         response = context.result
         if not isinstance(response, ChatResponse):
             raise RedactionUnavailable("the model call returned something other than a response")
@@ -383,6 +538,36 @@ class RedactionMiddleware(ChatMiddleware):
         _reparse(response, given or {})
         if restorer.unrestored:
             log.warning("llm_unrestored_placeholders", count=restorer.unrestored)
+        _check_structured(response, given or {})
+
+
+def _parse_and_check(response: object, options: Mapping[str, Any]) -> None:
+    """With redaction off: parse the answer into the caller's own `response_format` (as with it
+    on, see _reparse), then check it."""
+    if isinstance(response, ChatResponse):
+        _reparse(response, options)
+    _check_structured(response, options)
+
+
+class _NoStructuredValue(Exception):
+    """A final answer to a call that asked for a schema had no value to parse (a refusal, or no
+    text)."""
+
+
+def _check_structured(response: object, options: Mapping[str, Any]) -> None:
+    """Raise the core's SchemaMismatch (502) when a final answer does not parse into the schema
+    the call asked for (see the module notes). Returns None: as a stream's result transform it
+    leaves the response as it is."""
+    if options.get("response_format") is None or not isinstance(response, ChatResponse):
+        return
+    if any(c.type == "function_call" for message in response.messages for c in message.contents):
+        return  # asks for tool calls: not an answer yet
+    try:
+        value = response.value
+    except ValueError as error:  # pydantic's ValidationError is a ValueError, as is bad JSON
+        raise schema_mismatch(error) from None
+    if value is None:
+        raise schema_mismatch(_NoStructuredValue()) from None
 
 
 def _reparse(response: ChatResponse[Any], options: Mapping[str, Any]) -> None:

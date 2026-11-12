@@ -97,16 +97,97 @@ async def test_store_true_is_refused_before_anything_is_reserved_or_sent(
     assert await rows(db_session) == []
 
 
-async def test_a_streamed_call_is_refused_before_it_reaches_the_provider(
+@pytest.mark.parametrize("provider", ["openai", "anthropic"])
+async def test_a_streamed_call_is_restored_as_it_arrives_and_settled_from_its_final_usage(
+    make: Any, db_session: AsyncSession, provider: str
+) -> None:
+    # The placeholder is split across three deltas; the consumer never sees a piece of it, the
+    # provider never sees the email, and the call costs what the same unstreamed call costs:
+    # 11 input and 3 output tokens = 3 micro-USD (module notes).
+    pieces = ["Mailed [EM", "AIL", "_1]."]
+    fake = FakeProviderHttp(provider, text="".join(pieces), pieces=pieces)
+    gateway = make(OPENAI if provider == "openai" else ANTHROPIC, fake, llm_max_tokens=300)
+    shown: list[str] = []
+    whole: list[str] = []
+    stream = gateway.client().get_response([Message("user", [f"Mail {EMAIL}"])], stream=True)
+    async with stream:
+        async for update in stream:
+            for content in update.contents:
+                if content.type != "text" or not content.text:
+                    continue
+                # MAF's merge rule: "append" text is a piece, "replace" text is the whole text
+                # (OpenAI ends its text with response.output_text.done, which MAF passes on so).
+                (whole if content.merge_mode == "replace" else shown).append(content.text)
+        final = await stream.get_final_response()
+    assert "".join(shown) == final.text == f"Mailed {EMAIL}."
+    assert whole in ([], [f"Mailed {EMAIL}."])
+    assert not any("[EM" in piece for piece in shown)
+    [body] = fake.bodies
+    assert body["stream"] is True
+    assert EMAIL not in str(body)
+    if provider == "openai":
+        assert body["store"] is False
+        assert body["max_output_tokens"] == 300
+    else:
+        assert body["max_tokens"] == 300
+    [row] = await rows(db_session)
+    assert (row.status, row.cost_micro_usd, row.redacted_count) == ("settled", 3, 1)
+    assert (row.input_tokens, row.output_tokens) == (11, 3)
+
+
+async def test_openais_whole_text_at_the_end_replaces_what_was_held_back(
     make: Any, db_session: AsyncSession
 ) -> None:
-    fake = FakeProviderHttp("anthropic")
+    # The answer ends in a lone `[`, which the stream holds back (it could open a placeholder).
+    # OpenAI then sends the whole text (response.output_text.done, MAF's merge_mode "replace"):
+    # it supersedes what was held, so the whole text is restored once and nothing is doubled.
+    pieces = ["Mailed [EM", "AIL_1] ["]
+    fake = FakeProviderHttp("openai", text="".join(pieces), pieces=pieces)
+    gateway = make(OPENAI, fake)
+    whole: list[str] = []
+    stream = gateway.client().get_response([Message("user", [f"Mail {EMAIL}"])], stream=True)
+    async with stream:
+        async for update in stream:
+            whole += [
+                c.text for c in update.contents if c.type == "text" and c.merge_mode == "replace"
+            ]
+        final = await stream.get_final_response()
+    assert whole == [f"Mailed {EMAIL} ["]
+    assert final.text == f"Mailed {EMAIL} ["
+
+
+async def test_anthropics_cumulative_stream_usage_is_counted_once(
+    make: Any, db_session: AsyncSession
+) -> None:
+    # message_delta repeats the input and cache-read counts already sent in message_start, as the
+    # docs' example does. Counted once it is 11 input, 5 cache reads and 3 output tokens:
+    # 11 x 100,000 + 5 x 10,000 + 3 x 500,000 = 2,650,000 / 1,000,000 = 2.65, rounded up = 3
+    # micro-USD, and the row's input count is 16 (cache reads are part of the input total, as for
+    # an unstreamed call, app/llm/maf/usage.py); added up twice it would be 32.
+    usage = {"input_tokens": 11, "output_tokens": 3, "cache_read_input_tokens": 5}
+    fake = FakeProviderHttp("anthropic", text="four", usage=usage, repeat_input_in_delta=True)
     gateway = make(ANTHROPIC, fake)
     stream = gateway.client().get_response([Message("user", ["hi"])], stream=True)
-    with pytest.raises(Exception, match="not supported"):
-        await stream.get_final_response()
-    assert fake.attempts == []
-    assert await rows(db_session) == []
+    final = await stream.get_final_response()
+    assert final.text == "four"
+    [row] = await rows(db_session)
+    assert (row.input_tokens, row.output_tokens, row.cost_micro_usd) == (16, 3, 3)
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic"])
+async def test_a_stream_closed_early_keeps_its_reservation(
+    make: Any, db_session: AsyncSession, provider: str
+) -> None:
+    pieces = ["one ", "two ", "three"]
+    fake = FakeProviderHttp(provider, text="".join(pieces), pieces=pieces)
+    gateway = make(OPENAI if provider == "openai" else ANTHROPIC, fake)
+    stream = gateway.client().get_response([Message("user", ["hi"])], stream=True)
+    async with stream:
+        async for _update in stream:
+            break
+    [row] = await rows(db_session)
+    assert row.status == "failed"
+    assert row.cost_micro_usd == row.reserved_micro_usd
 
 
 async def test_the_fake_streams_usage_the_way_anthropic_does() -> None:

@@ -110,8 +110,10 @@ async def test_the_raw_message_of_a_structured_answer_holds_restored_text_too() 
 
 async def test_a_schema_validator_that_rejects_a_placeholder_fails_inside_the_sdk() -> None:
     # A documented limit (redaction.py): the provider's SDK validates the placeholder form, so a
-    # constraint that a placeholder breaks (a pattern, EmailStr) raises before this wrapper sees
-    # the answer. It is not silently skipped.
+    # constraint that a placeholder breaks (a pattern, EmailStr) fails before this wrapper sees
+    # the answer. It is not silently skipped: it is the core's 502, without the answer's text.
+    from app.llm.core.errors import SchemaMismatch
+
     class Checked(BaseModel):
         email: EmailStr
 
@@ -120,9 +122,13 @@ async def test_a_schema_validator_that_rejects_a_placeholder_fails_inside_the_sd
     async with redaction_scope():
         with (
             wire.captured(structured_reply("openai", "json_schema", {"email": "[EMAIL_1]"})),
-            pytest.raises(Exception, match="email"),
+            pytest.raises(SchemaMismatch) as raised,
         ):
             await runnable.ainvoke([HumanMessage(f"Reach me at {EMAIL}")])
+    assert raised.value.status == 502
+    assert raised.value.__cause__ is None
+    assert "EMAIL" not in str(raised.value)
+    assert EMAIL not in str(raised.value)
 
 
 def test_structured_output_the_wrapper_cannot_re_point_is_refused_at_construction() -> None:

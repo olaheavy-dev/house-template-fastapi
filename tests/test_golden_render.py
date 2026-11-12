@@ -54,7 +54,7 @@ REMOVED_FILES = {
 INTENDED: dict[str, str] = {
     ".claude/rules/fastapi.md":
         "names the maf extra and the `llm: maf` answer in the extras sentence; tool definitions and "
-        "output schemas are redacted (#35)",
+        "output schemas are redacted; the structured-output 502 (#35)",
     "backend/pyproject.toml":
         "the maf extra with exact pins, [tool.uv] conflicts, the MAF packages in the import contract (#35)",
     "backend/src/app/llm/core/openai_embeddings.py":
@@ -62,25 +62,32 @@ INTENDED: dict[str, str] = {
     "backend/src/app/settings.py":
         "hide_input_in_errors: a validation error never echoes the value given (#35)",
     "backend/tests/test_llm_parity_redaction.py":
-        "shared chat redaction tests, run once per framework, tool definitions and schemas included (#35)",
+        "shared chat redaction tests, run once per framework: tool definitions and schemas, streams, "
+        "the structured-output 502, rows told apart by count not created_at (#35)",
     "backend/src/app/llm/core/redaction_data.py":
         "walk_definition and with_schema: tool definitions and output schemas are redacted (#112 review)",
     "backend/src/app/llm/langchain/redaction.py":
-        "bound tool definitions and output schemas are redacted before the call (#112 review)",
+        "bound tool definitions and output schemas are redacted before the call (#112 review); a "
+        "stream stopped early ends its inner run at once; structured-output parse errors are the "
+        "core's 502 (#35 PR 3)",
+    "backend/src/app/llm/langchain/errors.py":
+        "OutputParserException and StructuredOutputError are the core's 502 (#35 PR 3)",
     "backend/tests/harness/__init__.py":
-        "the harness can offer a tool and ask for structured output (#112 review)",
+        "the harness can offer a tool, ask for structured output and stream (#35)",
     "backend/tests/harness/langchain.py":
-        "the scripted model binds tools and structured output as ChatOpenAI does (#112 review)",
+        "the scripted model binds tools and structured output as ChatOpenAI does, and streams (#35)",
     "backend/tests/test_llm_core_redaction_definitions.py":
         "the core's rules for redacting tool definitions and output schemas (#112 review)",
     "backend/tests/test_llm_redaction_structured.py":
-        "an output schema reaches the wire with placeholders, through every method (#112 review)",
+        "an output schema reaches the wire with placeholders, through every method; a placeholder "
+        "a validator rejects is the 502 (#35)",
     "backend/tests/test_llm_redaction_tools.py":
         "a tool's definition reaches the wire with placeholders, also when streamed (#112 review)",
     "backend/llm-contracts.toml":
         "the core contract also forbids the MAF provider packages; the comment is accurate (#35)",
     "backend/src/app/llm/core/errors.py":
-        "a bug is logged with the type names of its chain, not a traceback whose messages can hold provider text (#35)",
+        "a bug is logged with the type names of its chain, not a traceback whose messages can hold "
+        "provider text; SchemaMismatch, the structured-output 502 (#35)",
     "backend/tests/test_llm_core_errors.py":
         "the log field is the chain of type names; a test pins that no text from the chain is logged (#35)",
     "backend/tests/test_llm_error_logs.py":
@@ -90,7 +97,7 @@ INTENDED: dict[str, str] = {
     "backend/tests/test_llm_cost_pins.py":
         "built on the neutral Usage, so it runs under every framework (#35)",
     "backend/tests/test_llm_parity_budget.py":
-        "a shared test that a long tool definition is reserved for in full (#35)",
+        "a shared test that a long tool definition is reserved for in full; streamed calls (#35)",
 }
 
 # DEPENDABOT_*: what Dependabot updates in this repository's rendered output

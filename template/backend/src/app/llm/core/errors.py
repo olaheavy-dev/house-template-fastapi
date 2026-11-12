@@ -9,6 +9,12 @@ kinds a provider answers before doing any work, so the call's reservation is giv
 A kind is never stored: every failed call is recorded as status "failed" in llm_call and counted
 with outcome "failed" in llm.calls, whatever its kind. Nothing from the provider's message reaches
 the client or this module's types: it can echo the prompt.
+
+A structured answer that does not match the schema the call asked for is a SchemaMismatch, a 502
+(the founder's decision on #35, 11 Nov 2026): the call was made and is settled at its cost, and
+neither the answer nor the parser's message (both hold the model's text) reaches the client or the
+log. OpenAI and Anthropic both say a refusal or an answer cut off at the output limit can break the
+schema.
 """
 
 from __future__ import annotations
@@ -24,18 +30,21 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.problems import problem_response
+from app.problems import Problem, problem_response
 
 __all__ = [
     "DEFAULT_RETRY_AFTER",
     "OUTCOMES",
     "REJECTED",
+    "SCHEMA_MISMATCH_DETAIL",
     "FailureKind",
     "Outcome",
     "ProviderError",
+    "SchemaMismatch",
     "failure_response",
     "install_failure_handlers",
     "outcome",
+    "schema_mismatch",
 ]
 
 log = structlog.get_logger()
@@ -136,6 +145,24 @@ def _where(error: BaseException) -> list[str]:
         if frames:
             found.append(f"{PurePath(frames[-1].filename).name}:{frames[-1].lineno}")
     return found
+
+
+SCHEMA_MISMATCH_DETAIL = "The language model's answer didn't match the expected format."
+
+
+class SchemaMismatch(Problem):
+    """A structured answer that did not match its schema (502; see the module notes). It carries
+    no text and no cause: raise it `from None`, and log only the parser error's type name
+    (schema_mismatch does both)."""
+
+    def __init__(self) -> None:
+        super().__init__(502, detail=SCHEMA_MISMATCH_DETAIL)
+
+
+def schema_mismatch(error: BaseException) -> SchemaMismatch:
+    """The SchemaMismatch for a parser's `error`, logged by its type name only."""
+    log.warning("llm_schema_mismatch", error_type=type(error).__name__)
+    return SchemaMismatch()
 
 
 def failure_response(

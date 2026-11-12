@@ -146,6 +146,72 @@ async def test_a_call_without_usage_keeps_its_reservation(
     assert call.cost_micro_usd == call.reserved_micro_usd == await committed(db_session)
 
 
+# --- streamed calls (#35 PR 3) -----------------------------------------------------------------
+
+
+async def test_a_streamed_call_is_settled_from_its_final_usage(
+    framework: Harness, gateway: Any, db_session: AsyncSession
+) -> None:
+    framework.install_scripted(gateway, [Reply("four", pieces=("fo", "ur"))])
+    assert await framework.stream(gateway, QUESTION) == ["fo", "ur"]
+    [call] = await calls(db_session)
+    # The same cost as the unstreamed call: the usage the provider reported at the end.
+    assert (call.status, call.cost_micro_usd) == ("settled", 7_000)
+    assert (call.input_tokens, call.output_tokens) == (1_000, 500)
+
+
+async def test_a_streamed_call_without_usage_keeps_its_reservation(
+    framework: Harness, gateway: Any, db_session: AsyncSession
+) -> None:
+    framework.install_scripted(gateway, [Reply("four", usage=None, pieces=("fo", "ur"))])
+    await framework.stream(gateway, QUESTION)
+    [call] = await calls(db_session)
+    assert call.status == "settled"
+    assert call.cost_micro_usd == call.reserved_micro_usd == await committed(db_session)
+
+
+async def test_a_stream_the_consumer_stops_reading_keeps_its_reservation(
+    framework: Harness, gateway: Any, db_session: AsyncSession
+) -> None:
+    # The provider may bill what it generated before the stream was closed, and reports nothing.
+    framework.install_scripted(gateway, [Reply("one two three", pieces=("one ", "two ", "three"))])
+    assert await framework.stream(gateway, QUESTION, take=1) == ["one "]
+    [call] = await calls(db_session)
+    assert call.status == "failed"
+    assert call.cost_micro_usd == call.reserved_micro_usd == await committed(db_session)
+
+
+async def test_a_streamed_call_the_provider_rejected_releases_its_reservation(
+    framework: Harness, gateway: Any, db_session: AsyncSession
+) -> None:
+    framework.install_scripted(gateway, [Failure("rate_limit")])
+    with pytest.raises(framework.raised_by(Failure("rate_limit"))):
+        await framework.stream(gateway, QUESTION)
+    [call] = await calls(db_session)
+    assert (call.status, call.cost_micro_usd) == ("failed", 0)
+    assert await committed(db_session) == 0
+
+
+async def test_a_streamed_call_that_could_cross_the_cap_is_never_sent(
+    framework: Harness, gateway: Any, db_session: AsyncSession
+) -> None:
+    framework.meter(gateway).cap = 1_000
+    framework.install_scripted(gateway, [ANSWER])
+    with pytest.raises(BudgetExhausted):
+        await framework.stream(gateway, QUESTION)
+    assert framework.scripted_left(gateway) == 1
+    assert await calls(db_session) == []
+
+
+async def test_a_streamed_call_records_its_tags(
+    framework: Harness, gateway: Any, db_session: AsyncSession
+) -> None:
+    framework.install_scripted(gateway, [ANSWER])
+    await framework.stream(gateway, QUESTION, tags={"feature": "chat", "user_ref": "u_1"})
+    [call] = await calls(db_session)
+    assert (call.feature, call.user_ref) == ("chat", "u_1")
+
+
 async def test_a_larger_bound_limit_is_reserved_for(
     framework: Harness, gateway: Any, db_session: AsyncSession
 ) -> None:

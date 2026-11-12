@@ -19,7 +19,14 @@ What it does to every call, in this order:
   provider answered before doing any work releases the reservation, anything else keeps it, and a
   cancelled call is left reserved until `expire_stale` closes it.
 
-Streamed calls are not supported yet and are refused.
+A streamed call is reserved when its consumer first reads it, and the stream it returns settles
+from the usage the provider reports at its end (MAF adds Anthropic's cumulative snapshots up as
+increments). A stream that fails part-way records the failure the same way an unstreamed call does,
+except that a rejection after output had streamed keeps its reservation. A stream the consumer stops
+reading and closes (or drops: the gateway's own async generator is finalised by the event loop, so
+this does not depend on the caller using `async with`) is recorded as failed and keeps its
+reservation, because the provider may bill what it had generated and reports nothing; a cancelled
+one is left reserved, as an unstreamed call is.
 
 The tags of a call (the prompt, the feature, whom it is for) reach the middleware through context
 variables, because MAF has no per-call metadata path that is verified for 1.25.0: use
@@ -29,27 +36,30 @@ variables, because MAF has no per-call metadata path that is verified for 1.25.0
 
 from __future__ import annotations
 
+import asyncio
 import uuid
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from agent_framework import (
     ChatContext,
     ChatMiddleware,
     ChatResponse,
+    ChatResponseUpdate,
     Content,
     FunctionTool,
     Message,
+    ResponseStream,
 )
 
 from app.llm.core import bounds
 from app.llm.core.budget import CallTags, Meter
 from app.llm.core.usage import Usage
 from app.llm.maf.errors import classify
-from app.llm.maf.redaction import REDACTED_COUNT, StreamingNotSupported
+from app.llm.maf.redaction import REDACTED_COUNT
 from app.llm.maf.usage import from_maf
 
 __all__ = [
@@ -238,8 +248,6 @@ class BudgetMiddleware(ChatMiddleware):
         self.sends_store = sends_store
 
     async def process(self, context: ChatContext, call_next: Callable[[], Awaitable[None]]) -> None:
-        if context.stream:
-            raise StreamingNotSupported("streamed calls are not supported by this gateway yet")
         options = dict(context.options or {})
         refused = sorted(str(key) for key in options if key not in ALLOWED_OPTIONS)
         if refused:
@@ -304,7 +312,60 @@ class BudgetMiddleware(ChatMiddleware):
             # until expire_stale closes it. Nothing is awaited here, which would be cancelled again.
             self.meter.abandon(call_id)
             raise
+        if context.stream:
+            context.result = self._settled_stream(call_id, context.result)
+            return
         await self.meter.settle(call_id, _usage(context.result))
+
+    def _settled_stream(
+        self, call_id: uuid.UUID, inner: object
+    ) -> ResponseStream[ChatResponseUpdate, ChatResponse[Any]]:
+        """The provider's stream, passed through an async generator of our own that settles the
+        call once, however the stream ends (see the module notes). The final response is the
+        provider stream's own (its finalizer and result hooks run), and the provider stream is
+        always closed."""
+        meter = self.meter
+        if not isinstance(inner, ResponseStream):
+            raise TypeError("a streamed call returned something other than a ResponseStream")
+        provider = cast("ResponseStream[ChatResponseUpdate, ChatResponse[Any]]", inner)
+
+        async def updates() -> AsyncGenerator[ChatResponseUpdate]:
+            streamed = False
+            try:
+                async for update in provider:
+                    # Usage alone is not output: a rejection before any text still releases.
+                    if any(content.type != "usage" for content in update.contents):
+                        streamed = True
+                    yield update
+            except asyncio.CancelledError:
+                meter.abandon(call_id)  # nothing awaited: it would be cancelled again
+                raise
+            except GeneratorExit:
+                # The consumer stopped reading and closed the stream, or dropped it.
+                await meter.failed(call_id, None, streamed=True)
+                raise
+            except Exception as error:
+                known = classify(error)
+                await meter.failed(call_id, known.kind if known else None, streamed=streamed)
+                if known is None:
+                    raise
+                raise known from error
+            except BaseException:
+                meter.abandon(call_id)
+                raise
+            finally:
+                await provider.close()
+            try:
+                final = await provider.get_final_response()
+            except Exception:
+                await meter.settle(call_id, None)  # the reservation stays as the cost
+                raise
+            await meter.settle(call_id, _usage(final))
+
+        async def final(_updates: Sequence[ChatResponseUpdate]) -> ChatResponse[Any]:
+            return await provider.get_final_response()
+
+        return ResponseStream(updates(), finalizer=final)
 
 
 def _usage(result: object) -> Usage | None:
