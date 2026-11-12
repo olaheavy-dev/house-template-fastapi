@@ -1,6 +1,6 @@
 # 0004. MAF conversation threads and workflow checkpoints live in Postgres, without pickle
 
-Status: Proposed. Part of it is decided; the storage design is not.
+Status: Superseded by 0007 ([0007](0007-maf-sessions-and-checkpoints-in-postgres.md)).
 
 **Decided**
 - History lives in our own database, with `store: False` sent on every OpenAI Responses call (founder, 6 Nov 2026, [#35](https://github.com/olaheavy-dev/house-template-fastapi/issues/35) "Decisions already made").

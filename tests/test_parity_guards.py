@@ -211,6 +211,7 @@ LANGCHAIN_ONLY = {
 }
 MAF_ONLY = {
     "test_llm_maf_agent.py",
+    "test_llm_maf_checkpoints.py",
     "test_llm_maf_cassettes.py",
     "test_llm_maf_errors.py",
     "test_llm_maf_gateway.py",
