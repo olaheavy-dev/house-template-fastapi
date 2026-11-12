@@ -31,6 +31,7 @@ from agent_framework_anthropic._chat_client import _wrap_anthropic_error
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.auth import User
 from app.llm.core.budget import CallTags, Meter
 from app.llm.core.errors import ProviderError
 from app.llm.core.redaction import Redactor
@@ -387,6 +388,34 @@ class MafHarness:
         with tagged(CallTags(**(tags or {}))):
             response = await gateway.agent(list(tools)).run(question)
         return response.text, step_limit_reached(response)
+
+    async def open_threads(
+        self, gateway: Gateway, settings: Settings
+    ) -> Callable[[], Awaitable[None]]:
+        async def close() -> None:  # the store uses the gateway's own sessionmaker
+            return None
+
+        return close
+
+    async def thread_turn(
+        self,
+        gateway: Gateway,
+        *,
+        user_ref: str,
+        conversation_id: str,
+        messages: Sequence[Neutral],
+    ) -> str:
+        agent = gateway.agent([], name="parity")
+        user = User(id=user_ref)
+        session = await gateway.sessions.load(user, conversation_id, agent)
+        response = await agent.run([to_maf(message) for message in messages], session=session)
+        await gateway.sessions.save(user, conversation_id, agent, session)
+        return response.text
+
+    async def forget_threads(
+        self, gateway: Gateway, *, user_ref: str, conversation_id: str
+    ) -> None:
+        await gateway.sessions.delete_user(user_ref)
 
     def last_request_offered_tools(self, gateway: Gateway) -> bool:
         return offers_tools(self._scripted(gateway).seen_options[-1])

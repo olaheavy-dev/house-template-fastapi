@@ -30,6 +30,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.auth import User
 from app.llm import prices
 from app.llm.core.budget import LlmCall
 from app.llm.core.prices import cost
@@ -215,6 +216,39 @@ async def test_an_agent_run_stops_at_its_limit_with_a_real_answer(
     assert len(calls) == 2
     for call in calls:
         settled_at_its_price(call)
+
+
+@pytest.mark.vcr
+@pytest.mark.block_network
+@pytest.mark.usefixtures("cassette_or_skip")
+@pytest.mark.parametrize("model", [CHAT_MODEL, ANTHROPIC_MODEL], ids=["openai", "anthropic"])
+async def test_a_stored_conversation_is_resent_after_a_restart(
+    settings: Settings, db_session: AsyncSession, vcr: Any, model: str
+) -> None:
+    # The real APIs with a stored session (#35 PR 5): turn 1 states a code word; a new gateway
+    # (a restart) loads the session from Postgres and turn 2 asks for it. The second request
+    # carries the first turn, and the model answers from it.
+    sessions = async_sessionmaker(
+        bind=db_session.bind, join_transaction_mode="create_savepoint", expire_on_commit=False
+    )
+    who = User(id="u_cassette")
+
+    async def turn(question: str) -> str:
+        gateway = Gateway(settings.model_copy(update={"llm_model": model}), lambda: sessions)
+        gateway.meter.cap, gateway.meter.today = 1_000_000, lambda: DAY
+        agent = gateway.agent([], name="memory", instructions="Answer in one short sentence.")
+        session = await gateway.sessions.load(who, "c_cassette", agent)
+        response = await agent.run(question, session=session)
+        await gateway.sessions.save(who, "c_cassette", agent, session)
+        await gateway.aclose()
+        return response.text
+
+    await turn("Remember this code word for later: ORCHID. Reply with OK.")
+    answer = await turn("What was the code word I gave you?")
+    assert "ORCHID" in answer.upper()
+    first, second = [json.dumps(json.loads(request.body)) for request in vcr.requests]
+    assert "ORCHID" in first
+    assert "ORCHID" in second  # the stored history was sent again
 
 
 def test_the_maf_cassettes_hold_no_credentials_or_personal_data() -> None:

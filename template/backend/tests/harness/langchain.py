@@ -5,7 +5,7 @@ exactly as in the app and nothing reaches a provider."""
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import aclosing
 from types import SimpleNamespace
 from typing import Any, cast
@@ -38,7 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.llm.core.budget import Meter
 from app.llm.core.redaction import Redactor
-from app.llm.langchain import steps
+from app.llm.langchain import checkpoints, steps
 from app.llm.langchain.gateway import Gateway
 from app.settings import Settings
 from tests.harness import AsksTool, Failure, FakeEmbeddingsApi, Message, Reply
@@ -279,6 +279,33 @@ class LangChainHarness:
             },
         )
         return str(state["messages"][-1].text), steps.step_limit_reached(state)
+
+    async def open_threads(
+        self, gateway: Gateway, settings: Settings
+    ) -> Callable[[], Awaitable[None]]:
+        saver, pool = await checkpoints.open_checkpointer(settings)
+        gateway.checkpointer = saver
+        return pool.close
+
+    async def thread_turn(
+        self,
+        gateway: Gateway,
+        *,
+        user_ref: str,
+        conversation_id: str,
+        messages: Sequence[Message],
+    ) -> str:
+        state = await gateway.agent([]).ainvoke(
+            {"messages": convert_to_messages(list(messages))},
+            config={"configurable": {"thread_id": f"{user_ref}:{conversation_id}"}},
+        )
+        return str(state["messages"][-1].text)
+
+    async def forget_threads(
+        self, gateway: Gateway, *, user_ref: str, conversation_id: str
+    ) -> None:
+        assert gateway.checkpointer is not None
+        await gateway.checkpointer.adelete_thread(f"{user_ref}:{conversation_id}")
 
     def last_request_offered_tools(self, gateway: Gateway) -> bool:
         return offers_tools(self._scripted(gateway).seen_kwargs[-1])

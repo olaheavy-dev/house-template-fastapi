@@ -216,6 +216,7 @@ MAF_ONLY = {
     "test_llm_maf_gateway.py",
     "test_llm_maf_options.py",
     "test_llm_maf_redaction.py",
+    "test_llm_maf_sessions.py",
     "test_llm_maf_stream.py",
     "test_llm_maf_surface.py",
     "test_llm_maf_usage.py",

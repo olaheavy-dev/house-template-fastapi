@@ -74,6 +74,18 @@ INTENDED: dict[str, str] = {
         "OutputParserException and StructuredOutputError are the core's 502 (#35 PR 3)",
     "backend/tests/harness/__init__.py":
         "the harness can offer a tool, ask for structured output, stream and run an agent (#35)",
+    "backend/migrations/versions/20261112_0007_agent_session.py":
+        "migration 0007: the agent_session table, with any model gateway (#35 PR 5)",
+    "backend/src/app/llm/core/sessions.py":
+        "the stored agent session row and SessionConflict (#35 PR 5)",
+    "backend/tests/test_llm_parity_threads.py":
+        "an image in a thread across a restart, the same under every framework (#73, #35 PR 5)",
+    "backend/src/app/models.py":
+        "imports AgentSessionRow, so autogenerate sees the agent_session table (#35 PR 5)",
+    ".github/template-owned/fastapi.txt":
+        "lists migration 0007 as template-owned (#35 PR 5)",
+    "backend/tests/test_llm_migrations.py":
+        "the template's chain now ends at 0007 (#35 PR 5)",
     "backend/tests/test_llm_parity_steps.py":
         "the step limit's shared tests, run once per framework (#35 PR 4)",
     "backend/tests/test_llm_steps.py":

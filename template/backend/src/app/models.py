@@ -18,5 +18,6 @@ from __future__ import annotations
 
 from app.db import Base
 from app.llm.core.budget import LlmCall, LlmSpendDay, LlmSpendUserDay
+from app.llm.core.sessions import AgentSessionRow
 
-__all__ = ["Base", "LlmCall", "LlmSpendDay", "LlmSpendUserDay"]
+__all__ = ["AgentSessionRow", "Base", "LlmCall", "LlmSpendDay", "LlmSpendUserDay"]
