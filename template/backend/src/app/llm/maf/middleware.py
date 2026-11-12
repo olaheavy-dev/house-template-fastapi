@@ -325,6 +325,7 @@ class BudgetMiddleware(ChatMiddleware):
             except Exception as error:
                 known = classify(error)
                 _failed(span, known.kind.value if known else type(error).__name__)
+                span.end()  # a failed call's span is sent too (PR #122 review)
                 await self.meter.failed(call_id, known.kind if known else None, streamed=False)
                 if known is None:
                     raise
@@ -334,6 +335,7 @@ class BudgetMiddleware(ChatMiddleware):
                 # reserved until expire_stale closes it. Nothing is awaited here, which would be
                 # cancelled again.
                 _failed(span, "cancelled")
+                span.end()
                 self.meter.abandon(call_id)
                 raise
         if context.stream:

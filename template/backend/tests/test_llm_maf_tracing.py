@@ -16,6 +16,7 @@ from opentelemetry import trace
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import StatusCode
 from pydantic import SecretStr, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -23,11 +24,12 @@ from structlog.testing import capture_logs
 
 from app.auth import User
 from app.llm.core.budget import LlmCall
+from app.llm.core.errors import ProviderError
 from app.llm.core.prompts import Prompt
 from app.llm.maf import tracing
 from app.llm.maf.gateway import Gateway
 from app.settings import Settings
-from tests.harness import Reply
+from tests.harness import Failure, Reply
 from tests.harness.maf import HARNESS
 
 pytestmark = pytest.mark.anyio
@@ -172,6 +174,22 @@ async def test_the_check_can_see_text_when_sensitive_data_is_on(spans: Any) -> N
     HARNESS.install_scripted(gateway, [Reply(f"The answer is {PHRASE}.")])
     await gateway.client().get_response([Message("user", [f"What is {PHRASE}?"])])
     assert PHRASE in text_of(exported(gateway, memory))
+
+
+async def test_a_failed_call_still_sends_its_span_with_the_error_kind(spans: Any) -> None:
+    # The calls that most need a trace are the ones that failed (PR #122 review): the span is
+    # ended and sent with an error status and the failure's kind, never its message.
+    gateway, memory = spans()
+    HARNESS.install_scripted(gateway, [Failure("rate_limit", message=f"echo {PHRASE}")])
+    with gateway.call_options(User(id="u_1"), "summary", PROMPT), pytest.raises(ProviderError):
+        await gateway.client().get_response([Message("user", ["hello"])])
+    sent = exported(gateway, memory)
+    [call] = [span for span in sent if span.name == "llm.call"]
+    assert call.status.status_code is StatusCode.ERROR
+    attributes = dict(call.attributes or {})
+    assert attributes["error.type"] == "rate_limited"
+    assert attributes["langsmith.metadata.prompt_sha"] == PROMPT.sha
+    assert PHRASE not in text_of(sent)
 
 
 async def test_a_sampling_rate_of_zero_sends_nothing(spans: Any) -> None:

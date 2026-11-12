@@ -253,9 +253,12 @@ async def test_a_long_tool_definition_is_reserved_for_in_full(
     }
     framework.install_scripted(gateway, [ANSWER, ANSWER])
     await framework.ask(gateway, QUESTION)
+    # Each row is told apart by when it appeared, not by its place in the result: the query has
+    # no order, and created_at is the transaction's start, the same for both.
+    [plain] = await calls(db_session)
     await framework.ask(gateway, QUESTION, options=framework.params_for_tools(tools=[tool]))
-    plain, with_tool = [c.reserved_micro_usd for c in await calls(db_session)]
-    assert with_tool - plain >= 50_000 * 2
+    [with_tool] = [c for c in await calls(db_session) if c.id != plain.id]
+    assert with_tool.reserved_micro_usd - plain.reserved_micro_usd >= 50_000 * 2
 
 
 async def test_images_are_reserved_at_their_maximum_however_they_are_sent(
