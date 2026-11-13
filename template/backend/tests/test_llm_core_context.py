@@ -6,6 +6,7 @@ the code.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime
 
 import pytest
@@ -158,9 +159,18 @@ def test_the_agents_own_part_is_estimated_only_without_usage() -> None:
 
 def test_size_is_one_token_per_byte_plus_each_image() -> None:
     # "héllo" as JSON is 8 bytes: two quotes, four one-byte letters, and é, which takes two.
-    assert size_bound("héllo") == 8
+    assert size_bound("héllo", media="héllo") == 8
     image = {"type": "image", "url": "u"}
-    assert size_bound([image]) == len('[{"type": "image", "url": "u"}]') + IMAGE_TOKENS
+    assert (
+        size_bound([image], media=[image]) == len('[{"type": "image", "url": "u"}]') + IMAGE_TOKENS
+    )
+
+
+def test_only_media_is_searched_for_attachments() -> None:
+    # A tool call's arguments may look like a document block; the budget only looks for media in
+    # message content, so the size must not refuse it.
+    looks_like = {"type": "document", "title": "House"}
+    assert size_bound(looks_like, media=[]) == len(json.dumps(looks_like))
 
 
 def test_a_usage_record_round_trips_and_a_bad_one_is_ignored() -> None:

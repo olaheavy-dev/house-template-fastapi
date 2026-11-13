@@ -38,3 +38,11 @@ def test_a_tool_call_without_its_result_is_waiting() -> None:
 
 def test_a_missing_checkpoint_has_no_messages() -> None:
     assert thread_messages(None) == []
+
+
+def test_tool_arguments_shaped_like_a_document_are_not_an_attachment() -> None:
+    # The budget looks for media in message content only (callbacks.py input_bound), so a call
+    # whose arguments say "type": "document" is sent; the report must not refuse it either.
+    call = {**CALL, "args": {"type": "document", "title": "House"}}
+    got = entries([HumanMessage("File it."), AIMessage("", tool_calls=[call])])
+    assert got[1].size > len("House")

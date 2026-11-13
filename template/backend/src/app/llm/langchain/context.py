@@ -39,7 +39,7 @@ def entries(messages: Sequence[BaseMessage]) -> list[Entry]:
                 role=_ROLES.get(message.type, "assistant"),
                 # The message as the budget serialises it, plus the ", " that separates it from the
                 # next one in the budget's list.
-                size=size_bound(message.model_dump()) + 2,
+                size=size_bound(message.model_dump(), media=message.content) + 2,
                 links=frozenset(
                     [str(call.get("id")) for call in calls if call.get("id")]
                     + ([message.tool_call_id] if isinstance(message, ToolMessage) else [])
@@ -60,7 +60,7 @@ def fixed_size(model: BaseChatModel, system_prompt: str | None, tools: Sequence[
     # What LangChain itself passes to callbacks as `invocation_params` (BaseChatModel.ainvoke).
     params = model._get_invocation_params(**kwargs)
     system = [SystemMessage(system_prompt).model_dump()] if system_prompt else []
-    return size_bound([system, params])
+    return size_bound([system, params], media=[])
 
 
 def thread_messages(checkpoint: Any) -> list[BaseMessage]:

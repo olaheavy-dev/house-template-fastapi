@@ -92,12 +92,14 @@ class Entry:
     usage: Usage | None = None
 
 
-def size_bound(content: object) -> int:
-    """More tokens than `content` can hold: its UTF-8 bytes as JSON, plus IMAGE_TOKENS for each
-    image in it (an image sent by URL is only a few bytes here). The budget's rule
-    (app/llm/core/bounds.py request_bound), without its per-request margin."""
-    size = len(json.dumps(content, default=str, ensure_ascii=False).encode())
-    return size + count_images(content) * IMAGE_TOKENS
+def size_bound(payload: object, *, media: object) -> int:
+    """More tokens than `payload` can hold: its UTF-8 bytes as JSON, plus IMAGE_TOKENS for each
+    image in `media` (an image sent by URL is only a few bytes in the payload). The budget's rule
+    (app/llm/core/bounds.py request_bound), without its per-request margin. `media` is only the
+    message content, as the budget looks for it: a tool call's arguments or a tool's schema may
+    hold `"type": "document"` without being a document."""
+    size = len(json.dumps(payload, default=str, ensure_ascii=False).encode())
+    return size + count_images(media) * IMAGE_TOKENS
 
 
 def usage_record(usage: Usage) -> dict[str, int]:

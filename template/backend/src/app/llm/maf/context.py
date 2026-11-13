@@ -96,7 +96,7 @@ def entries(messages: Sequence[Message]) -> list[Entry]:
         found.append(
             Entry(
                 role=_ROLES.get(str(message.role), "assistant"),
-                size=size_bound([payload[0], blocks]),
+                size=size_bound(payload[0], media=blocks),
                 links=_links(message),
                 waiting=any(call not in results for call in calls)
                 or any(ask not in approved for ask in asks),
@@ -111,7 +111,7 @@ def fixed_size(agent: Any) -> int:
     instructions and tool definitions (its `default_options`), sized as the budget sizes them."""
     options = dict(getattr(agent, "default_options", None) or {})
     payload, _ = request_view([], options)
-    return size_bound(payload)
+    return size_bound(payload, media=[])
 
 
 def history(agent: Any, session: AgentSession) -> list[Message]:

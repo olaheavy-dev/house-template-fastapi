@@ -49,3 +49,13 @@ def test_an_approval_request_waits_until_its_response() -> None:
     assert not answered[1].waiting
     # The request and its answer (a user message) are tied to the call, so they trim as one.
     assert answered[1].links == answered[2].links == frozenset({"call_1", "approval:ok_1"})
+
+
+def test_tool_arguments_shaped_like_a_document_are_not_an_attachment() -> None:
+    # The budget looks for media in message content only (middleware.py request_view's blocks),
+    # so a call whose arguments say "type": "document" is sent; the report must not refuse it.
+    call = Content.from_function_call(
+        call_id="call_1", name="file", arguments={"type": "document", "title": "House"}
+    )
+    got = entries([Message("user", ["File it."]), Message("assistant", [call])])
+    assert got[1].size > len("House")
