@@ -1,11 +1,11 @@
 """Turning the gateway on in a database that ran without it (#30).
 
-With `llm: none` the template's migrations 0002 to 0006 stay in the chain but do nothing, so such a
-database is stamped at 0006 with no gateway tables. The recipe for adding them later is in the
+With `llm: none` the template's migrations 0002 to 0008 stay in the chain but do nothing, so such a
+database is stamped at 0008 with no gateway tables. The recipe for adding them later is in the
 README ("Upgrading to 0.8.0"): `alembic stamp 0001`, then `alembic upgrade heads`. A database that
-had the tables, ran a later release with `llm: none` (0006 did nothing there) and turns the gateway
-back on lacks 0006's column: the recipe for that is `alembic stamp 0005`, then `alembic upgrade
-heads` (see "Upgrading", decision 0005).
+had the tables, ran a later release with `llm: none` (0006 to 0008 did nothing there) and turns the
+gateway back on lacks 0006's column and the 0007 and 0008 tables: the recipe for that is `alembic
+stamp 0005`, then `alembic upgrade heads` (see "Upgrading", decision 0005).
 """
 
 from __future__ import annotations
@@ -16,6 +16,8 @@ from sqlalchemy import create_engine, inspect
 from tests import db
 
 GATEWAY_TABLES = {
+    "agent_session",
+    "workflow_checkpoint",
     "llm_call",
     "llm_spend_day",
     "llm_spend_user_day",
@@ -45,11 +47,11 @@ def tables(url: str) -> set[str]:
 def test_llm_tables_can_be_added_to_a_database_that_ran_without_them(database_url: str) -> None:
     config = db.alembic_config(database_url)
     try:
-        # A database as `llm: none` leaves it: template revisions up to 0006 applied (each did
+        # A database as `llm: none` leaves it: template revisions up to 0008 applied (each did
         # nothing), no gateway tables. Made here by removing the real tables and re-stamping.
         command.downgrade(config, "0001")
         assert not tables(database_url) & GATEWAY_TABLES
-        command.stamp(config, "0006")
+        command.stamp(config, "0008")
         assert not tables(database_url) & GATEWAY_TABLES
 
         # The recipe.
@@ -84,7 +86,7 @@ def test_downgrade_to_0001_removes_the_gateway_tables(database_url: str) -> None
         command.downgrade(config, "0001")
         after = versions_in(database_url)
         assert "0001" in after
-        assert not after & {"0002", "0003", "0004", "0005", "0006"}
+        assert not after & {"0002", "0003", "0004", "0005", "0006", "0007", "0008"}
         assert not tables(database_url) & GATEWAY_TABLES
     finally:
         command.upgrade(config, "heads")
@@ -110,17 +112,19 @@ def test_a_database_stamped_past_0006_while_the_gateway_was_off_gets_the_column_
     database_url: str,
 ) -> None:
     # The gateway ran up to 0005 (tables, no redacted_count). The project then updated the template
-    # with `llm: none`, where 0006 does nothing, so its database is stamped at 0006 and the column
-    # is missing. Turning the gateway back on and running `make migrate` would do nothing.
+    # with `llm: none`, where 0006 to 0008 do nothing, so its database is stamped at 0008 and the
+    # column and the session and checkpoint tables are missing. Turning the gateway back on and
+    # running `make migrate` would do nothing.
     config = db.alembic_config(database_url)
     try:
         command.downgrade(config, "0005")
-        assert tables(database_url) >= GATEWAY_TABLES
-        command.stamp(config, "0006")
+        assert tables(database_url) >= GATEWAY_TABLES - {"agent_session", "workflow_checkpoint"}
+        command.stamp(config, "0008")
         command.upgrade(config, "heads")
         assert "redacted_count" not in llm_call_columns(database_url)  # the gap
+        assert not tables(database_url) & {"agent_session", "workflow_checkpoint"}
 
-        # The recipe: stamp 0005, then migrate. 0006 now runs for real.
+        # The recipe: stamp 0005, then migrate. 0006 to 0008 now run for real.
         command.stamp(config, "0005")
         command.upgrade(config, "heads")
 

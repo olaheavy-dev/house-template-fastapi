@@ -21,7 +21,7 @@ The vocabulary is neutral on purpose:
 from __future__ import annotations
 
 import importlib
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Protocol
@@ -35,6 +35,7 @@ from app.settings import Settings
 
 __all__ = [
     "FAILURE_KINDS",
+    "AsksTool",
     "Failure",
     "FakeEmbeddingsApi",
     "Harness",
@@ -63,10 +64,30 @@ FAILURE_KINDS = (
 @dataclass(frozen=True, slots=True)
 class Reply:
     """What the provider answers: the text, and the usage it reports (input tokens, output
-    tokens), or None when it reports none."""
+    tokens), or None when it reports none. Streamed, the text arrives in `pieces` when given (they
+    must add up to `text`), else in one piece, and the usage after the last piece."""
 
     text: str
     usage: tuple[int, int] | None = (1_000, 500)
+    pieces: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        assert not self.pieces or "".join(self.pieces) == self.text, self.pieces
+
+    def streamed(self) -> tuple[str, ...]:
+        return self.pieces or (self.text,)
+
+
+@dataclass(frozen=True, slots=True)
+class AsksTool:
+    """A model that asks for the tool `name` (with `args`) whenever it is offered tools, and
+    answers `text` when it is offered none: the model that loops until the step limit stops it.
+    Each call reports the same usage."""
+
+    name: str
+    args: dict[str, Any]
+    text: str = "final answer"
+    usage: tuple[int, int] = (100, 10)
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,7 +124,7 @@ class Harness(Protocol):
         a test may set)."""
         ...
 
-    def install_scripted(self, gateway: Any, script: Sequence[Reply | Failure]) -> None:
+    def install_scripted(self, gateway: Any, script: Sequence[Reply | Failure | AsksTool]) -> None:
         """Replace the provider with one that answers `script` in order, one item per provider
         call, through the same path a real call takes (the budget and redaction included)."""
         ...
@@ -158,6 +179,58 @@ class Harness(Protocol):
         None when the call asked for none."""
         ...
 
+    async def stream(
+        self,
+        gateway: Any,
+        messages: Sequence[Message],
+        *,
+        take: int | None = None,
+        tags: dict[str, Any] | None = None,
+    ) -> list[str]:
+        """One streamed call, read the way the framework streams; returns the text of each update
+        that carried text. With `take`, stops reading after that many and closes the stream."""
+        ...
+
+    async def run_agent(
+        self,
+        gateway: Any,
+        question: str,
+        tools: Sequence[Callable[..., Any]],
+        *,
+        tags: dict[str, Any] | None = None,
+        instructions: str | None = None,
+    ) -> tuple[str, bool]:
+        """One run of the gateway's agent with `tools` (and its system prompt, `instructions`): its
+        final answer's text, and whether the run ended on the forced final answer (the neutral
+        step_limit_reached flag). Nothing of the run is kept."""
+        ...
+
+    async def open_threads(self, gateway: Any, settings: Settings) -> Callable[[], Awaitable[None]]:
+        """Make the gateway keep conversations in the test database, the way the app does at
+        start-up; returns what closes it. `settings` carries the database URL."""
+        ...
+
+    async def thread_turn(
+        self,
+        gateway: Any,
+        *,
+        user_ref: str,
+        conversation_id: str,
+        messages: Sequence[Message],
+        tools: Sequence[Callable[..., Any]] = (),
+    ) -> str:
+        """One turn of a stored conversation, keyed by the user and the conversation id (derived on
+        the server, as the app must), by an agent with `tools`; returns the answer's text."""
+        ...
+
+    async def forget_threads(self, gateway: Any, *, user_ref: str, conversation_id: str) -> None:
+        """Delete what the turns above stored (the test database outlives one test)."""
+        ...
+
+    def last_request_offered_tools(self, gateway: Any) -> bool:
+        """Whether the provider's last request let the model call a tool."""
+        ...
+
     def last_request_messages(self, gateway: Any) -> list[Message] | None:
         """What the provider was last given, after redaction, as neutral messages
         (`{"role": "user", "content": "text"}`, role one of system, user, assistant, tool), or None
@@ -187,7 +260,12 @@ class Harness(Protocol):
     ) -> list[list[float]]: ...
 
     async def embed_query(
-        self, gateway: Any, text: str, *, user_ref: str | None = None
+        self,
+        gateway: Any,
+        text: str,
+        *,
+        feature: str | None = None,
+        user_ref: str | None = None,
     ) -> list[float]: ...
 
     def raised_by_embeddings(self, failure: Failure) -> type[BaseException]:

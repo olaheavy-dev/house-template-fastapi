@@ -53,10 +53,11 @@ COST_PER_CALL = 15  # micro-USD, see the module docstring
 
 @pytest.fixture(params=["langchain"])
 def framework(request: pytest.FixtureRequest) -> str:
-    """The framework under test. The MAF adapter (#35 5b) adds "maf" here, so the same tests prove
-    both frameworks give the same answer at the limit. The tests from "one route, end to end"
-    down (route, timeout, rate limit, budget refusal) build their agent with gateway.agent()
-    and are LangChain-only; #35 adds the MAF equivalents."""
+    """The framework under test: LangChain only. The rules both frameworks share (N model calls,
+    the last without tools, the flag, one log, the count per run, each call budgeted) are tested
+    once per framework in test_llm_parity_steps.py (#35 PR 4); the MAF-only cases are in
+    test_llm_maf_agent.py. What stays here is LangChain's own: its middleware, structured-output
+    strategies and LangGraph's recursion backstop."""
     return str(request.param)
 
 

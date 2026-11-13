@@ -76,6 +76,9 @@ LLM_FILES = [
     "backend/tests/harness/__init__.py",
     "backend/tests/test_llm_parity_budget.py",
     "backend/tests/evals/redaction_corpus.py",
+    "backend/tests/evals/conftest.py",
+    "backend/tests/evals/test_gateway_evals.py",
+    "backend/tests/evals/test_redaction_evals.py",
 ]
 # LangChain's own files: only the langchain answer renders them.
 LANGCHAIN_FILES = [
@@ -83,7 +86,6 @@ LANGCHAIN_FILES = [
     "backend/src/app/llm/checkpoint_types.py",
     "backend/tests/test_llm_gateway.py",
     "backend/tests/harness/langchain.py",
-    "backend/tests/evals/conftest.py",
     "backend/tests/wire.py",
     "backend/tests/test_observability.py",
     "backend/tests/cassettes/test_llm_gateway/test_a_replayed_call_is_answered_and_its_cost_settled.yaml",
@@ -121,6 +123,8 @@ DATABASE_FILES = [
     "backend/migrations/versions/20261026_0004_llm_call_details.py",
     "backend/migrations/versions/20261026_0005_per_user_llm_budget.py",
     "backend/migrations/versions/20261110_0006_llm_call_redacted_count.py",
+    "backend/migrations/versions/20261112_0007_agent_session.py",
+    "backend/migrations/versions/20261112_0008_workflow_checkpoint.py",
     "backend/migrations/versions/20261026_app_project_root.py",
     "backend/compose/db/compose.yaml",
     "backend/tests/db.py",
@@ -143,6 +147,8 @@ TWINS = [
     "backend/migrations/versions/20261026_0004_llm_call_details.py",
     "backend/migrations/versions/20261026_0005_per_user_llm_budget.py",
     "backend/migrations/versions/20261110_0006_llm_call_redacted_count.py",
+    "backend/migrations/versions/20261112_0007_agent_session.py",
+    "backend/migrations/versions/20261112_0008_workflow_checkpoint.py",
 ]
 # Words that must not appear in a storage-off project, except in pyproject.toml and uv.lock
 # (the dependency stays declared: `boto3` in the extra, `types-boto3` in the dev group).
@@ -226,6 +232,15 @@ def _exact(removed: set[str], patterns: list[str]) -> None:
     assert stray == []
     unused = [pat for pat in patterns if not any(fnmatch.fnmatch(p, pat) for p in removed)]
     assert unused == []
+
+
+@pytest.mark.parametrize("llm", ["langchain", "maf"])
+def test_tests_never_upload_to_langsmith_under_either_framework(render, llm):
+    # Both frameworks' evals use the LangSmith pytest plugin, which uploads by default: the root
+    # conftest switches it (and LangSmith tracing) off unless `make eval` runs with a key.
+    conftest = (render(llm=llm) / "backend/tests/conftest.py").read_text()
+    assert 'os.environ["LANGSMITH_TRACING"] = os.environ["LANGSMITH_TEST_TRACKING"]' in conftest
+    assert ('os.environ["LANGSMITH_DISABLE_RUN_COMPRESSION"]' in conftest) is (llm == "langchain")
 
 
 def test_llm_files_are_exact(render, tmp_path):
@@ -428,15 +443,13 @@ LLM_OWNED = [
     "backend/src/app/llm/__init__.py",
     "backend/src/app/llm/core/*.py",
     "backend/llm-contracts.toml",
-]
-MAF_OWNED = ["backend/src/app/llm/maf/*.py"]
-LANGCHAIN_OWNED = [
-    "backend/src/app/llm/langchain/*.py",
     "backend/tests/evals/conftest.py",
     "backend/tests/evals/test_gateway_evals.py",
     "backend/tests/evals/redaction_corpus.py",
     "backend/tests/evals/test_redaction_evals.py",
 ]
+MAF_OWNED = ["backend/src/app/llm/maf/*.py"]
+LANGCHAIN_OWNED = ["backend/src/app/llm/langchain/*.py"]
 DATABASE_OWNED = [
     "backend/migrations/env.py",
     "backend/migrations/script.py.mako",
@@ -446,6 +459,8 @@ DATABASE_OWNED = [
     "backend/migrations/versions/20261026_0004_llm_call_details.py",
     "backend/migrations/versions/20261026_0005_per_user_llm_budget.py",
     "backend/migrations/versions/20261110_0006_llm_call_redacted_count.py",
+    "backend/migrations/versions/20261112_0007_agent_session.py",
+    "backend/migrations/versions/20261112_0008_workflow_checkpoint.py",
     "backend/migrations/versions/20261026_app_project_root.py",
     "backend/compose/db/compose.yaml",
     "backend/tests/db.py",
@@ -563,7 +578,7 @@ SWITCH_ON_WITH_DATABASE = "(add `-d llm=langchain` for the model gateway too: it
 STAYS_OFF = "(the gateway stays off once the answers file records `llm`, which the first 0.8.0 update does)"
 SWITCH_ON = "`-d llm=langchain` to turn the model gateway on"
 # For a database that ran without the gateway: its migrations did nothing, so the tables are missing.
-RECIPE = ("A database that ran without the model tables (migrations 0002 to 0006 did nothing there) "
+RECIPE = ("A database that ran without the model tables (migrations 0002 to 0008 did nothing there) "
           "gets them only after `copier update` has turned the model gateway on (stamping first would "
           "make `make migrate` re-run the empty revisions and leave no tables). Then, on every database "
           "the project runs against, production and staging included, and before the gateway is "
@@ -688,8 +703,7 @@ def test_the_image_installs_the_answered_extras(render, database, storage, llm):
 ALWAYS_TARGETS = {"install-fastapi", "check-fastapi", "check-fast-fastapi", "lock", "dev", "test",
                   "image", "up"}
 DATABASE_TARGETS = {"db-up", "migrate", "migration"}
-LLM_TARGETS = {"llm-report", "record-llm"}
-LANGCHAIN_TARGETS = {"eval"}  # the evals run on LangSmith
+LLM_TARGETS = {"llm-report", "record-llm", "eval"}  # the evals run on either framework
 
 
 @ANSWERS
@@ -697,7 +711,7 @@ def test_make_targets_follow_the_answers(render, database, storage, llm):
     gateway = llm != "none"
     mk = (render(database=database, storage=storage, llm=llm) / "mk/fastapi.mk").read_text()
     want = (ALWAYS_TARGETS | (DATABASE_TARGETS if database else set())
-            | (LLM_TARGETS if gateway else set()) | (LANGCHAIN_TARGETS if llm == "langchain" else set())
+            | (LLM_TARGETS if gateway else set())
             | ({"storage-up"} if storage else set()))
     defined = set(re.findall(r"^([a-z][a-z0-9-]*):", mk, flags=re.MULTILINE))
     phony = set(re.search(r"^\.PHONY: (.*)$", mk, flags=re.MULTILINE).group(1).split())
@@ -865,10 +879,10 @@ def test_llm_refuses_an_unknown_framework(render, llm):
 
 
 # The migration chain (#30). Worked out from the files the template ships (the template's revisions
-# 0001 to 0006 on the "template" branch, the project's root on the "app" branch), not from a run.
+# 0001 to 0008 on the "template" branch, the project's root on the "app" branch), not from a run.
 CHAIN = {"0001": None, "0002": "0001", "0003": "0002", "0004": "0003", "0005": "0004", "0006": "0005",
-         "app_root": None}
-GATEWAY_REVISIONS = {"0002", "0003", "0004", "0005", "0006"}
+         "0007": "0006", "0008": "0007", "app_root": None}
+GATEWAY_REVISIONS = {"0002", "0003", "0004", "0005", "0006", "0007", "0008"}
 
 
 def _migrations(project: Path) -> dict[str, dict]:
@@ -904,7 +918,7 @@ def test_migration_chain_is_linear_in_every_variant(render, database, storage, l
     assert migrations["0001"]["labels"] == ("template",)
     assert migrations["app_root"]["labels"] == ("app",)
     assert sorted(rev for rev, m in migrations.items() if m["down"] is None) == ["0001", "app_root"]
-    for rev in ("0002", "0003", "0004", "0005", "0006"):
+    for rev in ("0002", "0003", "0004", "0005", "0006", "0007", "0008"):
         assert migrations[rev]["labels"] is None, rev
     gateway = llm != "none"
     for rev in GATEWAY_REVISIONS:
@@ -945,7 +959,9 @@ def test_llm_none_autogenerate_ignores_every_table_the_gateway_made(render, tmp_
                 created.add(node.args[0].value)
     checkpoint_tables = _string_set(
         ast.parse((langchain / "backend/src/app/llm/langchain/checkpoints.py").read_text()), "TABLES")
-    assert created == {"llm_call", "llm_spend_day", "llm_spend_user_day"}
+    assert created == {
+        "agent_session", "llm_call", "llm_spend_day", "llm_spend_user_day", "workflow_checkpoint"
+    }
     assert checkpoint_tables == {"checkpoint_migrations", "checkpoints", "checkpoint_blobs",
                                  "checkpoint_writes"}
     none = render_other(render, tmp_path, database=True, storage=True, llm="none")

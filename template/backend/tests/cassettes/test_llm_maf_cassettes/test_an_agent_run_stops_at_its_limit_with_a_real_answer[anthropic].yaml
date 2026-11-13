@@ -1,0 +1,112 @@
+interactions:
+- request:
+    body: '{"max_tokens":1024,"messages":[{"role":"user","content":[{"type":"text","text":"Use
+      the add tool to add 2 and 3, then add 4 to that result."}]}],"model":"claude-haiku-5-5","stream":false,"system":"Always
+      use the add tool for arithmetic.","tool_choice":{"type":"auto"},"tools":[{"type":"custom","name":"add","description":"Add
+      two whole numbers.","input_schema":{"properties":{"a":{"title":"A","type":"integer"},"b":{"title":"B","type":"integer"}},"required":["a","b"],"title":"add_input","type":"object"}}]}'
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate, zstd
+      anthropic-beta:
+      - mcp-client-2025-04-04
+      anthropic-version:
+      - '2023-06-01'
+      connection:
+      - keep-alive
+      content-length:
+      - '507'
+      content-type:
+      - application/json
+      host:
+      - api.anthropic.com
+      user-agent:
+      - agent-framework-python/1.25.0
+      x-stainless-arch:
+      - arm64
+      x-stainless-async:
+      - async:asyncio
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - MacOS
+      x-stainless-package-version:
+      - 1.17.0
+      x-stainless-read-timeout:
+      - '60.0'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.14.5
+      x-stainless-timeout:
+      - NOT_GIVEN
+    method: POST
+    uri: https://api.anthropic.com/v1/messages?beta=true
+  response:
+    body:
+      string: '{"model":"claude-haiku-5-5","id":"msg_011CgyQGxpiQQ2KuoB8Da5yY","type":"message","role":"assistant","content":[{"type":"thinking","thinking":"","signature":"CAQSmgUKEAgTGAI4AUIIdGhpbmtpbmcSDA9I2hPD9w2pNEvwGBoMf1QmQKvupUqk9mFYIjD64r7EoUDZD15xI6eRBlzBVYTGU0GhaS/YIq1FE3kWmp1sXP+0dJK/Rty9hJCrtHoqtwT9PeohcELsIv3mWebcSQqyCQDnxVl0tcj++j35IVfzvHDDexXRURDJYVTVeTYeTNHqMuU1fsnpEwchmNz/WGs4BZDVfWZ4NbPYp4lf8GTKPd3qUbLiukWPtrbqwWsd2taFvICPv07ByQpYlEts0FaRaru0IRc9KSpthqVoAg/JNCxGvhlQK8Sisr7O1ckN861LH8Z2dlVOqmnfbGExxSvkXh6BJGyY2ac5XtPNTwXtWKoNYkTrEha8J+Wu00Q8K/G6l+2XLwNtOZBNm+HaspmYuC38lYV7fxcfwf/yjKBYxCrkXfHnzq27xX2JGyXVmtAZyTdjMKeQ8bptdtbj/l7mXCBEHsp++szmTzJPa3hkI9tjhSA+pCKqXmGVBaK54kS3bdoomYY48Btsyd/hjo9MAvHVHhdfG4EcJ1KuD4LHA1Dpj795ERNih6+dEnvqealQUnmN82X6eFmiAARZ4xIO2gvTbJTKoik3hT+7SKaJ6m89NTwvWxppRYhYoJGa4xNPt1Xt5YVTuzw3NoLouEwLFhzfQpw0BJgvwptu039fU0ZRor56jtlD6lYvGbvsIlAV1gMcLwd57imxaiOp34I6JqIrJNMn2bE6EW7hJ3lQUfavqwcZj9HpaTR8vV3wTcH28oKito4SMQtjNNyih0pyoZC9L1/9TC9K3H3bhS1dIluJeaLHXNuHofGfhbofTBIsfECzY2LYYS5I5MVvXC9bbWLY846LV3lssDZz/egO1rtewmuk3MsYAQ=="},{"type":"tool_use","id":"toolu_01SUKmryYCcQJom3hs8JMF1B","name":"add","input":{"a":2,"b":3},"caller":{"type":"direct"}}],"container":null,"stop_reason":"tool_use","stop_sequence":null,"stop_details":null,"usage":{"input_tokens":438,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":86,"output_tokens_details":{"thinking_tokens":19},"service_tier":"standard","inference_geo":"global","speed":"standard"},"diagnostics":null}'
+    headers:
+      content-type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+- request:
+    body: '{"max_tokens":1024,"messages":[{"role":"user","content":[{"type":"text","text":"Use
+      the add tool to add 2 and 3, then add 4 to that result."}]},{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"CAQSmgUKEAgTGAI4AUIIdGhpbmtpbmcSDA9I2hPD9w2pNEvwGBoMf1QmQKvupUqk9mFYIjD64r7EoUDZD15xI6eRBlzBVYTGU0GhaS/YIq1FE3kWmp1sXP+0dJK/Rty9hJCrtHoqtwT9PeohcELsIv3mWebcSQqyCQDnxVl0tcj++j35IVfzvHDDexXRURDJYVTVeTYeTNHqMuU1fsnpEwchmNz/WGs4BZDVfWZ4NbPYp4lf8GTKPd3qUbLiukWPtrbqwWsd2taFvICPv07ByQpYlEts0FaRaru0IRc9KSpthqVoAg/JNCxGvhlQK8Sisr7O1ckN861LH8Z2dlVOqmnfbGExxSvkXh6BJGyY2ac5XtPNTwXtWKoNYkTrEha8J+Wu00Q8K/G6l+2XLwNtOZBNm+HaspmYuC38lYV7fxcfwf/yjKBYxCrkXfHnzq27xX2JGyXVmtAZyTdjMKeQ8bptdtbj/l7mXCBEHsp++szmTzJPa3hkI9tjhSA+pCKqXmGVBaK54kS3bdoomYY48Btsyd/hjo9MAvHVHhdfG4EcJ1KuD4LHA1Dpj795ERNih6+dEnvqealQUnmN82X6eFmiAARZ4xIO2gvTbJTKoik3hT+7SKaJ6m89NTwvWxppRYhYoJGa4xNPt1Xt5YVTuzw3NoLouEwLFhzfQpw0BJgvwptu039fU0ZRor56jtlD6lYvGbvsIlAV1gMcLwd57imxaiOp34I6JqIrJNMn2bE6EW7hJ3lQUfavqwcZj9HpaTR8vV3wTcH28oKito4SMQtjNNyih0pyoZC9L1/9TC9K3H3bhS1dIluJeaLHXNuHofGfhbofTBIsfECzY2LYYS5I5MVvXC9bbWLY846LV3lssDZz/egO1rtewmuk3MsYAQ=="},{"type":"tool_use","id":"toolu_01SUKmryYCcQJom3hs8JMF1B","name":"add","input":{"a":2,"b":3}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01SUKmryYCcQJom3hs8JMF1B","content":[{"type":"text","text":"5"}],"is_error":false}]}],"model":"claude-haiku-5-5","stream":false,"system":"Always
+      use the add tool for arithmetic.","tool_choice":{"type":"none"},"tools":[{"type":"custom","name":"add","description":"Add
+      two whole numbers.","input_schema":{"properties":{"a":{"title":"A","type":"integer"},"b":{"title":"B","type":"integer"}},"required":["a","b"],"title":"add_input","type":"object"}}]}'
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate, zstd
+      anthropic-beta:
+      - mcp-client-2025-04-04
+      anthropic-version:
+      - '2023-06-01'
+      connection:
+      - keep-alive
+      content-length:
+      - '1736'
+      content-type:
+      - application/json
+      host:
+      - api.anthropic.com
+      user-agent:
+      - agent-framework-python/1.25.0
+      x-stainless-arch:
+      - arm64
+      x-stainless-async:
+      - async:asyncio
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - MacOS
+      x-stainless-package-version:
+      - 1.17.0
+      x-stainless-read-timeout:
+      - '60.0'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.14.5
+      x-stainless-timeout:
+      - NOT_GIVEN
+    method: POST
+    uri: https://api.anthropic.com/v1/messages?beta=true
+  response:
+    body:
+      string: '{"model":"claude-haiku-5-5","id":"msg_011CgyQH39fGxfrSjetmXiGq","type":"message","role":"assistant","content":[],"container":null,"stop_reason":"end_turn","stop_sequence":null,"stop_details":null,"usage":{"input_tokens":530,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":1,"output_tokens_details":{"thinking_tokens":0},"service_tier":"standard","inference_geo":"global","speed":"standard"},"diagnostics":null}'
+    headers:
+      content-type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+version: 1

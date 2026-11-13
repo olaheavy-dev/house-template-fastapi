@@ -66,6 +66,7 @@ _exclude:
   - "{% if llm is defined and llm != 'langchain' %}backend/src/app/llm/langchain{% endif %}"
   - "{% if llm is defined and llm != 'maf' %}backend/src/app/llm/maf{% endif %}"
   - "{% if llm is defined and llm != 'langchain' %}backend/src/app/llm/checkpoint_types.py{% endif %}"
+  - "{% if llm is defined and llm != 'maf' %}backend/src/app/llm/workflow_checkpoint_types.py{% endif %}"
   - "{% if llm is defined and llm != 'langchain' %}backend/tests/harness/langchain.py{% endif %}"
   - "{% if llm is defined and llm != 'maf' %}backend/tests/harness/maf.py{% endif %}"
   - "{% if llm is defined and llm != 'maf' %}backend/tests/test_llm_maf_*.py{% endif %}"
@@ -107,11 +108,7 @@ _exclude:
   - "{% if (database is defined and not database) or (llm is defined and llm != 'langchain') %}backend/tests/test_observability.py{% endif %}"
   - "{% if (database is defined and not database) or (llm is defined and llm != 'langchain') %}backend/tests/wire.py{% endif %}"
   - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/tests/evals{% endif %}"
-  # The evals run on LangSmith, so they are LangChain's; the corpus of synthetic values in
-  # tests/evals/redaction_corpus.py is data, shared by the redaction tests of both frameworks.
-  - "{% if llm is defined and llm != 'langchain' %}backend/tests/evals/conftest.py{% endif %}"
-  - "{% if llm is defined and llm != 'langchain' %}backend/tests/evals/test_gateway_evals.py{% endif %}"
-  - "{% if llm is defined and llm != 'langchain' %}backend/tests/evals/test_redaction_evals.py{% endif %}"
+  # The evals run through the shared harness (tests/harness/), so both frameworks have them.
   - "{% if (database is defined and not database) or (llm is defined and llm == 'none') %}backend/tests/cassettes{% endif %}"
   # storage: false removes the S3-compatible object storage. `is defined`: `copier update` also
   # renders these patterns for the OLD copy of a project made before the question existed, whose

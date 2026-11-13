@@ -19,7 +19,14 @@ What it does to every call, in this order:
   provider answered before doing any work releases the reservation, anything else keeps it, and a
   cancelled call is left reserved until `expire_stale` closes it.
 
-Streamed calls are not supported yet and are refused.
+A streamed call is reserved when its consumer first reads it, and the stream it returns settles
+from the usage the provider reports at its end (MAF adds Anthropic's cumulative snapshots up as
+increments). A stream that fails part-way records the failure the same way an unstreamed call does,
+except that a rejection after output had streamed keeps its reservation. A stream the consumer stops
+reading and closes (or drops: the gateway's own async generator is finalised by the event loop, so
+this does not depend on the caller using `async with`) is recorded as failed and keeps its
+reservation, because the provider may bill what it had generated and reports nothing; a cancelled
+one is left reserved, as an unstreamed call is.
 
 The tags of a call (the prompt, the feature, whom it is for) reach the middleware through context
 variables, because MAF has no per-call metadata path that is verified for 1.25.0: use
@@ -29,27 +36,35 @@ variables, because MAF has no per-call metadata path that is verified for 1.25.0
 
 from __future__ import annotations
 
+import asyncio
 import uuid
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from agent_framework import (
     ChatContext,
     ChatMiddleware,
     ChatResponse,
+    ChatResponseUpdate,
     Content,
     FunctionTool,
     Message,
+    ResponseStream,
 )
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
 
 from app.llm.core import bounds
 from app.llm.core.budget import CallTags, Meter
+from app.llm.core.steps import DEFAULT_MAX_MODEL_CALLS, StepLimit
 from app.llm.core.usage import Usage
 from app.llm.maf.errors import classify
-from app.llm.maf.redaction import REDACTED_COUNT, StreamingNotSupported
+from app.llm.maf.redaction import REDACTED_COUNT
+from app.llm.maf.steps import RUN_OPTION, StepRun
+from app.llm.maf.tracing import call_span
 from app.llm.maf.usage import from_maf
 
 __all__ = [
@@ -224,23 +239,30 @@ class BudgetMiddleware(ChatMiddleware):
     Meter. `max_tokens` is the gateway's output limit (LLM_MAX_TOKENS)."""
 
     def __init__(
-        self, meter: Meter, *, max_tokens: int, sends_store: bool, final_only: bool = False
+        self,
+        meter: Meter,
+        *,
+        max_tokens: int,
+        sends_store: bool,
+        step_limit: StepLimit | None = None,
     ) -> None:
         self.meter = meter
         self.max_tokens = max_tokens
-        # AGENT_MAX_MODEL_CALLS=1: the only call is the final one, so no tools are offered on any
-        # call (`tool_choice="none"`). MAF's tool loop would otherwise make a second call after
-        # a tool round, which is two model calls where the limit says one.
-        self.final_only = final_only
+        # AGENT_MAX_MODEL_CALLS (app/llm/maf/steps.py): the run's last allowed call is sent with
+        # `tool_choice="none"`, so the model answers instead of asking for another tool.
+        self.step_limit = step_limit or StepLimit(DEFAULT_MAX_MODEL_CALLS)
         # Whether the provider's API has a `store` option to send False in: OpenAI's Responses API
         # does (and stores by default); Anthropic's Messages API stores nothing and its SDK refuses
         # the keyword.
         self.sends_store = sends_store
 
     async def process(self, context: ChatContext, call_next: Callable[[], Awaitable[None]]) -> None:
-        if context.stream:
-            raise StreamingNotSupported("streamed calls are not supported by this gateway yet")
         options = dict(context.options or {})
+        # The run's count (put there by the gateway's client); never sent to the provider. A call
+        # that did not come through the gateway's client is a run of its own.
+        run = options.pop(RUN_OPTION, None)
+        if not isinstance(run, StepRun):
+            run = StepRun()
         refused = sorted(str(key) for key in options if key not in ALLOWED_OPTIONS)
         if refused:
             raise OptionNotAllowed(f"options the gateway does not allow: {', '.join(refused)}")
@@ -259,8 +281,11 @@ class BudgetMiddleware(ChatMiddleware):
         limit = options.get("max_tokens")
         if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
             options["max_tokens"] = self.max_tokens
-        if self.final_only:
+        run.limit = self.step_limit
+        if self.step_limit.is_final(run.calls):
             options["tool_choice"] = "none"
+            run.forced = True
+        run.calls += 1
         thinking = options.get("thinking")
         if isinstance(thinking, Mapping):
             budget = thinking.get("budget_tokens")
@@ -291,20 +316,100 @@ class BudgetMiddleware(ChatMiddleware):
             ),
         )
         context.options = options
-        try:
-            await call_next()
-        except Exception as error:
-            known = classify(error)
-            await self.meter.failed(call_id, known.kind if known else None, streamed=False)
-            if known is None:
+        # The call's span (app/llm/maf/tracing.py): current while the call is made, so MAF's chat
+        # span is its child; it carries the prompt, the feature and this call's ledger row id.
+        with call_span(tags) as span:
+            span.set_attribute("langsmith.metadata.llm_call_id", str(call_id))
+            try:
+                await call_next()
+            except Exception as error:
+                known = classify(error)
+                _failed(span, known.kind.value if known else type(error).__name__)
+                span.end()  # a failed call's span is sent too (PR #122 review)
+                await self.meter.failed(call_id, known.kind if known else None, streamed=False)
+                if known is None:
+                    raise
+                raise known from error
+            except BaseException:
+                # Cancelled: the call may still be running at the provider, so its row stays
+                # reserved until expire_stale closes it. Nothing is awaited here, which would be
+                # cancelled again.
+                _failed(span, "cancelled")
+                span.end()
+                self.meter.abandon(call_id)
                 raise
-            raise known from error
-        except BaseException:
-            # Cancelled: the call may still be running at the provider, so its row stays reserved
-            # until expire_stale closes it. Nothing is awaited here, which would be cancelled again.
-            self.meter.abandon(call_id)
-            raise
-        await self.meter.settle(call_id, _usage(context.result))
+        if context.stream:
+            context.result = self._settled_stream(call_id, context.result, span)
+            return
+        try:
+            await self.meter.settle(call_id, _usage(context.result))
+        finally:
+            span.end()
+
+    def _settled_stream(
+        self, call_id: uuid.UUID, inner: object, span: trace.Span
+    ) -> ResponseStream[ChatResponseUpdate, ChatResponse[Any]]:
+        """The provider's stream, passed through an async generator of our own that settles the
+        call once, however the stream ends (see the module notes). The final response is the
+        provider stream's own (its finalizer and result hooks run), and the provider stream is
+        always closed."""
+        meter = self.meter
+        if not isinstance(inner, ResponseStream):
+            raise TypeError("a streamed call returned something other than a ResponseStream")
+        provider = cast("ResponseStream[ChatResponseUpdate, ChatResponse[Any]]", inner)
+
+        async def updates() -> AsyncGenerator[ChatResponseUpdate]:
+            # One generator: closing it (the consumer stopped, or dropped the stream) runs this
+            # code, so the call settles and its span ends now, not at garbage collection.
+            try:
+                streamed = False
+                try:
+                    async for update in provider:
+                        # Usage alone is not output: a rejection before any text still releases.
+                        if any(content.type != "usage" for content in update.contents):
+                            streamed = True
+                        yield update
+                except asyncio.CancelledError:
+                    _failed(span, "cancelled")
+                    meter.abandon(call_id)  # nothing awaited: it would be cancelled again
+                    raise
+                except GeneratorExit:
+                    # The consumer stopped reading and closed the stream, or dropped it.
+                    _failed(span, "closed")
+                    await meter.failed(call_id, None, streamed=True)
+                    raise
+                except Exception as error:
+                    known = classify(error)
+                    _failed(span, known.kind.value if known else type(error).__name__)
+                    await meter.failed(call_id, known.kind if known else None, streamed=streamed)
+                    if known is None:
+                        raise
+                    raise known from error
+                except BaseException:
+                    meter.abandon(call_id)
+                    raise
+                finally:
+                    await provider.close()
+                try:
+                    final = await provider.get_final_response()
+                except Exception:
+                    await meter.settle(call_id, None)  # the reservation stays as the cost
+                    raise
+                await meter.settle(call_id, _usage(final))
+            finally:
+                span.end()  # however the stream ended (open while the call streams)
+
+        async def final(_updates: Sequence[ChatResponseUpdate]) -> ChatResponse[Any]:
+            return await provider.get_final_response()
+
+        return ResponseStream(updates(), finalizer=final)
+
+
+def _failed(span: trace.Span, kind: str) -> None:
+    """Mark the call's span failed with a kind or type name only: an error's message can hold the
+    provider's text, which can echo the prompt."""
+    span.set_status(Status(StatusCode.ERROR))
+    span.set_attribute("error.type", kind)
 
 
 def _usage(result: object) -> Usage | None:

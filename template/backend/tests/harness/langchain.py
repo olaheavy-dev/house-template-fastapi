@@ -4,7 +4,9 @@ exactly as in the app and nothing reaches a provider."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+import uuid
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Sequence
+from contextlib import aclosing
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -19,9 +21,15 @@ from langchain_core.exceptions import (
     ModelTimeoutError,
 )
 from langchain_core.language_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage, BaseMessage, convert_to_messages
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    convert_to_messages,
+)
 from langchain_core.messages.ai import UsageMetadata
-from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_core.runnables import Runnable, RunnableLambda
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from pydantic import BaseModel as PydanticModel
@@ -30,9 +38,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.llm.core.budget import Meter
 from app.llm.core.redaction import Redactor
+from app.llm.langchain import checkpoints, steps
 from app.llm.langchain.gateway import Gateway
 from app.settings import Settings
-from tests.harness import Failure, FakeEmbeddingsApi, Message, Reply
+from tests.harness import AsksTool, Failure, FakeEmbeddingsApi, Message, Reply
 
 # The LangChain exception each failure kind raises (a plain RuntimeError for "unknown").
 ERRORS: dict[str, type[BaseException]] = {
@@ -69,10 +78,27 @@ def _answer(reply: Reply) -> AIMessage:
     return AIMessage(reply.text, usage_metadata=usage)
 
 
+def offers_tools(kwargs: dict[str, Any]) -> bool:
+    return bool(kwargs.get("tools")) and kwargs.get("tool_choice") != "none"
+
+
+def _asks(item: AsksTool, kwargs: dict[str, Any]) -> AIMessage:
+    given, produced = item.usage
+    usage: UsageMetadata = {
+        "input_tokens": given,
+        "output_tokens": produced,
+        "total_tokens": given + produced,
+    }
+    if not offers_tools(kwargs):
+        return AIMessage(item.text, usage_metadata=usage)
+    call = {"name": item.name, "args": item.args, "id": f"call_{uuid.uuid4().hex[:8]}"}
+    return AIMessage("", tool_calls=[call], usage_metadata=usage)
+
+
 class ScriptedModel(GenericFakeChatModel):
     """Answers (or fails) from a script, one item per call, and remembers what it was given."""
 
-    script: list[Reply | Failure] = Field(default_factory=list)
+    script: list[Reply | Failure | AsksTool] = Field(default_factory=list)
     seen: list[list[BaseMessage]] = Field(default_factory=list)
     seen_kwargs: list[dict[str, Any]] = Field(default_factory=list)
 
@@ -103,7 +129,32 @@ class ScriptedModel(GenericFakeChatModel):
         item = self.script.pop(0)
         if isinstance(item, Failure):
             raise _error(item)
+        if isinstance(item, AsksTool):
+            return ChatResult(generations=[ChatGeneration(message=_asks(item, kwargs))])
         return ChatResult(generations=[ChatGeneration(message=_answer(item))])
+
+    async def _astream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        """The scripted reply in its pieces, the usage on the last one (as providers report it)."""
+        self.seen.append(list(messages))
+        self.seen_kwargs.append(dict(kwargs))
+        item = self.script.pop(0)
+        if isinstance(item, Failure):
+            raise _error(item)
+        if isinstance(item, AsksTool):  # agents are run with ainvoke in the parity tests
+            raise AssertionError("the harness does not stream a scripted tool call")
+        pieces = item.streamed()
+        for number, piece in enumerate(pieces, start=1):
+            usage = _answer(item).usage_metadata if number == len(pieces) else None
+            chunk = ChatGenerationChunk(message=AIMessageChunk(content=piece, usage_metadata=usage))
+            if run_manager is not None:
+                await run_manager.on_llm_new_token(piece, chunk=chunk)
+            yield chunk
 
 
 class LangChainHarness:
@@ -117,7 +168,9 @@ class LangChainHarness:
     def meter(self, gateway: Gateway) -> Meter:
         return gateway.guard.meter
 
-    def install_scripted(self, gateway: Gateway, script: Sequence[Reply | Failure]) -> None:
+    def install_scripted(
+        self, gateway: Gateway, script: Sequence[Reply | Failure | AsksTool]
+    ) -> None:
         gateway._model = ScriptedModel(
             messages=iter([]), script=list(script), seen=[], callbacks=[gateway.guard]
         )
@@ -190,6 +243,78 @@ class LangChainHarness:
             return response_format.model_json_schema()  # what the provider SDK would send
         return cast("dict[str, Any] | None", response_format)
 
+    async def stream(
+        self,
+        gateway: Gateway,
+        messages: Sequence[Message],
+        *,
+        take: int | None = None,
+        tags: dict[str, Any] | None = None,
+    ) -> list[str]:
+        config: Any = {"metadata": dict(tags)} if tags else None
+        out: list[str] = []
+        chunks = gateway.model().astream(convert_to_messages(list(messages)), config=config)
+        async with aclosing(cast(AsyncGenerator[Any, None], chunks)) as stream:
+            async for chunk in stream:
+                if chunk.text:
+                    out.append(chunk.text)
+                if take is not None and len(out) >= take:
+                    break
+        return out
+
+    async def run_agent(
+        self,
+        gateway: Gateway,
+        question: str,
+        tools: Sequence[Callable[..., Any]],
+        *,
+        tags: dict[str, Any] | None = None,
+        instructions: str | None = None,
+    ) -> tuple[str, bool]:
+        agent = gateway.agent(list(tools), system_prompt=instructions)
+        thread_id = f"parity-{uuid.uuid4()}"
+        try:
+            state = await agent.ainvoke(
+                {"messages": [HumanMessage(question)]},
+                config={"configurable": {"thread_id": thread_id}, "metadata": dict(tags or {})},
+            )
+        finally:
+            # The test database can outlive the run (TEST_DATABASE_URL): keep no thread.
+            if gateway.checkpointer is not None:
+                await gateway.checkpointer.adelete_thread(thread_id)
+        return str(state["messages"][-1].text), steps.step_limit_reached(state)
+
+    async def open_threads(
+        self, gateway: Gateway, settings: Settings
+    ) -> Callable[[], Awaitable[None]]:
+        saver, pool = await checkpoints.open_checkpointer(settings)
+        gateway.checkpointer = saver
+        return pool.close
+
+    async def thread_turn(
+        self,
+        gateway: Gateway,
+        *,
+        user_ref: str,
+        conversation_id: str,
+        messages: Sequence[Message],
+        tools: Sequence[Callable[..., Any]] = (),
+    ) -> str:
+        state = await gateway.agent(list(tools)).ainvoke(
+            {"messages": convert_to_messages(list(messages))},
+            config={"configurable": {"thread_id": f"{user_ref}:{conversation_id}"}},
+        )
+        return str(state["messages"][-1].text)
+
+    async def forget_threads(
+        self, gateway: Gateway, *, user_ref: str, conversation_id: str
+    ) -> None:
+        assert gateway.checkpointer is not None
+        await gateway.checkpointer.adelete_thread(f"{user_ref}:{conversation_id}")
+
+    def last_request_offered_tools(self, gateway: Gateway) -> bool:
+        return offers_tools(self._scripted(gateway).seen_kwargs[-1])
+
     def last_request_messages(self, gateway: Gateway) -> list[Message] | None:
         seen = self._scripted(gateway).seen
         if not seen:
@@ -227,9 +352,14 @@ class LangChainHarness:
         )
 
     async def embed_query(
-        self, gateway: Gateway, text: str, *, user_ref: str | None = None
+        self,
+        gateway: Gateway,
+        text: str,
+        *,
+        feature: str | None = None,
+        user_ref: str | None = None,
     ) -> list[float]:
-        return await gateway.embeddings().aembed_query(text, user_ref=user_ref)
+        return await gateway.embeddings().aembed_query(text, feature=feature, user_ref=user_ref)
 
     def raised_by_embeddings(self, failure: Failure) -> type[BaseException]:
         # The same family as chat calls: the embeddings adapter turns the core's ProviderError

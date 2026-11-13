@@ -27,13 +27,18 @@ connections that belong to the loop that opened them.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from typing import Annotated, Any
 
 import anthropic
 import structlog
-from agent_framework import FunctionInvocationConfiguration, SupportsChatGetResponse
+from agent_framework import (
+    Agent,
+    FunctionInvocationConfiguration,
+    InMemoryHistoryProvider,
+    SupportsChatGetResponse,
+)
 
 # Not exported by agent-framework-core 1.25.0; it is the function MAF itself sorts middleware with.
 # The pins move together by hand (decision 0002), and a test calls it, so a rename fails loudly.
@@ -52,9 +57,13 @@ from app.llm.core.prices import MICRO_USD
 from app.llm.core.prompts import Prompt
 from app.llm.core.redaction import Redactor, choose_detectors
 from app.llm.core.steps import StepLimit
+from app.llm.maf import tracing
+from app.llm.maf.checkpoints import PostgresCheckpointStorage
 from app.llm.maf.embeddings import GatewayEmbeddings
 from app.llm.maf.middleware import BudgetMiddleware, tagged
 from app.llm.maf.redaction import RedactionMiddleware, RedactionUnavailable
+from app.llm.maf.sessions import PostgresSessionStore
+from app.llm.maf.steps import RUN_OPTION, StepRun, flagged
 from app.llm.redaction_rules import DETECTORS
 from app.problems import Problem
 from app.settings import Settings
@@ -70,7 +79,21 @@ class NoExtraChatMiddleware:
     client's own chain, so it would run closer to the provider than redaction and the budget and
     could add personal data or spend unmetered. The gateway's clients refuse it instead (fail
     closed): add chat middleware to the gateway's chain, where it is deliberate. Function
-    middleware (around tools) is not affected."""
+    middleware (around tools) is not affected.
+
+    Each `get_response` is one run of the agent step limit (app/llm/maf/steps.py): it gets a fresh
+    StepRun in its options, which the budget middleware counts against, and its result is flagged
+    if its last call was the forced final answer."""
+
+    def get_response(
+        self, messages: Any, *, stream: bool = False, options: Any = None, **kwargs: Any
+    ) -> Any:
+        run = StepRun()
+        with_run = {**(options or {}), RUN_OPTION: run}
+        result = super().get_response(  # type: ignore[misc]
+            messages, stream=stream, options=with_run, **kwargs
+        )
+        return flagged(result, run)
 
     def _get_chat_middleware_pipeline(self, middleware: Any) -> Any:
         if categorize_middleware(list(middleware or []))["chat"]:
@@ -164,9 +187,14 @@ class Gateway:
             self.meter,
             max_tokens=settings.llm_max_tokens,
             sends_store=llm_model.startswith("openai:"),
-            final_only=settings.agent_max_model_calls == 1,
+            step_limit=self.step_limit,
         )
         self.middleware: list[Any] = [self.redaction, self.budget]
+        # MAF's instrumentation, and LangSmith over OpenTelemetry when configured (never in tests).
+        self.tracing = tracing.configure(settings)
+        # Conversations stored in Postgres, keyed by the current user (app/llm/maf/sessions.py).
+        self.sessions = PostgresSessionStore(sessionmaker)
+        self._sessionmaker = sessionmaker
 
         # Without OpenAI's key there are no embeddings, and asking for them gets a 503.
         self._embeddings: GatewayEmbeddings | None = None
@@ -228,6 +256,51 @@ class Gateway:
         check_chain(self._client, self.middleware)
         return self._client
 
+    def agent(
+        self,
+        tools: Sequence[Any] = (),
+        *,
+        instructions: str | None = None,
+        **options: Any,
+    ) -> Agent[Any]:
+        """A tool-calling agent (MAF's Agent) on the gateway's client, so every model call of its
+        tool loop is redacted and budgeted:
+
+            agent = gateway.agent([search_courses], instructions=prompt.text)
+            with gateway.call_options(user, "answer", prompt):
+                response = await agent.run(question)
+            if step_limit_reached(response):  # app.llm.maf.steps
+                ...  # the answer was cut short at the model-call limit
+
+        A run makes at most AGENT_MAX_MODEL_CALLS model calls (default 13); the last one is made
+        without tools, so the model writes a final answer, and the response is flagged. The count
+        restarts on every run. `options` go to MAF's Agent (`name`, `default_options`,
+        `context_providers`, agent and function `middleware`); chat middleware is refused (it
+        would run after redaction and the budget).
+
+        To keep a conversation, give the agent a stable `name` and load and save its session with
+        `gateway.sessions` (app/llm/maf/sessions.py). With no context providers given, the agent
+        keeps its history in the session with MAF's InMemoryHistoryProvider, added here
+        explicitly (MAF's docs: "add it explicitly when you want deterministic local memory
+        behavior")."""
+        if not options.get("context_providers"):
+            options["context_providers"] = [InMemoryHistoryProvider()]
+        return Agent(self.client(), instructions, tools=list(tools), **options)
+
+    def checkpoints(self, user: User) -> PostgresCheckpointStorage:
+        """MAF's CheckpointStorage for this user's workflow runs, in Postgres
+        (app/llm/maf/checkpoints.py): pass it as `checkpoint_storage` to a WorkflowBuilder, or to
+        `workflow.run(checkpoint_id=..., checkpoint_storage=...)` to resume. A user only ever sees
+        their own checkpoints."""
+        return PostgresCheckpointStorage(self._sessionmaker, user)
+
+    async def delete_user_data(self, user_ref: str) -> tuple[int, int]:
+        """Delete everything the gateway stored for a user: their agent sessions and workflow
+        checkpoints (both hold conversation text). Returns how many of each went."""
+        sessions = await self.sessions.delete_user(user_ref)
+        checkpoints = await PostgresCheckpointStorage.delete_user(self._sessionmaker, user_ref)
+        return sessions, checkpoints
+
     def embeddings(self) -> GatewayEmbeddings:
         """Embeddings under the same daily budget; always await them:
 
@@ -261,7 +334,9 @@ class Gateway:
             yield
 
     async def aclose(self) -> None:
-        """Closes the SDK clients (MAF leaves a client it was given open)."""
+        """Closes the SDK clients (MAF leaves a client it was given open) and flushes the spans
+        still to send, within a time limit."""
+        self.tracing.shutdown()
         if self._sdk is not None:
             await self._sdk.close()
         if self._embeddings is not None:

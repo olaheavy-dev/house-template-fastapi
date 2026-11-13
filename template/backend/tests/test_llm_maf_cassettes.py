@@ -25,15 +25,18 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from agent_framework import Message
+from agent_framework import Message, WorkflowBuilder
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.auth import User
 from app.llm import prices
 from app.llm.core.budget import LlmCall
 from app.llm.core.prices import cost
 from app.llm.core.usage import Usage
 from app.llm.maf.gateway import Gateway
+from app.llm.maf.steps import step_limit_reached
 from app.settings import Settings
 from tests.models import CHAT_MODEL
 
@@ -119,6 +122,185 @@ async def test_an_anthropic_call_is_redacted_sets_its_limit_and_settles(
     assert EMAIL not in json.dumps(body)
     assert call.redacted_count == 1
     settled_at_its_price(call)
+
+
+class Lead(BaseModel):
+    """A lead to write to."""
+
+    email: str
+
+
+async def streamed(
+    settings: Settings, db_session: AsyncSession, model: str, vcr: Any
+) -> tuple[LlmCall, dict[str, Any], str, Any]:
+    """One streamed call that asks for a schema (#35 PR 3): the text as the consumer read it, the
+    final response's value, the ledger row and the request body."""
+    sessions = async_sessionmaker(
+        bind=db_session.bind, join_transaction_mode="create_savepoint", expire_on_commit=False
+    )
+    gateway = Gateway(settings.model_copy(update={"llm_model": model}), lambda: sessions)
+    gateway.meter.cap, gateway.meter.today = 1_000_000, lambda: DAY
+    pieces: list[str] = []
+    stream = gateway.client().get_response(
+        [Message("user", [f"Give the lead's email as JSON. The lead is {EMAIL}."])],
+        stream=True,
+        options={"response_format": Lead},
+    )
+    async with stream:
+        async for update in stream:
+            pieces += [
+                c.text
+                for c in update.contents
+                if c.type == "text" and c.text and c.merge_mode != "replace"
+            ]
+        final = await stream.get_final_response()
+    await gateway.aclose()
+    [call] = (await db_session.scalars(select(LlmCall).where(LlmCall.day == DAY))).all()
+    [request] = vcr.requests
+    return call, json.loads(request.body), "".join(pieces), final.value
+
+
+@pytest.mark.vcr
+@pytest.mark.block_network
+@pytest.mark.usefixtures("cassette_or_skip")
+@pytest.mark.parametrize("model", [CHAT_MODEL, ANTHROPIC_MODEL], ids=["openai", "anthropic"])
+async def test_a_streamed_structured_call_is_redacted_restored_and_settled(
+    settings: Settings, db_session: AsyncSession, vcr: Any, model: str
+) -> None:
+    # The real APIs' streams: the request holds the placeholder, the text read and the parsed
+    # value hold the original, and the row settles from the usage the stream reported at its end
+    # (Anthropic's cumulative snapshots counted once).
+    call, body, text, value = await streamed(settings, db_session, model, vcr)
+    assert body["stream"] is True
+    assert EMAIL not in json.dumps(body)
+    assert type(value) is Lead
+    assert value.email == EMAIL
+    assert EMAIL in text
+    assert call.redacted_count == 1
+    settled_at_its_price(call)
+
+
+def add(a: int, b: int) -> int:
+    """Add two whole numbers."""
+    return a + b
+
+
+@pytest.mark.vcr
+@pytest.mark.block_network
+@pytest.mark.usefixtures("cassette_or_skip")
+@pytest.mark.parametrize("model", [CHAT_MODEL, ANTHROPIC_MODEL], ids=["openai", "anthropic"])
+async def test_an_agent_run_stops_at_its_limit_with_a_real_answer(
+    settings: Settings, db_session: AsyncSession, vcr: Any, model: str
+) -> None:
+    # The real APIs at the step limit (#35 PR 4): with a limit of 2 the model asks for the tool
+    # on call 1, call 2 is sent with tool_choice "none" and is answered in text, and the run is
+    # flagged. Two requests, two settled rows.
+    sessions = async_sessionmaker(
+        bind=db_session.bind, join_transaction_mode="create_savepoint", expire_on_commit=False
+    )
+    gateway = Gateway(
+        settings.model_copy(update={"llm_model": model, "agent_max_model_calls": 2}),
+        lambda: sessions,
+    )
+    gateway.meter.cap, gateway.meter.today = 1_000_000, lambda: DAY
+    agent = gateway.agent([add], instructions="Always use the add tool for arithmetic.")
+    response = await agent.run("Use the add tool to add 2 and 3, then add 4 to that result.")
+    await gateway.aclose()
+    assert response.text
+    assert step_limit_reached(response)
+    first, last = [json.loads(request.body) for request in vcr.requests]
+    assert first.get("tools")
+    choice = last.get("tool_choice")
+    assert choice == "none" or (isinstance(choice, dict) and choice.get("type") == "none")
+    calls = (await db_session.scalars(select(LlmCall).where(LlmCall.day == DAY))).all()
+    assert len(calls) == 2
+    for call in calls:
+        settled_at_its_price(call)
+
+
+@pytest.mark.vcr
+@pytest.mark.block_network
+@pytest.mark.usefixtures("cassette_or_skip")
+@pytest.mark.parametrize("model", [CHAT_MODEL, ANTHROPIC_MODEL], ids=["openai", "anthropic"])
+async def test_a_stored_conversation_is_resent_after_a_restart(
+    settings: Settings, db_session: AsyncSession, vcr: Any, model: str
+) -> None:
+    # The real APIs with a stored session (#35 PR 5): turn 1 states a code word; a new gateway
+    # (a restart) loads the session from Postgres and turn 2 asks for it. The second request
+    # carries the first turn, and the model answers from it.
+    sessions = async_sessionmaker(
+        bind=db_session.bind, join_transaction_mode="create_savepoint", expire_on_commit=False
+    )
+    who = User(id="u_cassette")
+
+    async def turn(question: str) -> str:
+        gateway = Gateway(settings.model_copy(update={"llm_model": model}), lambda: sessions)
+        gateway.meter.cap, gateway.meter.today = 1_000_000, lambda: DAY
+        agent = gateway.agent([], name="memory", instructions="Answer in one short sentence.")
+        session = await gateway.sessions.load(who, "c_cassette", agent)
+        response = await agent.run(question, session=session)
+        await gateway.sessions.save(who, "c_cassette", agent, session)
+        await gateway.aclose()
+        return response.text
+
+    await turn("Remember this code word for later: ORCHID. Reply with OK.")
+    answer = await turn("What was the code word I gave you?")
+    assert "ORCHID" in answer.upper()
+    first, second = [json.dumps(json.loads(request.body)) for request in vcr.requests]
+    assert "ORCHID" in first
+    assert "ORCHID" in second  # the stored history was sent again
+
+
+@pytest.mark.vcr
+@pytest.mark.block_network
+@pytest.mark.usefixtures("cassette_or_skip")
+@pytest.mark.parametrize("model", [CHAT_MODEL, ANTHROPIC_MODEL], ids=["openai", "anthropic"])
+async def test_a_workflow_with_an_agent_resumes_from_its_checkpoint_after_a_restart(
+    settings: Settings, db_session: AsyncSession, vcr: Any, model: str
+) -> None:
+    # The real APIs in a checkpointed workflow (#35 PR 6): an agent answers, the workflow's
+    # checkpoints are stored in Postgres, and a new gateway (a restart) resumes from the first one,
+    # so the agent runs again from the stored input. The agent's id is stable, as a workflow's
+    # graph must be the same to resume.
+    sessions = async_sessionmaker(
+        bind=db_session.bind, join_transaction_mode="create_savepoint", expire_on_commit=False
+    )
+    who = User(id="u_cassette")
+
+    def build() -> tuple[Gateway, Any, Any]:
+        gateway = Gateway(settings.model_copy(update={"llm_model": model}), lambda: sessions)
+        gateway.meter.cap, gateway.meter.today = 1_000_000, lambda: DAY
+        agent = gateway.agent(
+            [], name="writer", id="writer", instructions="Answer in one short sentence."
+        )
+        storage = gateway.checkpoints(who)
+        return (
+            gateway,
+            storage,
+            WorkflowBuilder(
+                start_executor=agent, checkpoint_storage=storage, name="one-agent"
+            ).build(),
+        )
+
+    def texts(events: list[Any]) -> str:
+        return " ".join(str(getattr(event.data, "text", event.data)) for event in events)
+
+    gateway, storage, workflow = build()
+    first = [e async for e in workflow.run("Reply with the word ORCHID.", stream=True)]
+    await gateway.aclose()
+    assert "ORCHID" in texts([e for e in first if e.type == "output"]).upper()
+    [entry, *_] = await storage.list_checkpoints(workflow_name="one-agent")
+
+    gateway, storage, workflow = build()  # a restart: the checkpoint comes back from Postgres
+    again = [
+        e
+        async for e in workflow.run(
+            checkpoint_id=entry.checkpoint_id, checkpoint_storage=storage, stream=True
+        )
+    ]
+    await gateway.aclose()
+    assert "ORCHID" in texts([e for e in again if e.type == "output"]).upper()
+    assert len(vcr.requests) == 2
 
 
 def test_the_maf_cassettes_hold_no_credentials_or_personal_data() -> None:

@@ -29,8 +29,9 @@ from tests.models import CHAT_MODEL, EMBEDDING_MODEL
 from tests.recording import missing_recording_keys
 
 # Before langsmith first reads them (it caches them): tests never send traces or sync results to
-# LangSmith, whatever the developer's shell exports. Evals (`make eval`, LLM_EVAL=1) upload an
-# experiment and its traces when a LangSmith key is set, from the shell or backend/.env.
+# LangSmith, whatever the developer's shell exports; the LangSmith pytest plugin the evals use is
+# installed with either framework. Evals (`make eval`, LLM_EVAL=1) upload an experiment (with
+# LangChain, its model calls too) when a LangSmith key is set, from the shell or backend/.env.
 _upload = os.environ.get("LLM_EVAL") == "1" and bool(os.environ.get("LANGSMITH_API_KEY"))
 os.environ["LANGSMITH_TRACING"] = os.environ["LANGSMITH_TEST_TRACKING"] = str(_upload).lower()
 # A batching LangSmith client (a gateway with tracing on) must not call out about compression.

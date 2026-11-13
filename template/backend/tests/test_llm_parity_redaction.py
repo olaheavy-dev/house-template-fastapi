@@ -16,7 +16,9 @@ from datetime import date
 from typing import Annotated, Any
 
 import anyio
+import httpx
 import pytest
+from fastapi import FastAPI
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -163,7 +165,8 @@ async def test_a_chat_calls_row_counts_the_values_replaced_and_is_null_only_when
     await framework.ask(gateway, [user("a freehold")])  # redaction ran, found nothing
     off = chat(llm_redaction="off")
     await framework.ask(off, [user(EMAIL)])  # redaction off
-    assert [row.redacted_count for row in await chat_rows(db_session)] == [3, 0, None]
+    # Rows of one test share created_at (now() is the transaction's start), so compare as a set.
+    assert {row.redacted_count for row in await chat_rows(db_session)} == {3, 0, None}
 
 
 async def test_with_redaction_off_the_messages_are_sent_exactly_as_they_are(
@@ -184,7 +187,10 @@ async def test_a_call_is_reserved_for_the_text_that_is_sent_not_the_text_given(
     await framework.ask(gateway, [user("Write to [EMAIL_1] please")])
     off = chat(llm_redaction="off")
     await framework.ask(off, [user(f"Write to {EMAIL} please")])
-    redacted, as_written, unredacted = [r.reserved_micro_usd for r in await chat_rows(db_session)]
+    # Each row is told apart by its count (1, 0, NULL when off), not by created_at: the rows of one
+    # test share it (now() is the transaction's start), so their order is not defined.
+    by_count = {r.redacted_count: r.reserved_micro_usd for r in await chat_rows(db_session)}
+    redacted, as_written, unredacted = by_count[1], by_count[0], by_count[None]
     assert redacted == as_written
     assert unredacted > redacted
 
@@ -212,6 +218,37 @@ async def test_the_logs_of_a_chat_call_hold_no_value(
     text = repr(logs)
     for value in (EMAIL, PHONE, NAME):
         assert value not in text
+
+
+async def test_a_streamed_answer_gets_the_originals_back_even_when_a_placeholder_is_split(
+    framework: Harness, chat: Callable[..., Any]
+) -> None:
+    # Tests 15 and 16: the placeholder arrives in three pieces; what the consumer reads joins to
+    # the restored answer, and the provider was sent the placeholder.
+    gateway = chat(Reply("Mail [EMAIL_1] now", pieces=("Mail [EM", "AIL", "_1] now")))
+    pieces = await framework.stream(gateway, [user(f"Write to {EMAIL}")])
+    assert "".join(pieces) == f"Mail {EMAIL} now"
+    assert not any("[EM" in piece for piece in pieces)
+    assert framework.last_request_messages(gateway) == [user("Write to [EMAIL_1]")]
+
+
+async def test_a_streamed_answer_counts_an_invented_placeholder_once(
+    framework: Harness, chat: Callable[..., Any]
+) -> None:
+    gateway = chat(Reply("[EMAIL_1] and [EMAIL_9]", pieces=("[EMAIL_1] and [EM", "AIL_9]")))
+    with capture_logs() as logs:
+        pieces = await framework.stream(gateway, [user(f"Please email {EMAIL}")])
+    assert "".join(pieces) == f"{EMAIL} and [EMAIL_9]"
+    assert [log["count"] for log in logs if log["event"] == "llm_unrestored_placeholders"] == [1]
+
+
+async def test_a_streamed_calls_row_counts_the_values_replaced(
+    framework: Harness, chat: Callable[..., Any], db_session: AsyncSession
+) -> None:
+    gateway = chat(Reply("ok", pieces=("o", "k")))
+    await framework.stream(gateway, [user(f"{EMAIL}, {PHONE}")])
+    [row] = await chat_rows(db_session)
+    assert (row.status, row.redacted_count) == ("settled", 2)
 
 
 def lookup_lead(
@@ -267,6 +304,38 @@ async def test_an_output_schema_is_sent_with_placeholders_and_parsed_into_the_ca
     # The answer is the caller's own class, with the original back in its field.
     assert type(parsed) is Lead
     assert parsed.email == EMAIL
+
+
+async def test_a_structured_answer_that_does_not_fit_its_schema_is_a_502_settled_at_its_cost(
+    framework: Harness,
+    chat: Callable[..., Any],
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    # The founder's decision on #35 (11 Nov 2026): the same 502 under every framework, the call
+    # settled at what it cost (the provider did the work), and nothing of the answer in the
+    # response (it is the model's text, and can hold the user's data).
+    gateway = chat(Reply('{"email": 5, "note": "priya.shah@example.com"}'))
+
+    @app.get("/lead")
+    async def lead() -> None:
+        await framework.ask_structured(gateway, [user("Extract the lead.")], Lead)
+
+    with capture_logs() as logs:
+        response = await client.get("/lead")
+    assert response.status_code == 502
+    assert response.headers["content-type"] == "application/problem+json"
+    assert (
+        response.json()["detail"] == "The language model's answer didn't match the expected format."
+    )
+    assert EMAIL not in response.text
+    assert EMAIL not in repr(logs)
+    assert [log["event"] for log in logs if "schema" in log["event"]] == ["llm_schema_mismatch"]
+    [row] = await chat_rows(db_session)
+    assert row.status == "settled"
+    assert row.cost_micro_usd is not None
+    assert 0 < row.cost_micro_usd <= row.reserved_micro_usd
 
 
 async def test_definitions_with_nothing_to_replace_or_with_redaction_off_are_sent_as_given(

@@ -6,7 +6,9 @@ client raises (the SDK's error wrapped by MAF's own wrapper)."""
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+import json
+import uuid
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -29,13 +31,15 @@ from agent_framework_anthropic._chat_client import _wrap_anthropic_error
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.auth import User
 from app.llm.core.budget import CallTags, Meter
 from app.llm.core.errors import ProviderError
 from app.llm.core.redaction import Redactor
 from app.llm.maf.gateway import Gateway, NoExtraChatMiddleware, check_chain
 from app.llm.maf.middleware import tagged
+from app.llm.maf.steps import step_limit_reached
 from app.settings import Settings
-from tests.harness import Failure, FakeEmbeddingsApi, Reply
+from tests.harness import AsksTool, Failure, FakeEmbeddingsApi, Reply
 from tests.harness import Message as Neutral
 
 # What a failed chat call raises for each kind: the core's ProviderError, which the middleware makes
@@ -113,7 +117,8 @@ class ScriptedBase(BaseChatClient[Any]):
         options: Mapping[str, Any],
         **kwargs: Any,
     ) -> Awaitable[ChatResponse[Any]] | ResponseStream[ChatResponseUpdate, ChatResponse[Any]]:
-        assert not stream, "the gateway refuses streamed calls before they reach the provider"
+        if stream:
+            return self._stream(messages, options)
 
         async def answer() -> ChatResponse[Any]:
             self.seen.append(list(messages))
@@ -126,6 +131,8 @@ class ScriptedBase(BaseChatClient[Any]):
                 return item
             if isinstance(item, Failure):
                 raise error_of(item)
+            if isinstance(item, AsksTool):
+                return _asks(item, options)
             response = ChatResponse(
                 messages=[Message("assistant", [item.text])], model="scripted-model"
             )
@@ -137,6 +144,69 @@ class ScriptedBase(BaseChatClient[Any]):
             return response
 
         return answer()
+
+    def _stream(
+        self, messages: Sequence[Message], options: Mapping[str, Any]
+    ) -> ResponseStream[ChatResponseUpdate, ChatResponse[Any]]:
+        """The scripted item as a provider streams it (adapted from the founder's MAF lab): the
+        text in its pieces, then any other contents (tool calls), then the usage."""
+
+        async def updates() -> AsyncGenerator[ChatResponseUpdate]:
+            self.seen.append(list(messages))
+            self.seen_options.append(dict(options))
+            item = self.script.pop(0)
+            if isinstance(item, Failure):
+                raise error_of(item)
+            if isinstance(item, AsksTool):
+                item = _asks(item, options)
+            if isinstance(item, ChatResponse):
+                for message in item.messages:
+                    yield ChatResponseUpdate(
+                        role="assistant", contents=list(message.contents), message_id="msg_scripted"
+                    )
+                if item.usage_details is not None:
+                    yield _usage_update(item.usage_details)
+                return
+            for piece in item.streamed():
+                yield ChatResponseUpdate(
+                    role="assistant", contents=[Content.from_text(piece)], message_id="msg_scripted"
+                )
+            if item.usage is not None:
+                given, produced = item.usage
+                yield _usage_update(
+                    UsageDetails(input_token_count=given, output_token_count=produced)
+                )
+
+        response_format = options.get("response_format")
+
+        def final(collected: Sequence[ChatResponseUpdate]) -> ChatResponse[Any]:
+            return ChatResponse.from_updates(collected, output_format_type=response_format)
+
+        return ResponseStream(updates(), finalizer=final)
+
+
+def offers_tools(options: Mapping[str, Any]) -> bool:
+    return bool(options.get("tools")) and options.get("tool_choice") != "none"
+
+
+def _asks(item: AsksTool, options: Mapping[str, Any]) -> ChatResponse[Any]:
+    given, produced = item.usage
+    if offers_tools(options):
+        call = Content.from_function_call(
+            f"call_{uuid.uuid4().hex[:8]}", item.name, arguments=json.dumps(item.args)
+        )
+        message = Message("assistant", [call])
+    else:
+        message = Message("assistant", [item.text])
+    response = ChatResponse(messages=[message], model="scripted-model")
+    response.usage_details = UsageDetails(input_token_count=given, output_token_count=produced)
+    return response
+
+
+def _usage_update(usage: UsageDetails) -> ChatResponseUpdate:
+    return ChatResponseUpdate(
+        role="assistant", contents=[Content.from_usage(usage)], message_id="msg_scripted"
+    )
 
 
 class ScriptedClient(
@@ -286,6 +356,72 @@ class MafHarness:
             return response_format.model_json_schema()  # what the provider client would send
         return cast("dict[str, Any] | None", response_format)
 
+    async def stream(
+        self,
+        gateway: Gateway,
+        messages: Sequence[Neutral],
+        *,
+        take: int | None = None,
+        tags: dict[str, Any] | None = None,
+    ) -> list[str]:
+        out: list[str] = []
+        with tagged(CallTags(**(tags or {}))):
+            stream = gateway.client().get_response(
+                [to_maf(message) for message in messages], stream=True
+            )
+            async with stream:
+                async for update in stream:
+                    if update.text:
+                        out.append(update.text)
+                    if take is not None and len(out) >= take:
+                        break
+        return out
+
+    async def run_agent(
+        self,
+        gateway: Gateway,
+        question: str,
+        tools: Sequence[Callable[..., Any]],
+        *,
+        tags: dict[str, Any] | None = None,
+        instructions: str | None = None,
+    ) -> tuple[str, bool]:
+        with tagged(CallTags(**(tags or {}))):
+            response = await gateway.agent(list(tools), instructions=instructions).run(question)
+        return response.text, step_limit_reached(response)
+
+    async def open_threads(
+        self, gateway: Gateway, settings: Settings
+    ) -> Callable[[], Awaitable[None]]:
+        async def close() -> None:  # the store uses the gateway's own sessionmaker
+            return None
+
+        return close
+
+    async def thread_turn(
+        self,
+        gateway: Gateway,
+        *,
+        user_ref: str,
+        conversation_id: str,
+        messages: Sequence[Neutral],
+        tools: Sequence[Callable[..., Any]] = (),
+    ) -> str:
+        agent = gateway.agent(list(tools), name="parity")
+        user = User(id=user_ref)
+        session = await gateway.sessions.load(user, conversation_id, agent)
+        response = await agent.run([to_maf(message) for message in messages], session=session)
+        await gateway.sessions.save(user, conversation_id, agent, session)
+        return response.text
+
+    async def forget_threads(
+        self, gateway: Gateway, *, user_ref: str, conversation_id: str
+    ) -> None:
+        await gateway.sessions.delete_user(user_ref)
+
+    def last_request_offered_tools(self, gateway: Gateway) -> bool:
+        return offers_tools(self._scripted(gateway).seen_options[-1])
+
     def last_request_messages(self, gateway: Gateway) -> list[Neutral] | None:
         seen = self._scripted(gateway).seen
         return [to_neutral(message) for message in seen[-1]] if seen else None
@@ -315,9 +451,14 @@ class MafHarness:
         return await gateway.embeddings().embed_documents(texts, feature=feature, user_ref=user_ref)
 
     async def embed_query(
-        self, gateway: Gateway, text: str, *, user_ref: str | None = None
+        self,
+        gateway: Gateway,
+        text: str,
+        *,
+        feature: str | None = None,
+        user_ref: str | None = None,
     ) -> list[float]:
-        return await gateway.embeddings().embed_query(text, user_ref=user_ref)
+        return await gateway.embeddings().embed_query(text, feature=feature, user_ref=user_ref)
 
     def raised_by_embeddings(self, failure: Failure) -> type[BaseException]:
         # The core's ProviderError, which app.llm.core.errors answers like a chat call's.
