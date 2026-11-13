@@ -7,7 +7,7 @@ Last updated: 13 Nov 2026.
 ## Where things stand
 
 - **Released:** v0.10.1 (13 Nov 2026). 0.10.0 added the `llm: maf` answer (Microsoft Agent Framework, epic #35, PRs #112 and #118 to #123); 0.10.1 is a dependency update (#124).
-- **Open pull requests:** none, apart from the one updating this file.
+- **Open pull requests:** none. A pull request that only updates this file can't list itself, so it isn't counted here.
 - **#35 (MAF):** closed on 13 Nov 2026, with every planned PR merged. Its leftover is #127.
 
 ## Next
