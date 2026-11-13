@@ -7,8 +7,8 @@ Last updated: 13 Nov 2026.
 ## Where things stand
 
 - **Released:** v0.10.1 (13 Nov 2026). 0.10.0 added the `llm: maf` answer (Microsoft Agent Framework, epic #35, PRs #112 and #118 to #123); 0.10.1 is a dependency update (#124).
-- **Open pull requests:** none, apart from the one adding this file.
-- **#35 (MAF):** every planned PR is merged. The epic is still open, waiting for the owner to close it or keep it for follow-ups.
+- **Open pull requests:** none, apart from the one updating this file.
+- **#35 (MAF):** closed on 13 Nov 2026, with every planned PR merged. Its leftover is #127.
 
 ## Next
 
@@ -23,7 +23,7 @@ Last updated: 13 Nov 2026.
    - PR 3: live evals of answer quality after a trim.
 
    **Waiting for the owner's go-ahead to start PR 1.**
-2. Follow-ups the owner may want next: LangChain has no helper to delete one user's stored conversations (MAF has `gateway.delete_user_data`, which removes sessions and checkpoints). #117: adopt the shared agent workflow, including an `AGENTS.md` that points agents to this file (the repo has none yet).
+2. Follow-ups the owner may want next: #127, a LangChain `delete_user_data` to match MAF's (MAF's removes sessions and checkpoints). #117: adopt the shared agent workflow, including an `AGENTS.md` that points agents to this file (the repo has none yet).
 
 ## Blockers
 
@@ -32,8 +32,7 @@ None.
 ## Owner to-dos
 
 - Say go (or not yet) for #46 PR 1.
-- Decide whether to close #35.
-- agent-workflows #15 (issue) proposes that every repository keeps a status file. Its pull request changes the house rules, so it's a founder-only merge.
+- agent-workflows #15 (issue) proposes that every repository keeps a status file. Checked 13 Nov: agent-workflows main doesn't cover it yet. Only the adoption issues (#117 here, nextjs #21) ask for the file. Say whether to write its pull request. It changes the house rules, so it's a founder-only merge.
 
 ## Working notes for agents
 
