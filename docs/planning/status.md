@@ -32,7 +32,7 @@ None.
 ## Owner to-dos
 
 - Say go (or not yet) for #46 PR 1.
-- agent-workflows #15 (issue) proposes that every repository keeps a status file. Checked 13 Nov: agent-workflows main doesn't cover it yet. Only the adoption issues (#117 here, nextjs #21) ask for the file. Say whether to write its pull request. It changes the house rules, so it's a founder-only merge.
+- agent-workflows #15 (issue) proposes that every repository keeps a status file. Checked 13 Nov: agent-workflows main doesn't cover it yet. For now only the adoption issues (#117 here, nextjs #21) require the file. #13 has merged, so #15 is unblocked. Say whether to write its pull request. It changes the house rules, so it's a founder-only merge.
 
 ## Working notes for agents
 
