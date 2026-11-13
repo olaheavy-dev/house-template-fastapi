@@ -319,7 +319,7 @@ class Gateway:
         return context.report(
             session_context.entries(messages),
             self.price,
-            self.max_tokens,
+            session_context.output_limit(agent, self.budget),
             fixed=session_context.fixed_size(agent, self.budget),
         )
 

@@ -19,7 +19,8 @@ app/llm/maf/context.py) and asks `report` for the numbers:
   max_prompt_tokens before every call (app/llm/core/bounds.py check_prompt_size).
 - `window`: the model's context window from its price entry (app/llm/prices.py), or None when the
   entry has none.
-- `limit`: the most input a call can send: the window minus LLM_MAX_TOKENS (room for the answer).
+- `limit`: the most input a call can send: the window minus the output limit the budget reserves
+  for the answer (LLM_MAX_TOKENS, or a larger max_tokens the agent sets).
 - `prompt_limit`: the price's max_prompt_tokens, when it caps the prompt (OpenAI's entries).
 - `percent`: the higher of `tokens` as a share of `limit` and `bound` as a share of
   `prompt_limit`, to one decimal place, so 100% is where calls start failing (founder decisions,

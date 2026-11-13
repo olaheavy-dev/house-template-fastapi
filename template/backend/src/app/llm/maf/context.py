@@ -24,10 +24,11 @@ from typing import Any
 
 from agent_framework import AgentSession, InMemoryHistoryProvider, Message, SessionContext
 
+from app.llm.core.bounds import output_bound
 from app.llm.core.context import USAGE_KEY, Entry, Role, size_bound, usage_from_record
-from app.llm.maf.middleware import BudgetMiddleware, request_view
+from app.llm.maf.middleware import BudgetMiddleware, params_view, request_view
 
-__all__ = ["UsageHistoryProvider", "entries", "fixed_size", "history"]
+__all__ = ["UsageHistoryProvider", "entries", "fixed_size", "history", "output_limit"]
 
 _ROLES: dict[str, Role] = {
     "system": "system",
@@ -116,6 +117,14 @@ def fixed_size(agent: Any, budget: BudgetMiddleware) -> int:
         size_bound(request_view([], budget.sent_options(options, final=final))[0], media=[])
         for final in (False, True)
     )
+
+
+def output_limit(agent: Any, budget: BudgetMiddleware) -> int:
+    """The most the agent's calls may write, as the budget reserves it (core/bounds.py
+    output_bound): the gateway's LLM_MAX_TOKENS, or a larger max_tokens the agent sets. The window
+    keeps this much free for the answer, so the report's limit is the window minus it."""
+    options = dict(getattr(agent, "default_options", None) or {})
+    return output_bound(budget.max_tokens, params_view(budget.sent_options(options, final=False)))
 
 
 def history(agent: Any, session: AgentSession) -> list[Message]:

@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.auth import User
 from app.llm.core.bounds import INPUT_MARGIN_TOKENS
 from app.llm.core.budget import LlmCall
 from app.llm.core.errors import SchemaMismatch
@@ -408,3 +409,16 @@ async def test_the_context_report_sizes_an_agent_as_the_budget_does(make: Any, m
     # At least the budget's figure; over it only by each message's own brackets and the last
     # call's tool_choice "none".
     assert checked[0] <= reported <= checked[0] + 64
+
+
+async def test_the_context_report_keeps_an_agents_larger_output_limit_free(make: Any) -> None:
+    # An agent that may write 100,000 tokens leaves 1,000,000 - 100,000 for input in Sonnet's
+    # window, not the window minus the gateway's 1,024 (Codex on #131).
+    gateway = make()
+    agent = gateway.agent([], name="limits", default_options={"max_tokens": 100_000})
+    got = await gateway.context_report(User(id="u_limits"), "c_limits", agent)
+    assert got.limit == 1_000_000 - 100_000
+    plain = await gateway.context_report(
+        User(id="u_limits"), "c_limits", gateway.agent([], name="limits")
+    )
+    assert plain.limit == 1_000_000 - gateway.max_tokens
