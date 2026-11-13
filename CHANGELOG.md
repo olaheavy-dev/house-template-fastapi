@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/olaheavy-dev/house-template-fastapi/compare/v0.10.0...v0.10.1) (2026-11-13)
+
+
+### Bug Fixes
+
+* **deps:** bump the backend-minor-and-patch group across 1 directory with 10 updates ([#124](https://github.com/olaheavy-dev/house-template-fastapi/issues/124)) ([bc2457f](https://github.com/olaheavy-dev/house-template-fastapi/commit/bc2457f8d9e61907011dd6a8d7de2df94e532c55))
+
 ## [0.10.0](https://github.com/olaheavy-dev/house-template-fastapi/compare/v0.9.0...v0.10.0) (2026-11-13)
 
 
