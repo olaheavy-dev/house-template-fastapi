@@ -851,8 +851,8 @@ def test_updating_a_v0_8_0_project_with_defaults_deletes_nothing_and_adds_migrat
 
 @pytest.mark.filterwarnings("ignore::copier.errors.MissingFileWarning")
 def test_a_langchain_project_can_switch_to_maf_by_update_and_keeps_its_database_chain(tmp_path):
-    # #35: `copier update -d llm=maf` swaps LangChain's files (the adapter, its tests, its evals and
-    # cassettes, checkpoint_types.py) for MAF's and leaves the shared core, the budget tables and
+    # #35: `copier update -d llm=maf` swaps LangChain's files (the adapter, its tests and cassettes,
+    # checkpoint_types.py) for MAF's and leaves the shared core, the budget tables and
     # the migration chain alone; the project then equals a fresh `llm: maf` render (its own
     # lockfile aside: the user runs `make lock`). Nothing is dropped from the database.
     dst = committed_baseline_project(tmp_path / "project", llm="langchain")

@@ -54,7 +54,8 @@ REMOVED_FILES = {
 INTENDED: dict[str, str] = {
     ".claude/rules/fastapi.md":
         "names the maf extra and the `llm: maf` answer in the extras sentence; tool definitions and "
-        "output schemas are redacted; the structured-output 502 (#35)",
+        "output schemas are redacted; the structured-output 502; the eval rules are shared by both "
+        "frameworks (#35)",
     "backend/pyproject.toml":
         "the maf extra with exact pins, [tool.uv] conflicts, the MAF packages in the import contract (#35)",
     "backend/src/app/llm/core/openai_embeddings.py":
@@ -120,6 +121,14 @@ INTENDED: dict[str, str] = {
         "built on the neutral Usage, so it runs under every framework (#35)",
     "backend/tests/test_llm_parity_budget.py":
         "a shared test that a long tool definition is reserved for in full; streamed calls (#35)",
+    "backend/tests/conftest.py":
+        "the LangSmith upload switch is explained for either framework (#35)",
+    "backend/tests/evals/conftest.py":
+        "the evals run through the shared harness, so both frameworks have them (#35)",
+    "backend/tests/evals/test_gateway_evals.py":
+        "through the shared harness; a stored conversation read back after a restart (#35)",
+    "backend/tests/evals/test_redaction_evals.py":
+        "through the shared harness, so both frameworks have them (#35)",
 }
 
 # DEPENDABOT_*: what Dependabot updates in this repository's rendered output

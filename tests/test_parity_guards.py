@@ -16,6 +16,10 @@ PARITY = sorted(TESTS.glob("test_llm_parity_*.py"))
 # The harness protocol module and the harness files of each framework. Parity files may import the
 # protocol (`tests.harness`) and nothing else under tests.harness.
 HARNESS = sorted((TESTS / "harness").glob("*.py"))
+# The live evals run through the harness under either framework too. They may import LangSmith
+# (its pytest plugin is the eval tool, installed with both), skip when no key is set, and log
+# framework.name, so only the model-framework import rule holds for them.
+EVALS = sorted((TESTS / "evals").glob("*.py"))
 PROTOCOL = TESTS / "harness" / "__init__.py"
 FRAMEWORK_SEGMENT = re.compile(r"^(langchain\w*|langgraph\w*|langsmith|agent_framework\w*)$")
 FRAMEWORK_PREFIXES = ("app.llm.langchain", "app.llm.maf")
@@ -86,6 +90,24 @@ def test_parity_files_import_no_framework():
     # only its static imports are held to the rule.
     protocol = [p for p in framework_import_problems(PROTOCOL.read_text()) if "dynamic" not in p]
     assert not protocol, protocol
+
+
+def test_eval_files_import_no_model_framework():
+    assert len(EVALS) >= 3, "no eval files found"
+    for path in EVALS:
+        problems = [
+            p for p in framework_import_problems(path.read_text())
+            if not p.startswith("framework import langsmith")
+        ]
+        assert not problems, (path.name, problems)
+
+
+def test_the_eval_guard_catches_a_model_framework():
+    source = "from langsmith import testing as t\nfrom langchain_core.messages import HumanMessage"
+    problems = [p for p in framework_import_problems(source)
+                if not p.startswith("framework import langsmith")]
+    assert problems == ["framework import langchain_core.messages",
+                        "framework import langchain_core.messages.HumanMessage"]
 
 
 def test_parity_and_harness_files_never_skip():

@@ -384,9 +384,10 @@ class MafHarness:
         tools: Sequence[Callable[..., Any]],
         *,
         tags: dict[str, Any] | None = None,
+        instructions: str | None = None,
     ) -> tuple[str, bool]:
         with tagged(CallTags(**(tags or {}))):
-            response = await gateway.agent(list(tools)).run(question)
+            response = await gateway.agent(list(tools), instructions=instructions).run(question)
         return response.text, step_limit_reached(response)
 
     async def open_threads(
@@ -404,8 +405,9 @@ class MafHarness:
         user_ref: str,
         conversation_id: str,
         messages: Sequence[Neutral],
+        tools: Sequence[Callable[..., Any]] = (),
     ) -> str:
-        agent = gateway.agent([], name="parity")
+        agent = gateway.agent(list(tools), name="parity")
         user = User(id=user_ref)
         session = await gateway.sessions.load(user, conversation_id, agent)
         response = await agent.run([to_maf(message) for message in messages], session=session)
@@ -449,9 +451,14 @@ class MafHarness:
         return await gateway.embeddings().embed_documents(texts, feature=feature, user_ref=user_ref)
 
     async def embed_query(
-        self, gateway: Gateway, text: str, *, user_ref: str | None = None
+        self,
+        gateway: Gateway,
+        text: str,
+        *,
+        feature: str | None = None,
+        user_ref: str | None = None,
     ) -> list[float]:
-        return await gateway.embeddings().embed_query(text, user_ref=user_ref)
+        return await gateway.embeddings().embed_query(text, feature=feature, user_ref=user_ref)
 
     def raised_by_embeddings(self, failure: Failure) -> type[BaseException]:
         # The core's ProviderError, which app.llm.core.errors answers like a chat call's.

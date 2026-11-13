@@ -76,6 +76,9 @@ LLM_FILES = [
     "backend/tests/harness/__init__.py",
     "backend/tests/test_llm_parity_budget.py",
     "backend/tests/evals/redaction_corpus.py",
+    "backend/tests/evals/conftest.py",
+    "backend/tests/evals/test_gateway_evals.py",
+    "backend/tests/evals/test_redaction_evals.py",
 ]
 # LangChain's own files: only the langchain answer renders them.
 LANGCHAIN_FILES = [
@@ -83,7 +86,6 @@ LANGCHAIN_FILES = [
     "backend/src/app/llm/checkpoint_types.py",
     "backend/tests/test_llm_gateway.py",
     "backend/tests/harness/langchain.py",
-    "backend/tests/evals/conftest.py",
     "backend/tests/wire.py",
     "backend/tests/test_observability.py",
     "backend/tests/cassettes/test_llm_gateway/test_a_replayed_call_is_answered_and_its_cost_settled.yaml",
@@ -230,6 +232,15 @@ def _exact(removed: set[str], patterns: list[str]) -> None:
     assert stray == []
     unused = [pat for pat in patterns if not any(fnmatch.fnmatch(p, pat) for p in removed)]
     assert unused == []
+
+
+@pytest.mark.parametrize("llm", ["langchain", "maf"])
+def test_tests_never_upload_to_langsmith_under_either_framework(render, llm):
+    # Both frameworks' evals use the LangSmith pytest plugin, which uploads by default: the root
+    # conftest switches it (and LangSmith tracing) off unless `make eval` runs with a key.
+    conftest = (render(llm=llm) / "backend/tests/conftest.py").read_text()
+    assert 'os.environ["LANGSMITH_TRACING"] = os.environ["LANGSMITH_TEST_TRACKING"]' in conftest
+    assert ('os.environ["LANGSMITH_DISABLE_RUN_COMPRESSION"]' in conftest) is (llm == "langchain")
 
 
 def test_llm_files_are_exact(render, tmp_path):
@@ -432,15 +443,13 @@ LLM_OWNED = [
     "backend/src/app/llm/__init__.py",
     "backend/src/app/llm/core/*.py",
     "backend/llm-contracts.toml",
-]
-MAF_OWNED = ["backend/src/app/llm/maf/*.py"]
-LANGCHAIN_OWNED = [
-    "backend/src/app/llm/langchain/*.py",
     "backend/tests/evals/conftest.py",
     "backend/tests/evals/test_gateway_evals.py",
     "backend/tests/evals/redaction_corpus.py",
     "backend/tests/evals/test_redaction_evals.py",
 ]
+MAF_OWNED = ["backend/src/app/llm/maf/*.py"]
+LANGCHAIN_OWNED = ["backend/src/app/llm/langchain/*.py"]
 DATABASE_OWNED = [
     "backend/migrations/env.py",
     "backend/migrations/script.py.mako",
@@ -694,8 +703,7 @@ def test_the_image_installs_the_answered_extras(render, database, storage, llm):
 ALWAYS_TARGETS = {"install-fastapi", "check-fastapi", "check-fast-fastapi", "lock", "dev", "test",
                   "image", "up"}
 DATABASE_TARGETS = {"db-up", "migrate", "migration"}
-LLM_TARGETS = {"llm-report", "record-llm"}
-LANGCHAIN_TARGETS = {"eval"}  # the evals run on LangSmith
+LLM_TARGETS = {"llm-report", "record-llm", "eval"}  # the evals run on either framework
 
 
 @ANSWERS
@@ -703,7 +711,7 @@ def test_make_targets_follow_the_answers(render, database, storage, llm):
     gateway = llm != "none"
     mk = (render(database=database, storage=storage, llm=llm) / "mk/fastapi.mk").read_text()
     want = (ALWAYS_TARGETS | (DATABASE_TARGETS if database else set())
-            | (LLM_TARGETS if gateway else set()) | (LANGCHAIN_TARGETS if llm == "langchain" else set())
+            | (LLM_TARGETS if gateway else set())
             | ({"storage-up"} if storage else set()))
     defined = set(re.findall(r"^([a-z][a-z0-9-]*):", mk, flags=re.MULTILINE))
     phony = set(re.search(r"^\.PHONY: (.*)$", mk, flags=re.MULTILINE).group(1).split())
