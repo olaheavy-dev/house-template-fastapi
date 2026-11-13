@@ -257,6 +257,23 @@ class BudgetMiddleware(ChatMiddleware):
         # the keyword.
         self.sends_store = sends_store
 
+    def sent_options(self, options: Mapping[str, Any], *, final: bool) -> dict[str, Any]:
+        """The options as sent and sized: the gateway's output limit unless the caller set a
+        positive one, no tools offered on a run's last allowed call, and `store` as the provider
+        needs it. The context report sizes an agent's options through this too (maf/context.py
+        fixed_size), so its bound is the one checked here."""
+        sent = dict(options)
+        limit = sent.get("max_tokens")
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
+            sent["max_tokens"] = self.max_tokens
+        if final:
+            sent["tool_choice"] = "none"
+        if self.sends_store:
+            sent["store"] = False
+        else:
+            sent.pop("store", None)
+        return sent
+
     async def process(self, context: ChatContext, call_next: Callable[[], Awaitable[None]]) -> None:
         options = dict(context.options or {})
         # The run's count (put there by the gateway's client); never sent to the provider. A call
@@ -279,12 +296,10 @@ class BudgetMiddleware(ChatMiddleware):
         bounds.check_priced(view)
         # A caller may set a larger limit than the gateway's; reserve for whichever is larger.
         output = bounds.output_bound(self.max_tokens, view)
-        limit = options.get("max_tokens")
-        if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
-            options["max_tokens"] = self.max_tokens
         run.limit = self.step_limit
-        if self.step_limit.is_final(run.calls):
-            options["tool_choice"] = "none"
+        final = self.step_limit.is_final(run.calls)
+        options = self.sent_options(options, final=final)
+        if final:
             run.forced = True
         run.calls += 1
         thinking = options.get("thinking")
@@ -294,10 +309,6 @@ class BudgetMiddleware(ChatMiddleware):
                 raise OptionNotAllowed(
                     "thinking budget_tokens must be below max_tokens (the provider rejects it)"
                 )
-        if self.sends_store:
-            options["store"] = False
-        else:
-            options.pop("store", None)
         payload, blocks = request_view(context.messages, options)
         given = bounds.request_bound(payload, blocks)
         counted = context.metadata.get(REDACTED_COUNT)

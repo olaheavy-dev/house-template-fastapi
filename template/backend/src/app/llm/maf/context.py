@@ -25,7 +25,7 @@ from typing import Any
 from agent_framework import AgentSession, InMemoryHistoryProvider, Message, SessionContext
 
 from app.llm.core.context import USAGE_KEY, Entry, Role, size_bound, usage_from_record
-from app.llm.maf.middleware import request_view
+from app.llm.maf.middleware import BudgetMiddleware, request_view
 
 __all__ = ["UsageHistoryProvider", "entries", "fixed_size", "history"]
 
@@ -106,12 +106,16 @@ def entries(messages: Sequence[Message]) -> list[Entry]:
     return found
 
 
-def fixed_size(agent: Any) -> int:
+def fixed_size(agent: Any, budget: BudgetMiddleware) -> int:
     """An upper bound of what the agent sends with every call besides the history: its
-    instructions and tool definitions (its `default_options`), sized as the budget sizes them."""
+    instructions, tool definitions and other options (its `default_options`), with what the budget
+    adds to them before sizing a call (BudgetMiddleware.sent_options), sized as the budget sizes
+    them. A run's last call sends tool_choice "none", so the larger of the two is taken."""
     options = dict(getattr(agent, "default_options", None) or {})
-    payload, _ = request_view([], options)
-    return size_bound(payload, media=[])
+    return max(
+        size_bound(request_view([], budget.sent_options(options, final=final))[0], media=[])
+        for final in (False, True)
+    )
 
 
 def history(agent: Any, session: AgentSession) -> list[Message]:

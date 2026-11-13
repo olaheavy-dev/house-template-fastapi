@@ -320,7 +320,7 @@ class Gateway:
             session_context.entries(messages),
             self.price,
             self.max_tokens,
-            fixed=session_context.fixed_size(agent),
+            fixed=session_context.fixed_size(agent, self.budget),
         )
 
     async def delete_user_data(self, user_ref: str) -> tuple[int, int]:
