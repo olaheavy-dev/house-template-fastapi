@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.auth import User
 from app.llm.core.budget import CallTags, Meter
+from app.llm.core.context import ContextReport
 from app.llm.core.errors import ProviderError
 from app.llm.core.redaction import Redactor
 from app.llm.maf.gateway import Gateway, NoExtraChatMiddleware, check_chain
@@ -55,6 +56,9 @@ RAISES: dict[str, type[BaseException]] = {
     "invalid_request": ProviderError,
     "unknown": RuntimeError,
 }
+
+# The name thread_turn gives its agent: a session belongs to one agent (app/llm/maf/sessions.py).
+PARITY_AGENT = "parity"
 
 
 def sdk_error(failure: Failure) -> Exception:
@@ -406,13 +410,27 @@ class MafHarness:
         conversation_id: str,
         messages: Sequence[Neutral],
         tools: Sequence[Callable[..., Any]] = (),
+        stream: bool = False,
     ) -> str:
-        agent = gateway.agent(list(tools), name="parity")
+        agent = gateway.agent(list(tools), name=PARITY_AGENT)
         user = User(id=user_ref)
         session = await gateway.sessions.load(user, conversation_id, agent)
-        response = await agent.run([to_maf(message) for message in messages], session=session)
+        given = [to_maf(message) for message in messages]
+        if stream:
+            updates = agent.run(given, session=session, stream=True)
+            async for _ in updates:
+                pass
+            response = await updates.get_final_response()
+        else:
+            response = await agent.run(given, session=session)
         await gateway.sessions.save(user, conversation_id, agent, session)
         return response.text
+
+    async def context_report(
+        self, gateway: Gateway, *, user_ref: str, conversation_id: str
+    ) -> ContextReport:
+        agent = gateway.agent([], name=PARITY_AGENT)
+        return await gateway.context_report(User(id=user_ref), conversation_id, agent)
 
     async def forget_threads(
         self, gateway: Gateway, *, user_ref: str, conversation_id: str

@@ -106,8 +106,8 @@ def check_prompt_size(price: Price, input_tokens: int) -> None:
     """Refuse a prompt longer than its price covers (Price.max_prompt_tokens). `input_tokens` is
     an over-estimate (request_bound), so a prompt near the limit may be refused, never one past it
     sent and under-recorded."""
-    # #46 puts its "should this conversation be trimmed?" check beside this one: the same bound,
-    # compared with a lower threshold. The trimming itself belongs to each adapter.
+    # The context report (app/llm/core/context.py, #46) shows this same bound as a share of
+    # max_prompt_tokens, so its 100% is where this refuses.
     if price.max_prompt_tokens and input_tokens > price.max_prompt_tokens:
         raise PromptTooLong
 

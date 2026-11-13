@@ -4,4 +4,4 @@ the core's metered embeddings as LangChain's Embeddings class (embeddings.py), g
 prompt its LangChain call config (prompts.py), builds the chat model, agents and call config
 (gateway.py: Gateway, get_gateway; product code imports GatewayDep from app.llm), applies the
 core's step limit to create_agent (steps.py) and holds LangGraph's Postgres checkpointer
-(checkpoints.py)."""
+(checkpoints.py), and reads a stored thread's messages for the context report (context.py)."""

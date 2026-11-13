@@ -59,6 +59,7 @@ from opentelemetry.trace import Status, StatusCode
 
 from app.llm.core import bounds
 from app.llm.core.budget import CallTags, Meter
+from app.llm.core.context import USAGE_KEY, usage_record
 from app.llm.core.steps import DEFAULT_MAX_MODEL_CALLS, StepLimit
 from app.llm.core.usage import Usage
 from app.llm.maf.errors import classify
@@ -342,7 +343,9 @@ class BudgetMiddleware(ChatMiddleware):
             context.result = self._settled_stream(call_id, context.result, span)
             return
         try:
-            await self.meter.settle(call_id, _usage(context.result))
+            usage = _usage(context.result)
+            await self.meter.settle(call_id, usage)
+            _record(context.result, usage)
         finally:
             span.end()
 
@@ -395,7 +398,20 @@ class BudgetMiddleware(ChatMiddleware):
                 except Exception:
                     await meter.settle(call_id, None)  # the reservation stays as the cost
                     raise
-                await meter.settle(call_id, _usage(final))
+                usage = _usage(final)
+                await meter.settle(call_id, usage)
+                _record(final, usage)
+                # An Agent builds a streamed answer from the updates, not from `final`, so the
+                # usage also goes up as one last update with no content: MAF merges its properties
+                # into the run's response (the latest call's wins), and UsageHistoryProvider
+                # (app/llm/maf/context.py) moves them onto the stored answer. A call without usage
+                # sends None, so an earlier call's figures never stand for it.
+                yield ChatResponseUpdate(
+                    contents=[],
+                    additional_properties={
+                        USAGE_KEY: usage_record(usage) if usage is not None else None
+                    },
+                )
             finally:
                 span.end()  # however the stream ended (open while the call streams)
 
@@ -410,6 +426,17 @@ def _failed(span: trace.Span, kind: str) -> None:
     provider's text, which can echo the prompt."""
     span.set_status(Status(StatusCode.ERROR))
     span.set_attribute("error.type", kind)
+
+
+def _record(result: object, usage: Usage | None) -> None:
+    """Write the call's usage on its answer (the last message), where the context report reads it
+    once the session is stored (#46, app/llm/maf/context.py)."""
+    if usage is None or not isinstance(result, ChatResponse) or not result.messages:
+        return
+    answer = result.messages[-1]
+    if answer.additional_properties is None:
+        answer.additional_properties = {}
+    answer.additional_properties[USAGE_KEY] = usage_record(usage)
 
 
 def _usage(result: object) -> Usage | None:

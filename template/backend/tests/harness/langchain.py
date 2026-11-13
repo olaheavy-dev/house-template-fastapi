@@ -37,6 +37,7 @@ from pydantic import Field
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.llm.core.budget import Meter
+from app.llm.core.context import ContextReport
 from app.llm.core.redaction import Redactor
 from app.llm.langchain import checkpoints, steps
 from app.llm.langchain.gateway import Gateway
@@ -54,6 +55,11 @@ ERRORS: dict[str, type[BaseException]] = {
     "invalid_request": ModelInvalidRequestError,
     "unknown": RuntimeError,
 }
+
+
+def thread_id(user_ref: str, conversation_id: str) -> str:
+    """The thread id an app derives on the server from the user and the conversation."""
+    return f"{user_ref}:{conversation_id}"
 
 
 def _error(failure: Failure) -> BaseException:
@@ -299,18 +305,29 @@ class LangChainHarness:
         conversation_id: str,
         messages: Sequence[Message],
         tools: Sequence[Callable[..., Any]] = (),
+        stream: bool = False,
     ) -> str:
-        state = await gateway.agent(list(tools)).ainvoke(
-            {"messages": convert_to_messages(list(messages))},
-            config={"configurable": {"thread_id": f"{user_ref}:{conversation_id}"}},
-        )
-        return str(state["messages"][-1].text)
+        agent = gateway.agent(list(tools))
+        given = {"messages": convert_to_messages(list(messages))}
+        config: Any = {"configurable": {"thread_id": thread_id(user_ref, conversation_id)}}
+        if not stream:
+            state = await agent.ainvoke(given, config=config)
+            return str(state["messages"][-1].text)
+        last: Any = None
+        async for state in agent.astream(given, config=config, stream_mode="values"):
+            last = state
+        return str(last["messages"][-1].text)
+
+    async def context_report(
+        self, gateway: Gateway, *, user_ref: str, conversation_id: str
+    ) -> ContextReport:
+        return await gateway.context_report(thread_id(user_ref, conversation_id))
 
     async def forget_threads(
         self, gateway: Gateway, *, user_ref: str, conversation_id: str
     ) -> None:
         assert gateway.checkpointer is not None
-        await gateway.checkpointer.adelete_thread(f"{user_ref}:{conversation_id}")
+        await gateway.checkpointer.adelete_thread(thread_id(user_ref, conversation_id))
 
     def last_request_offered_tools(self, gateway: Gateway) -> bool:
         return offers_tools(self._scripted(gateway).seen_kwargs[-1])

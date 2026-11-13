@@ -24,7 +24,8 @@ call sends, not to what the session stores. An image must be a pointer to a stor
 (`Content.from_uri`), never its bytes (#73): `save` refuses inline data. Two turns of one
 conversation that run at the same time cannot overwrite each other: the second `save` raises
 SessionConflict (409); reload and run again. Delete a user's sessions with the rest of their data
-(`delete_user`). History is not trimmed yet (#46): a long conversation grows its row.
+(`delete_user`). History is not trimmed yet (#46 PR 2): a long conversation grows its row;
+`gateway.context_report` says how full it is (app/llm/maf/context.py).
 """
 
 from __future__ import annotations

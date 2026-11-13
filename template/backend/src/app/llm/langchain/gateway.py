@@ -46,12 +46,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.auth import User
 from app.llm import prices
-from app.llm.core import registry
+from app.llm.core import context, registry
 from app.llm.core.openai_embeddings import openai_client
 from app.llm.core.prices import MICRO_USD
 from app.llm.core.prompts import Prompt
 from app.llm.core.redaction import Redactor, choose_detectors
 from app.llm.core.steps import StepLimit
+from app.llm.langchain import context as thread_context
 from app.llm.langchain.callbacks import BudgetGuard
 from app.llm.langchain.embeddings import GatewayEmbeddings
 from app.llm.langchain.prompts import prompt_config
@@ -84,7 +85,10 @@ class Gateway:
                 "pricing page)"
             )
         price = registry.chat_price(llm_model, prices.PRICES)
+        context.check_output_limit(price, settings.llm_max_tokens)
         self.name = llm_model
+        self.price = price
+        self.max_tokens = settings.llm_max_tokens
         self.step_limit = StepLimit(settings.agent_max_model_calls)
         # Set in the lifespan once the checkpoint pool is open (app/llm/langchain/checkpoints.py).
         self.checkpointer: BaseCheckpointSaver[Any] | None = None
@@ -220,6 +224,40 @@ class Gateway:
         # LangGraph's own limit is only a backstop (10,007 by default): the run ends by itself at
         # the model-call limit, so this stops a graph that loops without calling the model.
         return agent.with_config(recursion_limit=recursion_limit(self.step_limit, middleware))
+
+    async def context_report(
+        self,
+        thread_id: str,
+        *,
+        system_prompt: str | None = None,
+        tools: Sequence[BaseTool | Callable[..., Any]] = (),
+    ) -> context.ContextReport:
+        """How full a stored thread is (#46, app/llm/core/context.py): about how many tokens its
+        next call would send, the model's window, the limits and the percentage. Reads the thread's
+        checkpoint only; no model call. Pass the thread id you run the agent with, built on the
+        server from the current user (never one a caller names), and the agent's own system prompt
+        and tools, which the checkpoint doesn't hold (without them, a thread with no usage yet is
+        under-counted by their size):
+
+            report = await gateway.context_report(
+                thread_id, system_prompt=prompt.text, tools=[search_courses]
+            )
+            return report.as_dict()
+
+        The messages are those under the state's `messages` key (create_agent's, and any graph on
+        MessagesState). A thread that doesn't exist yet reports an empty conversation. A thread
+        holding an attachment the budget can't bound (a document, audio, video) gets the same 422
+        its next call would."""
+        if self.checkpointer is None:
+            raise Problem(503, detail="Stored conversations aren't available.")
+        saved = await self.checkpointer.aget_tuple({"configurable": {"thread_id": thread_id}})
+        messages = thread_context.thread_messages(saved)
+        return context.report(
+            thread_context.entries(messages),
+            self.price,
+            self.max_tokens,
+            fixed=thread_context.fixed_size(system_prompt, tools),
+        )
 
     def call_config(
         self, user: User | None, feature: str, prompt: Prompt | None = None, **config: Any

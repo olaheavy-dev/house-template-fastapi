@@ -36,7 +36,6 @@ import structlog
 from agent_framework import (
     Agent,
     FunctionInvocationConfiguration,
-    InMemoryHistoryProvider,
     SupportsChatGetResponse,
 )
 
@@ -50,13 +49,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.auth import User
 from app.llm import prices
-from app.llm.core import registry
+from app.llm.core import context, registry
 from app.llm.core.budget import CallTags, Meter
 from app.llm.core.openai_embeddings import openai_client
 from app.llm.core.prices import MICRO_USD
 from app.llm.core.prompts import Prompt
 from app.llm.core.redaction import Redactor, choose_detectors
 from app.llm.core.steps import StepLimit
+from app.llm.maf import context as session_context
 from app.llm.maf import tracing
 from app.llm.maf.checkpoints import PostgresCheckpointStorage
 from app.llm.maf.embeddings import GatewayEmbeddings
@@ -150,7 +150,10 @@ class Gateway:
                 "pricing page)"
             )
         price = registry.chat_price(llm_model, prices.PRICES)
+        context.check_output_limit(price, settings.llm_max_tokens)
         self.name = llm_model
+        self.price = price
+        self.max_tokens = settings.llm_max_tokens
         self.step_limit = StepLimit(settings.agent_max_model_calls)
         # AGENT_MAX_MODEL_CALLS counts model calls, the last made without tools; MAF's
         # `max_iterations` counts the tool rounds before that last call (and must be at least 1:
@@ -282,9 +285,11 @@ class Gateway:
         `gateway.sessions` (app/llm/maf/sessions.py). With no context providers given, the agent
         keeps its history in the session with MAF's InMemoryHistoryProvider, added here
         explicitly (MAF's docs: "add it explicitly when you want deterministic local memory
-        behavior")."""
+        behavior"), as UsageHistoryProvider, which also keeps each answer's usage for the context
+        report (app/llm/maf/context.py). Give your own context providers that one, not MAF's,
+        or streamed answers are estimated."""
         if not options.get("context_providers"):
-            options["context_providers"] = [InMemoryHistoryProvider()]
+            options["context_providers"] = [session_context.UsageHistoryProvider()]
         return Agent(self.client(), instructions, tools=list(tools), **options)
 
     def checkpoints(self, user: User) -> PostgresCheckpointStorage:
@@ -293,6 +298,30 @@ class Gateway:
         `workflow.run(checkpoint_id=..., checkpoint_storage=...)` to resume. A user only ever sees
         their own checkpoints."""
         return PostgresCheckpointStorage(self._sessionmaker, user)
+
+    async def context_report(
+        self, user: User, conversation_id: str, agent: Any
+    ) -> context.ContextReport:
+        """How full the user's stored conversation with this agent is (#46,
+        app/llm/core/context.py): about how many tokens its next call would send, the model's
+        window, the limit (100%) and the percentage. Reads the stored session only; no model call:
+
+            report = await gateway.context_report(user, conversation_id, agent)
+            return report.as_dict()
+
+        Pass the same agent (the same `name`, instructions and tools) the conversation runs with: a
+        session belongs to one agent's name, so another name reports an empty conversation, and the
+        estimate counts the agent's instructions and tool definitions. A conversation that doesn't
+        exist yet reports an empty one; one holding an attachment the budget can't bound (a
+        document, audio, video) gets the same 422 its next call would."""
+        session = await self.sessions.load(user, conversation_id, agent)
+        messages = session_context.history(agent, session)
+        return context.report(
+            session_context.entries(messages),
+            self.price,
+            self.max_tokens,
+            fixed=session_context.fixed_size(agent),
+        )
 
     async def delete_user_data(self, user_ref: str) -> tuple[int, int]:
         """Delete everything the gateway stored for a user: their agent sessions and workflow

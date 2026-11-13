@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.llm.core.budget import LlmCall
+from app.llm.core.context import USAGE_KEY
 from app.llm.core.errors import FailureKind, ProviderError
 from app.llm.maf.gateway import Gateway
 from app.llm.maf.middleware import StoreNotAllowed
@@ -343,3 +344,21 @@ async def test_tool_definitions_and_the_output_schema_reach_the_wire_with_placeh
         assert body["text"]["format"]["name"] == "Lead"
     assert type(response.value) is Lead
     assert response.value.email == EMAIL
+
+
+@pytest.mark.parametrize("model", [OPENAI, ANTHROPIC])
+async def test_the_usage_recorded_on_an_answer_is_never_sent_back(model: str, make: Any) -> None:
+    # The budget middleware records each call's usage on its answer for the context report (#46);
+    # the answer goes back to the provider as history on the next call, its record must not.
+    fake = FakeProviderHttp(model.split(":", 1)[0])
+    gateway = make(model, fake)
+    first = await gateway.client().get_response([Message("user", ["What is 2 + 2?"])])
+    answer = first.messages[-1]
+    assert USAGE_KEY in answer.additional_properties
+    await gateway.client().get_response(
+        [Message("user", ["What is 2 + 2?"]), answer, Message("user", ["And 3 + 3?"])]
+    )
+    sent = json.dumps(fake.bodies[1])
+    assert "And 3 + 3?" in sent
+    assert USAGE_KEY not in sent
+    assert "input_tokens" not in sent
