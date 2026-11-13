@@ -250,13 +250,15 @@ class Gateway:
         its next call would."""
         if self.checkpointer is None:
             raise Problem(503, detail="Stored conversations aren't available.")
+        if self._model is None:
+            raise Problem(503, detail="The language model isn't configured.")
         saved = await self.checkpointer.aget_tuple({"configurable": {"thread_id": thread_id}})
         messages = thread_context.thread_messages(saved)
         return context.report(
             thread_context.entries(messages),
             self.price,
             self.max_tokens,
-            fixed=thread_context.fixed_size(system_prompt, tools),
+            fixed=thread_context.fixed_size(self._model, system_prompt, tools),
         )
 
     def call_config(

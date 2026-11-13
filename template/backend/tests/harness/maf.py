@@ -427,9 +427,14 @@ class MafHarness:
         return response.text
 
     async def context_report(
-        self, gateway: Gateway, *, user_ref: str, conversation_id: str
+        self,
+        gateway: Gateway,
+        *,
+        user_ref: str,
+        conversation_id: str,
+        tools: Sequence[Callable[..., Any]] = (),
     ) -> ContextReport:
-        agent = gateway.agent([], name=PARITY_AGENT)
+        agent = gateway.agent(list(tools), name=PARITY_AGENT)
         return await gateway.context_report(User(id=user_ref), conversation_id, agent)
 
     async def forget_threads(

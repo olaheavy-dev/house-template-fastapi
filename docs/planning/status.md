@@ -7,7 +7,7 @@ Last updated: 13 Nov 2026.
 ## Where things stand
 
 - **Released:** v0.10.1 (13 Nov 2026). 0.10.0 added the `llm: maf` answer (Microsoft Agent Framework, epic #35, PRs #112 and #118 to #123); 0.10.1 is a dependency update (#124).
-- **Open pull requests:** #46 PR 1, the context-window report (branch `feat/context-window-report`), in review. A pull request can't list its own number before it opens, so it is named by branch here.
+- **Open pull requests:** #131, #46 PR 1, the context-window report (branch `feat/context-window-report`), in review.
 - **#35 (MAF):** closed on 13 Nov 2026, with every planned PR merged. Its leftover is #127.
 
 ## Next
@@ -35,7 +35,7 @@ None.
 
 ## Owner to-dos
 
-- Review #46 PR 1 and say `merge N` when it's ready; then say go (or not yet) for PR 2.
+- Review #131 (#46 PR 1) and say `merge 131` when it's ready; then say go (or not yet) for PR 2.
 - agent-workflows #15 (issue) proposes that every repository keeps a status file. Checked 13 Nov: agent-workflows main doesn't cover it yet. For now only the adoption issues (#117 here, nextjs #21) require the file. #13 has merged, so #15 is unblocked. Say whether to write its pull request. It changes the house rules, so it's a founder-only merge.
 
 ## Working notes for agents

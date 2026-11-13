@@ -227,9 +227,15 @@ class Harness(Protocol):
         ...
 
     async def context_report(
-        self, gateway: Any, *, user_ref: str, conversation_id: str
+        self,
+        gateway: Any,
+        *,
+        user_ref: str,
+        conversation_id: str,
+        tools: Sequence[Callable[..., Any]] = (),
     ) -> ContextReport:
-        """The gateway's context report for the stored conversation thread_turn keeps (#46)."""
+        """The gateway's context report for the stored conversation thread_turn keeps (#46), for
+        an agent with these tools."""
         ...
 
     async def forget_threads(self, gateway: Any, *, user_ref: str, conversation_id: str) -> None:

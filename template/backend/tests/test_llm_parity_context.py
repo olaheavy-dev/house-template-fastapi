@@ -159,6 +159,33 @@ async def test_a_last_call_without_usage_is_never_counted_from_an_earlier_one(
     assert got.tokens >= 4_000
 
 
+async def test_the_reports_bound_is_never_below_the_one_the_budget_checks(
+    framework: Harness, make: Callable[..., Any]
+) -> None:
+    # The budget refuses a prompt whose byte bound passes the price's max_prompt_tokens (OpenAI's
+    # entries), so the report's 100% is only right if its `bound` is at least the budget's. Record
+    # the bound the budget reserved for the second call, which sent the first turn, the second
+    # question and the tools; the report after that turn also holds the second answer.
+    gateway = await make(Reply("Noted."), Reply("Yes."))
+    meter = framework.meter(gateway)
+    checked: list[int] = []
+    reserve = meter.reserve
+
+    async def recording(call_id: Any, *, input_tokens: int, **kwargs: Any) -> int:
+        checked.append(input_tokens)
+        return await reserve(call_id, input_tokens=input_tokens, **kwargs)
+
+    meter.reserve = recording  # type: ignore[method-assign]
+    await turn(framework, gateway, "My room is the kitchen.", tools=(add,))
+    await turn(framework, gateway, "Is it large?", tools=(add,))
+    got = await framework.context_report(
+        gateway, user_ref=USER, conversation_id=CONVERSATION, tools=(add,)
+    )
+    assert len(checked) == 2
+    # At least the budget's figure, and measured the same way: the only extra is the answer.
+    assert checked[-1] <= got.bound < checked[-1] + 1_000
+
+
 async def test_without_usage_the_report_estimates_and_says_so(
     framework: Harness, make: Callable[..., Any]
 ) -> None:

@@ -319,9 +319,14 @@ class LangChainHarness:
         return str(last["messages"][-1].text)
 
     async def context_report(
-        self, gateway: Gateway, *, user_ref: str, conversation_id: str
+        self,
+        gateway: Gateway,
+        *,
+        user_ref: str,
+        conversation_id: str,
+        tools: Sequence[Callable[..., Any]] = (),
     ) -> ContextReport:
-        return await gateway.context_report(thread_id(user_ref, conversation_id))
+        return await gateway.context_report(thread_id(user_ref, conversation_id), tools=tools)
 
     async def forget_threads(
         self, gateway: Gateway, *, user_ref: str, conversation_id: str
