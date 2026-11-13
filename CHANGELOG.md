@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.10.0](https://github.com/olaheavy-dev/house-template-fastapi/compare/v0.9.0...v0.10.0) (2026-11-13)
+
+
+### Features
+
+* llm: maf answer and a MAF chat client under the budget, with redaction on ([#35](https://github.com/olaheavy-dev/house-template-fastapi/issues/35)) ([#112](https://github.com/olaheavy-dev/house-template-fastapi/issues/112)) ([3b18516](https://github.com/olaheavy-dev/house-template-fastapi/commit/3b18516cc4a328c0b8a9e846158583a612431fa8))
+* maf agent with the shared step limit, counted by our own code ([#35](https://github.com/olaheavy-dev/house-template-fastapi/issues/35)) ([#119](https://github.com/olaheavy-dev/house-template-fastapi/issues/119)) ([b6ac52a](https://github.com/olaheavy-dev/house-template-fastapi/commit/b6ac52a218e67179886d49a9bf82bca47a08dfb8))
+* maf conversations stored in postgres, keyed by the current user ([#35](https://github.com/olaheavy-dev/house-template-fastapi/issues/35)) ([#120](https://github.com/olaheavy-dev/house-template-fastapi/issues/120)) ([d747c1f](https://github.com/olaheavy-dev/house-template-fastapi/commit/d747c1fde07e68acc29f37a8f0ce93cfe437cfa8))
+* maf workflow checkpoints in postgres through maf's restricted unpickler ([#35](https://github.com/olaheavy-dev/house-template-fastapi/issues/35)) ([#121](https://github.com/olaheavy-dev/house-template-fastapi/issues/121)) ([7345363](https://github.com/olaheavy-dev/house-template-fastapi/commit/734536374c3efa94a3b5c1f324ce9f3fcccd452b))
+* streamed maf calls settle from final usage, typed answers and a shared 502 ([#35](https://github.com/olaheavy-dev/house-template-fastapi/issues/35)) ([#118](https://github.com/olaheavy-dev/house-template-fastapi/issues/118)) ([dd2ad99](https://github.com/olaheavy-dev/house-template-fastapi/commit/dd2ad99e0e61975294922337d911679b3b671e2a))
+* the live evals run under both frameworks through the shared harness ([#35](https://github.com/olaheavy-dev/house-template-fastapi/issues/35)) ([#123](https://github.com/olaheavy-dev/house-template-fastapi/issues/123)) ([6d14d14](https://github.com/olaheavy-dev/house-template-fastapi/commit/6d14d1435f4b3f4047087d2ddb0d17e84b0d41c5))
+* trace maf calls to langsmith over opentelemetry, never with message text ([#35](https://github.com/olaheavy-dev/house-template-fastapi/issues/35)) ([#122](https://github.com/olaheavy-dev/house-template-fastapi/issues/122)) ([8cc5662](https://github.com/olaheavy-dev/house-template-fastapi/commit/8cc566217b05f0b1e527234b62df582ec28ed61c))
+
 ## [0.9.0](https://github.com/olaheavy-dev/house-template-fastapi/compare/v0.8.0...v0.9.0) (2026-11-11)
 
 
