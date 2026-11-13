@@ -3,8 +3,14 @@ groups, what is still waiting, and the usage LangChain stored on each answer."""
 
 from __future__ import annotations
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+import json
+from typing import Any
 
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_openai import ChatOpenAI
+
+from app.llm.core.context import USAGE_KEY
 from app.llm.core.usage import Usage
 from app.llm.langchain.context import entries, thread_messages
 
@@ -46,3 +52,26 @@ def test_tool_arguments_shaped_like_a_document_are_not_an_attachment() -> None:
     call = {**CALL, "args": {"type": "document", "title": "House"}}
     got = entries([HumanMessage("File it."), AIMessage("", tool_calls=[call])])
     assert got[1].size > len("House")
+
+
+def test_the_checked_bound_recorded_on_an_answer_is_never_sent_back() -> None:
+    # The budget records the bound it checked in the answer's response_metadata (#46); the answer
+    # goes back to the provider as history on the next call, its record must not.
+    record = {USAGE_KEY: {"checked": 4_242}}
+    history = [
+        HumanMessage("What is 1 + 2?"),
+        AIMessage("", tool_calls=[CALL], response_metadata=record),
+        ToolMessage("3", tool_call_id="call_1"),
+        AIMessage("3.", response_metadata=record),
+        HumanMessage("And 3 + 3?"),
+    ]
+    models: list[Any] = [
+        ChatAnthropic(model="claude-sonnet-5-5", api_key="unused"),
+        ChatOpenAI(model="gpt-6-luna", api_key="unused"),
+        ChatOpenAI(model="gpt-6-luna", api_key="unused", use_responses_api=True),
+    ]
+    for model in models:
+        sent = json.dumps(model._get_request_payload(history), default=str)
+        assert "And 3 + 3?" in sent
+        assert USAGE_KEY not in sent
+        assert "4242" not in sent

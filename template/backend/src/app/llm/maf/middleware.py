@@ -351,17 +351,17 @@ class BudgetMiddleware(ChatMiddleware):
                 self.meter.abandon(call_id)
                 raise
         if context.stream:
-            context.result = self._settled_stream(call_id, context.result, span)
+            context.result = self._settled_stream(call_id, context.result, span, given)
             return
         try:
             usage = _usage(context.result)
             await self.meter.settle(call_id, usage)
-            _record(context.result, usage)
+            _record(context.result, usage, given)
         finally:
             span.end()
 
     def _settled_stream(
-        self, call_id: uuid.UUID, inner: object, span: trace.Span
+        self, call_id: uuid.UUID, inner: object, span: trace.Span, checked: int
     ) -> ResponseStream[ChatResponseUpdate, ChatResponse[Any]]:
         """The provider's stream, passed through an async generator of our own that settles the
         call once, however the stream ends (see the module notes). The final response is the
@@ -411,17 +411,16 @@ class BudgetMiddleware(ChatMiddleware):
                     raise
                 usage = _usage(final)
                 await meter.settle(call_id, usage)
-                _record(final, usage)
+                _record(final, usage, checked)
                 # An Agent builds a streamed answer from the updates, not from `final`, so the
-                # usage also goes up as one last update with no content: MAF merges its properties
-                # into the run's response (the latest call's wins), and UsageHistoryProvider
-                # (app/llm/maf/context.py) moves them onto the stored answer. A call without usage
-                # sends None, so an earlier call's figures never stand for it.
+                # record also goes up as one last update with no content. MAF merges its
+                # properties into the run's response key by key, and UsageHistoryProvider
+                # (app/llm/maf/context.py) moves the record onto the stored answer. Every key is
+                # always written (usage as None when the call reported none), so an earlier
+                # call's figures never stand for a later one.
                 yield ChatResponseUpdate(
                     contents=[],
-                    additional_properties={
-                        USAGE_KEY: usage_record(usage) if usage is not None else None
-                    },
+                    additional_properties={USAGE_KEY: usage_record(usage, checked=checked)},
                 )
             finally:
                 span.end()  # however the stream ended (open while the call streams)
@@ -439,15 +438,16 @@ def _failed(span: trace.Span, kind: str) -> None:
     span.set_attribute("error.type", kind)
 
 
-def _record(result: object, usage: Usage | None) -> None:
-    """Write the call's usage on its answer (the last message), where the context report reads it
-    once the session is stored (#46, app/llm/maf/context.py)."""
-    if usage is None or not isinstance(result, ChatResponse) or not result.messages:
+def _record(result: object, usage: Usage | None, checked: int) -> None:
+    """Write the input bound the budget checked and the call's usage (when reported) on its answer
+    (the last message), where the context report reads them once the session is stored (#46,
+    app/llm/maf/context.py)."""
+    if not isinstance(result, ChatResponse) or not result.messages:
         return
     answer = result.messages[-1]
     if answer.additional_properties is None:
         answer.additional_properties = {}
-    answer.additional_properties[USAGE_KEY] = usage_record(usage)
+    answer.additional_properties[USAGE_KEY] = usage_record(usage, checked=checked)
 
 
 def _usage(result: object) -> Usage | None:

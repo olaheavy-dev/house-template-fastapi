@@ -4,6 +4,7 @@ exactly as in the app and nothing reaches a provider."""
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import aclosing
@@ -152,8 +153,29 @@ class ScriptedModel(GenericFakeChatModel):
         item = self.script.pop(0)
         if isinstance(item, Failure):
             raise _error(item)
-        if isinstance(item, AsksTool):  # agents are run with ainvoke in the parity tests
-            raise AssertionError("the harness does not stream a scripted tool call")
+        if isinstance(item, AsksTool):
+            # One chunk holding the whole call, as its fragments merge (with the call's usage).
+            asked = _asks(item, kwargs)
+            chunk = ChatGenerationChunk(
+                message=AIMessageChunk(
+                    content="",
+                    tool_call_chunks=[
+                        {
+                            "name": call["name"],
+                            "args": json.dumps(call["args"]),
+                            "id": call["id"],
+                            "index": index,
+                            "type": "tool_call_chunk",
+                        }
+                        for index, call in enumerate(asked.tool_calls)
+                    ],
+                    usage_metadata=asked.usage_metadata,
+                )
+            )
+            if run_manager is not None:
+                await run_manager.on_llm_new_token("", chunk=chunk)
+            yield chunk
+            return
         pieces = item.streamed()
         for number, piece in enumerate(pieces, start=1):
             usage = _answer(item).usage_metadata if number == len(pieces) else None
@@ -313,9 +335,13 @@ class LangChainHarness:
         if not stream:
             state = await agent.ainvoke(given, config=config)
             return str(state["messages"][-1].text)
+        # Token by token, as a chat route streams ("messages"), with the state after each step.
         last: Any = None
-        async for state in agent.astream(given, config=config, stream_mode="values"):
-            last = state
+        async for mode, part in agent.astream(
+            given, config=config, stream_mode=["messages", "values"]
+        ):
+            if mode == "values":
+                last = part
         return str(last["messages"][-1].text)
 
     async def context_report(

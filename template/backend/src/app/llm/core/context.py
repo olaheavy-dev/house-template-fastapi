@@ -14,9 +14,14 @@ app/llm/maf/context.py) and asks `report` for the numbers:
   use more) and IMAGE_TOKENS per image. Output includes reasoning tokens, which later calls may not
   resend. So `tokens` over-counts, as long as the adapter is given the agent's system prompt and
   tools.
-- `bound`: the budget's own over-estimate of the same request, one token per byte (the stored
-  messages, `fixed` and the margin): the figure the budget compares with the price's
-  max_prompt_tokens before every call (app/llm/core/bounds.py check_prompt_size).
+- `bound`: the budget's own over-estimate of the same request: the figure the budget compares with
+  the price's max_prompt_tokens before every call (app/llm/core/bounds.py check_prompt_size). The
+  budget records the bound it checked on each call's answer (`Entry.checked`), so it is that
+  figure plus the size of the answer and of anything stored after it: exact for what was sent,
+  whatever the agent sent with it (its prompt, tools, schemas, options). It is never below the
+  rebuilt estimate either (the stored messages, `fixed` and the margin, one token per byte), which
+  covers a conversation with no recorded call and a run's last call, made without tools (founder
+  decision on #131, 13 Nov 2026).
 - `window`: the model's context window from its price entry (app/llm/prices.py), or None when the
   entry has none.
 - `limit`: the most input a call can send: the window minus the output limit the budget reserves
@@ -60,6 +65,7 @@ __all__ = [
     "Role",
     "TrimPlan",
     "check_output_limit",
+    "checked_from_record",
     "count",
     "input_limit",
     "plan_trim",
@@ -84,13 +90,15 @@ class Entry:
     makes, answers, or asks or gives an approval for: messages that share one are a group. `waiting`
     marks a message whose tool calls have no result yet, or that asks for an approval not yet given.
     `usage` is what the provider reported for the call that wrote this message (an assistant
-    message), when known."""
+    message), when known; `checked` is the input bound the budget checked for that call, recorded
+    on the answer whether or not the provider reported usage."""
 
     role: Role
     size: int
     links: frozenset[str] = frozenset()
     waiting: bool = False
     usage: Usage | None = None
+    checked: int | None = None
 
 
 def size_bound(payload: object, *, media: object) -> int:
@@ -103,9 +111,16 @@ def size_bound(payload: object, *, media: object) -> int:
     return size + count_images(media) * IMAGE_TOKENS
 
 
-def usage_record(usage: Usage) -> dict[str, int]:
-    """The part of a call's usage the counter needs, as plain data an adapter can store."""
-    return {"input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens}
+def usage_record(usage: Usage | None, *, checked: int) -> dict[str, int | None]:
+    """What the counter needs from one call, as plain data an adapter stores on its answer: the
+    input bound the budget checked, and the usage the provider reported (None when it reported
+    none). Every key is always written: MAF merges a streamed run's records key by key, so a key
+    left out would keep an earlier call's figure."""
+    return {
+        "checked": checked,
+        "input_tokens": usage.input_tokens if usage is not None else None,
+        "output_tokens": usage.output_tokens if usage is not None else None,
+    }
 
 
 def _whole(value: object) -> int | None:
@@ -126,6 +141,11 @@ def usage_from_record(record: object) -> Usage | None:
     return Usage(input_tokens=given, output_tokens=written)
 
 
+def checked_from_record(record: object) -> int | None:
+    """The checked bound from usage_record's data, or None when it has none."""
+    return _whole(record.get("checked")) if isinstance(record, Mapping) else None
+
+
 @dataclass(frozen=True, slots=True)
 class Count:
     tokens: int
@@ -139,6 +159,12 @@ def count(entries: Sequence[Entry], *, fixed: int = 0) -> Count:
     """About how many tokens the next call would send for these stored messages, and the budget's
     bound of it (module notes). `fixed` sizes the system prompt and tools sent with every call."""
     bound = sum(entry.size for entry in entries) + fixed + INPUT_MARGIN_TOKENS
+    for last in range(len(entries) - 1, -1, -1):
+        checked = entries[last].checked
+        if checked is not None:
+            # The last checked call's bound held everything before its answer.
+            bound = max(bound, checked + sum(entry.size for entry in entries[last:]))
+            break
     for last in range(len(entries) - 1, -1, -1):
         usage = entries[last].usage
         if usage is not None:

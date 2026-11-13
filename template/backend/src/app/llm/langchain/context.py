@@ -4,11 +4,15 @@ The usage comes from each answer's own `usage_metadata`, which LangChain sets fr
 report and LangGraph stores with the message. A tool call waits while any of its calls has no
 ToolMessage yet (an agent paused for an approval, or a run that stopped part-way).
 
-Sizes are the budget's own (app/llm/langchain/callbacks.py input_bound): each message's whole
-serialised form, and the call's parameters with the tools bound, so the report's `bound` is never
-below the one the budget checks against OpenAI's prompt cap. (With redaction on, the budget sizes
-the redacted messages: a placeholder longer than the value it replaces adds a few bytes the report
-can't see.)
+The budget records the input bound it checked for each call in the answer's `response_metadata`
+under USAGE_KEY (app/llm/langchain/callbacks.py), and the report starts its `bound` from the last
+one: that covers whatever the agent sent (its prompt, tools, a response_format schema). Sizes are
+the budget's own (input_bound): each message's whole serialised form, and for the rebuilt estimate
+the call's parameters with the tools bound. (With redaction on, the budget sizes the redacted
+messages: a placeholder longer than the value it replaces, in the last recorded answer or a
+message stored after it, adds a few bytes the report can't see.) A run cut short at the step
+limit ends on a call made without tools, so its record holds none: pass the agent's tools to the
+report, which then counts them in its rebuilt estimate.
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ from typing import Any
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
 
-from app.llm.core.context import Entry, Role, size_bound
+from app.llm.core.context import USAGE_KEY, Entry, Role, checked_from_record, size_bound
 from app.llm.langchain.usage import from_langchain
 
 __all__ = ["entries", "fixed_size", "thread_messages"]
@@ -46,6 +50,7 @@ def entries(messages: Sequence[BaseMessage]) -> list[Entry]:
                 ),
                 waiting=any(call.get("id") not in answered for call in calls),
                 usage=from_langchain(usage) if usage else None,
+                checked=checked_from_record(message.response_metadata.get(USAGE_KEY)),
             )
         )
     return result

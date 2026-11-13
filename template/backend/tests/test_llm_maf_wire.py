@@ -362,3 +362,4 @@ async def test_the_usage_recorded_on_an_answer_is_never_sent_back(model: str, ma
     assert "And 3 + 3?" in sent
     assert USAGE_KEY not in sent
     assert "input_tokens" not in sent
+    assert '"checked"' not in sent

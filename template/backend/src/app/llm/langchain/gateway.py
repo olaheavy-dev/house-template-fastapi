@@ -236,8 +236,10 @@ class Gateway:
         next call would send, the model's window, the limits and the percentage. Reads the thread's
         checkpoint only; no model call. Pass the thread id you run the agent with, built on the
         server from the current user (never one a caller names), and the agent's own system prompt
-        and tools, which the checkpoint doesn't hold (without them, a thread with no usage yet is
-        under-counted by their size):
+        and tools, which the checkpoint doesn't hold. The budget records the bound it checked on
+        each answer, which covers them, but a thread with no recorded call yet, or whose run ended
+        on the step limit's last call (made without tools), is under-counted by their size without
+        them:
 
             report = await gateway.context_report(
                 thread_id, system_prompt=prompt.text, tools=[search_courses]

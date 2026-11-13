@@ -21,6 +21,7 @@ Last updated: 13 Nov 2026.
    - 100% is where calls start failing: the nearer of the window less `LLM_MAX_TOKENS` and, for a price with `max_prompt_tokens`, the budget's byte bound against it (refined after the pre-push review);
    - the provider's count endpoint waits for PR 2;
    - MAF keeps each call's usage on the stored answer;
+   - the budget records the bound it checked on each stored answer (both frameworks), and the report's bound starts from it, rather than only rebuilding what an agent sends (chosen in Codex round 5 on #131: "Redesign now, in #131");
    - there is no HTTP route; the report is a gateway method.
 
    Plan:

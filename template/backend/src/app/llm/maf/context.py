@@ -1,15 +1,15 @@
 """A MAF session's messages as the core's context entries (#46, app/llm/core/context.py).
 
 MAF keeps no call's usage with the messages it stores, so the budget middleware records it: after
-settling a call, it writes the call's input and output tokens under USAGE_KEY in the answer
-message's `additional_properties` (founder decision, 13 Nov 2026). Those properties are saved with
-the session and never sent to the provider (checked on agent-framework-core 1.25.0, the OpenAI
-Responses and Anthropic clients). A streamed run builds its answer from the
-updates, which carry no message properties: there the middleware sends the record as one last
-update with no content, MAF merges it into the run's response, and UsageHistoryProvider (the
-history provider the gateway gives an agent) moves it onto the answer before storing it. A message
-without the record, such as one stored before this existed or by another history provider, is
-estimated.
+settling a call, it writes the input bound it checked and the call's input and output tokens
+under USAGE_KEY in the answer message's `additional_properties` (founder decisions, 13 Nov 2026).
+Those properties are saved with the session and never sent to the provider (checked on
+agent-framework-core 1.25.0, the OpenAI Responses and Anthropic clients). A streamed run builds
+its answer from the updates, which carry no message properties: there the middleware sends the
+record as one last update with no content, MAF merges it into the run's response, and
+UsageHistoryProvider (the history provider the gateway gives an agent) moves it onto the answer
+before storing it. A message without the record, such as one stored before this existed or by
+another history provider, is estimated.
 
 The messages are those of the agent's InMemoryHistoryProvider (the gateway adds one when no
 context provider is given), from `session.state[<its source_id>]["messages"]`. A tool call waits
@@ -25,7 +25,14 @@ from typing import Any
 from agent_framework import AgentSession, InMemoryHistoryProvider, Message, SessionContext
 
 from app.llm.core.bounds import output_bound
-from app.llm.core.context import USAGE_KEY, Entry, Role, size_bound, usage_from_record
+from app.llm.core.context import (
+    USAGE_KEY,
+    Entry,
+    Role,
+    checked_from_record,
+    size_bound,
+    usage_from_record,
+)
 from app.llm.maf.middleware import BudgetMiddleware, params_view, request_view
 
 __all__ = ["UsageHistoryProvider", "entries", "fixed_size", "history", "output_limit"]
@@ -40,8 +47,8 @@ _ROLES: dict[str, Role] = {
 
 class UsageHistoryProvider(InMemoryHistoryProvider):
     """MAF's InMemoryHistoryProvider (same `source_id`, so it reads sessions stored before it),
-    which first moves the last call's usage record from a streamed run's response onto its answer
-    (module notes)."""
+    which first moves the last call's record (its checked bound and usage) from a streamed run's
+    response onto its answer (module notes)."""
 
     async def after_run(
         self, *, agent: Any, session: AgentSession, context: SessionContext, state: dict[str, Any]
@@ -92,6 +99,7 @@ def entries(messages: Sequence[Message]) -> list[Entry]:
     found = []
     for message in messages:
         payload, blocks = request_view([message], {})
+        record = (message.additional_properties or {}).get(USAGE_KEY)
         calls = [str(c.call_id) for c in message.contents if c.type == "function_call"]
         asks = [str(c.id) for c in message.contents if c.type == "function_approval_request"]
         found.append(
@@ -101,7 +109,8 @@ def entries(messages: Sequence[Message]) -> list[Entry]:
                 links=_links(message),
                 waiting=any(call not in results for call in calls)
                 or any(ask not in approved for ask in asks),
-                usage=usage_from_record((message.additional_properties or {}).get(USAGE_KEY)),
+                usage=usage_from_record(record),
+                checked=checked_from_record(record),
             )
         )
     return found

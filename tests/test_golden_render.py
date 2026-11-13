@@ -75,6 +75,9 @@ INTENDED: dict[str, str] = {
         "the comment on the prompt-size check names the context report's use of it (#46 PR 1)",
     "backend/src/app/llm/langchain/__init__.py":
         "names context.py among the adapter's modules (#46 PR 1)",
+    "backend/src/app/llm/langchain/callbacks.py":
+        "the budget records the bound it checked on each answer, for the context report "
+        "(#46 PR 1)",
     ".claude/rules/fastapi.md":
         "names the maf extra and the `llm: maf` answer in the extras sentence; tool definitions and "
         "output schemas are redacted; the structured-output 502; the eval rules are shared by both "

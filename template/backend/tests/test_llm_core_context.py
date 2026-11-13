@@ -16,6 +16,7 @@ from app.llm.core.context import (
     Entry,
     OutputTooLong,
     check_output_limit,
+    checked_from_record,
     count,
     input_limit,
     plan_trim,
@@ -157,6 +158,26 @@ def test_the_agents_own_part_is_estimated_only_without_usage() -> None:
     assert (got.tokens, got.bound) == (1_500, 1_594)
 
 
+def test_the_bound_starts_from_the_last_checked_call() -> None:
+    # The last answer's call was checked at 2,000 (everything before it, with whatever the agent
+    # sent). The next call adds that answer (50) and the question after it (30): 2,080, above the
+    # rebuilt 100 + 50 + 30 + 1,024 = 1,204. Without usage, tokens are the bound.
+    entries = [
+        Entry(role="user", size=100),
+        Entry(role="assistant", size=50, checked=2_000),
+        Entry(role="user", size=30),
+    ]
+    got = count(entries)
+    assert (got.tokens, got.bound, got.measured) == (2_080, 2_080, False)
+    # A checked bound below the rebuilt one (a run's last call, made without tools) never lowers
+    # it: 100 + 50 + 30 = 180 against 1,204.
+    low = [entries[0], Entry(role="assistant", size=50, checked=100), entries[2]]
+    assert count(low).bound == 1_204
+    # Only the last checked call counts.
+    earlier = [Entry(role="assistant", size=10, checked=9_000), *entries]
+    assert count(earlier).bound == 2_080
+
+
 def test_size_is_one_token_per_byte_plus_each_image() -> None:
     # "héllo" as JSON is 8 bytes: two quotes, four one-byte letters, and é, which takes two.
     assert size_bound("héllo", media="héllo") == 8
@@ -174,7 +195,13 @@ def test_only_media_is_searched_for_attachments() -> None:
 
 
 def test_a_usage_record_round_trips_and_a_bad_one_is_ignored() -> None:
-    assert usage_from_record(usage_record(used(12, 3))) == used(12, 3)
+    assert usage_from_record(usage_record(used(12, 3), checked=40)) == used(12, 3)
+    assert checked_from_record(usage_record(used(12, 3), checked=40)) == 40
+    # A call the provider reported no usage for keeps its checked bound, and no usage.
+    assert usage_from_record(usage_record(None, checked=40)) is None
+    assert checked_from_record(usage_record(None, checked=40)) == 40
+    assert checked_from_record({"checked": True}) is None
+    assert checked_from_record(None) is None
     for bad in (
         None,
         "x",
