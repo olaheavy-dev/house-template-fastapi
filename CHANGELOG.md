@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/olaheavy-dev/house-template-fastapi/compare/v0.10.1...v0.11.0) (2026-11-14)
+
+
+### Features
+
+* context-window report for stored conversations ([#46](https://github.com/olaheavy-dev/house-template-fastapi/issues/46) PR 1) ([#131](https://github.com/olaheavy-dev/house-template-fastapi/issues/131)) ([7f2deee](https://github.com/olaheavy-dev/house-template-fastapi/commit/7f2deee0e2af5c42464b130a0081d438f5204bb9))
+
 ## [0.10.1](https://github.com/olaheavy-dev/house-template-fastapi/compare/v0.10.0...v0.10.1) (2026-11-13)
 
 
