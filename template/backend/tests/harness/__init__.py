@@ -30,6 +30,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.llm.core.budget import Meter
+from app.llm.core.context import ContextReport
 from app.llm.core.redaction import Redactor
 from app.settings import Settings
 
@@ -218,9 +219,23 @@ class Harness(Protocol):
         conversation_id: str,
         messages: Sequence[Message],
         tools: Sequence[Callable[..., Any]] = (),
+        stream: bool = False,
     ) -> str:
         """One turn of a stored conversation, keyed by the user and the conversation id (derived on
-        the server, as the app must), by an agent with `tools`; returns the answer's text."""
+        the server, as the app must), by an agent with `tools`; returns the answer's text. With
+        `stream`, the agent's run is streamed and read to its end."""
+        ...
+
+    async def context_report(
+        self,
+        gateway: Any,
+        *,
+        user_ref: str,
+        conversation_id: str,
+        tools: Sequence[Callable[..., Any]] = (),
+    ) -> ContextReport:
+        """The gateway's context report for the stored conversation thread_turn keeps (#46), for
+        an agent with these tools."""
         ...
 
     async def forget_threads(self, gateway: Any, *, user_ref: str, conversation_id: str) -> None:

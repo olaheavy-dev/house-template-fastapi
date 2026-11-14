@@ -59,6 +59,7 @@ from opentelemetry.trace import Status, StatusCode
 
 from app.llm.core import bounds
 from app.llm.core.budget import CallTags, Meter
+from app.llm.core.context import USAGE_KEY, usage_record
 from app.llm.core.steps import DEFAULT_MAX_MODEL_CALLS, StepLimit
 from app.llm.core.usage import Usage
 from app.llm.maf.errors import classify
@@ -256,6 +257,23 @@ class BudgetMiddleware(ChatMiddleware):
         # the keyword.
         self.sends_store = sends_store
 
+    def sent_options(self, options: Mapping[str, Any], *, final: bool) -> dict[str, Any]:
+        """The options as sent and sized: the gateway's output limit unless the caller set a
+        positive one, no tools offered on a run's last allowed call, and `store` as the provider
+        needs it. The context report sizes an agent's options through this too (maf/context.py
+        fixed_size), so its bound is the one checked here."""
+        sent = dict(options)
+        limit = sent.get("max_tokens")
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
+            sent["max_tokens"] = self.max_tokens
+        if final:
+            sent["tool_choice"] = "none"
+        if self.sends_store:
+            sent["store"] = False
+        else:
+            sent.pop("store", None)
+        return sent
+
     async def process(self, context: ChatContext, call_next: Callable[[], Awaitable[None]]) -> None:
         options = dict(context.options or {})
         # The run's count (put there by the gateway's client); never sent to the provider. A call
@@ -278,12 +296,10 @@ class BudgetMiddleware(ChatMiddleware):
         bounds.check_priced(view)
         # A caller may set a larger limit than the gateway's; reserve for whichever is larger.
         output = bounds.output_bound(self.max_tokens, view)
-        limit = options.get("max_tokens")
-        if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
-            options["max_tokens"] = self.max_tokens
         run.limit = self.step_limit
-        if self.step_limit.is_final(run.calls):
-            options["tool_choice"] = "none"
+        final = self.step_limit.is_final(run.calls)
+        options = self.sent_options(options, final=final)
+        if final:
             run.forced = True
         run.calls += 1
         thinking = options.get("thinking")
@@ -293,10 +309,6 @@ class BudgetMiddleware(ChatMiddleware):
                 raise OptionNotAllowed(
                     "thinking budget_tokens must be below max_tokens (the provider rejects it)"
                 )
-        if self.sends_store:
-            options["store"] = False
-        else:
-            options.pop("store", None)
         payload, blocks = request_view(context.messages, options)
         given = bounds.request_bound(payload, blocks)
         counted = context.metadata.get(REDACTED_COUNT)
@@ -339,15 +351,17 @@ class BudgetMiddleware(ChatMiddleware):
                 self.meter.abandon(call_id)
                 raise
         if context.stream:
-            context.result = self._settled_stream(call_id, context.result, span)
+            context.result = self._settled_stream(call_id, context.result, span, given)
             return
         try:
-            await self.meter.settle(call_id, _usage(context.result))
+            usage = _usage(context.result)
+            await self.meter.settle(call_id, usage)
+            _record(context.result, usage, given)
         finally:
             span.end()
 
     def _settled_stream(
-        self, call_id: uuid.UUID, inner: object, span: trace.Span
+        self, call_id: uuid.UUID, inner: object, span: trace.Span, checked: int
     ) -> ResponseStream[ChatResponseUpdate, ChatResponse[Any]]:
         """The provider's stream, passed through an async generator of our own that settles the
         call once, however the stream ends (see the module notes). The final response is the
@@ -395,7 +409,19 @@ class BudgetMiddleware(ChatMiddleware):
                 except Exception:
                     await meter.settle(call_id, None)  # the reservation stays as the cost
                     raise
-                await meter.settle(call_id, _usage(final))
+                usage = _usage(final)
+                await meter.settle(call_id, usage)
+                _record(final, usage, checked)
+                # An Agent builds a streamed answer from the updates, not from `final`, so the
+                # record also goes up as one last update with no content. MAF merges its
+                # properties into the run's response key by key, and UsageHistoryProvider
+                # (app/llm/maf/context.py) moves the record onto the stored answer. Every key is
+                # always written (usage as None when the call reported none), so an earlier
+                # call's figures never stand for a later one.
+                yield ChatResponseUpdate(
+                    contents=[],
+                    additional_properties={USAGE_KEY: usage_record(usage, checked=checked)},
+                )
             finally:
                 span.end()  # however the stream ended (open while the call streams)
 
@@ -410,6 +436,18 @@ def _failed(span: trace.Span, kind: str) -> None:
     provider's text, which can echo the prompt."""
     span.set_status(Status(StatusCode.ERROR))
     span.set_attribute("error.type", kind)
+
+
+def _record(result: object, usage: Usage | None, checked: int) -> None:
+    """Write the input bound the budget checked and the call's usage (when reported) on its answer
+    (the last message), where the context report reads them once the session is stored (#46,
+    app/llm/maf/context.py)."""
+    if not isinstance(result, ChatResponse) or not result.messages:
+        return
+    answer = result.messages[-1]
+    if answer.additional_properties is None:
+        answer.additional_properties = {}
+    answer.additional_properties[USAGE_KEY] = usage_record(usage, checked=checked)
 
 
 def _usage(result: object) -> Usage | None:

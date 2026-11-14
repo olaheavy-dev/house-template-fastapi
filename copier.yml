@@ -83,6 +83,7 @@ _exclude:
   - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_fakes.py{% endif %}"
   - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_gateway.py{% endif %}"
   - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_langchain_callbacks.py{% endif %}"
+  - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_langchain_context.py{% endif %}"
   - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_langchain_embeddings.py{% endif %}"
   - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_langchain_errors.py{% endif %}"
   - "{% if llm is defined and llm != 'langchain' %}backend/tests/test_llm_ledger.py{% endif %}"

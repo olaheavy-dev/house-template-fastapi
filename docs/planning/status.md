@@ -7,7 +7,7 @@ Last updated: 13 Nov 2026.
 ## Where things stand
 
 - **Released:** v0.10.1 (13 Nov 2026). 0.10.0 added the `llm: maf` answer (Microsoft Agent Framework, epic #35, PRs #112 and #118 to #123); 0.10.1 is a dependency update (#124).
-- **Open pull requests:** none. A pull request that only updates this file can't list itself, so it isn't counted here.
+- **Open pull requests:** #131, #46 PR 1, the context-window report (branch `feat/context-window-report`), in review.
 - **#35 (MAF):** closed on 13 Nov 2026, with every planned PR merged. Its leftover is #127.
 
 ## Next
@@ -17,12 +17,17 @@ Last updated: 13 Nov 2026.
    - tokens are counted from the last call's usage plus an estimate, calling the provider's count endpoint only near a threshold;
    - trimming always keeps the user's first message.
 
-   Plan:
-   - PR 1: the core and the report.
-   - PR 2: trimming and refusal.
-   - PR 3: live evals of answer quality after a trim.
+   PR 1's own decisions were made on 13 Nov 2026 and are recorded in #46:
+   - 100% is where calls start failing: the nearer of the window less `LLM_MAX_TOKENS` and, for a price with `max_prompt_tokens`, the budget's byte bound against it (refined after the pre-push review);
+   - the provider's count endpoint waits for PR 2;
+   - MAF keeps each call's usage on the stored answer;
+   - the budget records the bound it checked on each stored answer (both frameworks), and the report's bound starts from it, rather than only rebuilding what an agent sends (chosen in Codex round 5 on #131: "Redesign now, in #131");
+   - there is no HTTP route; the report is a gateway method.
 
-   **Waiting for the owner's go-ahead to start PR 1.**
+   Plan:
+   - PR 1: the core and the report. **In review.** It adds window sizes on the price entries, `gateway.context_report()` under both frameworks, and the trim policy (not applied yet).
+   - PR 2: trimming and refusal. It applies `plan_trim` at 80% down to 50%, calls the count endpoint near the threshold (also for the budget's prompt cap, so OpenAI conversations stop being refused early), and refuses at 100%. It also measures MAF's double count of tool results (review P3-5).
+   - PR 3: live evals of answer quality after a trim.
 2. Follow-ups the owner may want next: #127, a LangChain `delete_user_data` to match MAF's (MAF's removes sessions and checkpoints). #117: adopt the shared agent workflow, including an `AGENTS.md` that points agents to this file (the repo has none yet).
 
 ## Blockers
@@ -31,7 +36,7 @@ None.
 
 ## Owner to-dos
 
-- Say go (or not yet) for #46 PR 1.
+- Review #131 (#46 PR 1) and say `merge 131` when it's ready; then say go (or not yet) for PR 2.
 - agent-workflows #15 (issue) proposes that every repository keeps a status file. Checked 13 Nov: agent-workflows main doesn't cover it yet. For now only the adoption issues (#117 here, nextjs #21) require the file. #13 has merged, so #15 is unblocked. Say whether to write its pull request. It changes the house rules, so it's a founder-only merge.
 
 ## Working notes for agents

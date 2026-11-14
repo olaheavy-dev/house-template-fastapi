@@ -186,6 +186,7 @@ def test_the_skip_guard_allows_a_name_that_only_contains_skip():
 # below checks it imports none) or to LANGCHAIN_ONLY / MAF_ONLY (one framework's own adapter).
 CORE = {
     "test_llm_core_budget.py",
+    "test_llm_core_context.py",
     "test_llm_core_embeddings.py",
     "test_llm_cost_pins.py",
     "test_llm_core_errors.py",
@@ -209,6 +210,7 @@ LANGCHAIN_ONLY = {
     "test_llm_fakes.py",
     "test_llm_gateway.py",
     "test_llm_langchain_callbacks.py",
+    "test_llm_langchain_context.py",
     "test_llm_langchain_embeddings.py",
     "test_llm_langchain_errors.py",
     "test_llm_ledger.py",
@@ -234,6 +236,7 @@ LANGCHAIN_ONLY = {
 MAF_ONLY = {
     "test_llm_maf_agent.py",
     "test_llm_maf_checkpoints.py",
+    "test_llm_maf_context.py",
     "test_llm_maf_cassettes.py",
     "test_llm_maf_errors.py",
     "test_llm_maf_gateway.py",

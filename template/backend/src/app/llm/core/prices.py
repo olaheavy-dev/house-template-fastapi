@@ -30,6 +30,48 @@ class Rates:
     cache_write_long: int
 
 
+def _check_reading(owner: str, checked: str, source: str, page: str) -> None:
+    """Refuse a reading without its date (YYYY-MM-DD) and the provider's https page."""
+    # Not compared with today's date: a clock that is a day off must not stop the app starting
+    # (a test checks that no entry is dated after tomorrow, UTC: people east of UTC are a day
+    # ahead for part of the day).
+    try:
+        exact = date.fromisoformat(checked).isoformat() == checked
+    except ValueError:
+        exact = False
+    if not exact:
+        raise ValueError(f"{owner}.checked must be a date as YYYY-MM-DD, not {checked!r}")
+    try:
+        url = urlparse(source)
+        valid_url = url.scheme == "https" and bool(url.hostname)
+    except ValueError:
+        valid_url = False
+    if not valid_url:
+        raise ValueError(f"{owner}.source must be the {page}'s https URL, not {source!r}")
+
+
+@dataclass(frozen=True, slots=True)
+class Window:
+    """A model's context window, read from the provider's model page like a price (#46): the most
+    tokens one call can hold, input and output together, and the most it may write. A page that
+    says "1M" or "128K" without saying what M and K are is read as 1,000,000 and 128,000, the
+    smaller reading, so a conversation can look fuller than it is, never less full."""
+
+    tokens: int
+    max_output: int
+    checked: str = field(kw_only=True)
+    source: str = field(kw_only=True)
+
+    def __post_init__(self) -> None:
+        for name in ("tokens", "max_output"):
+            value = getattr(self, name)
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise ValueError(f"Window.{name} must be a whole number above 0, not {value!r}")
+        if self.max_output >= self.tokens:
+            raise ValueError("Window.max_output must be smaller than Window.tokens")
+        _check_reading("Window", self.checked, self.source, "model page")
+
+
 @dataclass(frozen=True, slots=True)
 class Price:
     rates: Rates
@@ -43,26 +85,12 @@ class Price:
     # budget refuses them instead of under-recording their cost. For an embedding price it bounds
     # each request: texts are batched under it.
     max_prompt_tokens: int | None = None
+    # The model's context window (#46). Without one, a conversation has no context report beyond
+    # its token count, and nothing is ever trimmed; its calls still go through.
+    window: Window | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
-        # Not compared with today's date: a clock that is a day off must not stop the app starting
-        # (a test checks that no entry is dated after tomorrow, UTC: people east of UTC are a day
-        # ahead for part of the day).
-        try:
-            exact = date.fromisoformat(self.checked).isoformat() == self.checked
-        except ValueError:
-            exact = False
-        if not exact:
-            raise ValueError(f"Price.checked must be a date as YYYY-MM-DD, not {self.checked!r}")
-        try:
-            url = urlparse(self.source)
-            valid_url = url.scheme == "https" and bool(url.hostname)
-        except ValueError:
-            valid_url = False
-        if not valid_url:
-            raise ValueError(
-                f"Price.source must be the pricing page's https URL, not {self.source!r}"
-            )
+        _check_reading("Price", self.checked, self.source, "pricing page")
 
     def for_prompt(self, input_tokens: int) -> Rates:
         if self.long_rates and self.long_prompt_tokens and input_tokens > self.long_prompt_tokens:

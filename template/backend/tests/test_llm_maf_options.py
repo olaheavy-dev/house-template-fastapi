@@ -24,8 +24,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.auth import User
+from app.llm.core.bounds import INPUT_MARGIN_TOKENS
 from app.llm.core.budget import LlmCall
 from app.llm.core.errors import SchemaMismatch
+from app.llm.maf.context import entries, fixed_size
 from app.llm.maf.gateway import Gateway
 from app.llm.maf.middleware import ALLOWED_OPTIONS, OptionNotAllowed
 from app.llm.maf.redaction import RedactionUnavailable
@@ -373,3 +376,49 @@ async def test_a_thinking_budget_the_provider_rejects_is_refused_and_thinking_st
     await gateway.client().get_response([Message("user", ["hi"])])
     with_thinking, without = [row.reserved_micro_usd for row in await rows(db_session)]
     assert abs(with_thinking - without) < 200  # the option's few bytes, not 1,500 tokens
+
+
+@pytest.mark.parametrize("model", ["openai:gpt-6-luna", "anthropic:claude-sonnet-5-5"])
+async def test_the_context_report_sizes_an_agent_as_the_budget_does(make: Any, model: str) -> None:
+    # The budget adds max_tokens (and, for OpenAI, store=False) before sizing a call; the report
+    # sizes the agent's options through the same step (BudgetMiddleware.sent_options), so near
+    # OpenAI's prompt cap its 100% is where the budget refuses (#46, Codex on #131).
+    gateway = make(model)
+    checked: list[int] = []
+    reserve = gateway.meter.reserve
+
+    async def recording(call_id: Any, *, input_tokens: int, **kwargs: Any) -> int:
+        checked.append(input_tokens)
+        reserved: int = await reserve(call_id, input_tokens=input_tokens, **kwargs)
+        return reserved
+
+    gateway.meter.reserve = recording
+
+    def add(a: int, b: int) -> int:
+        """Add two numbers."""
+        return a + b
+
+    agent = gateway.agent([add], instructions="Be brief.")
+    await agent.run("What is 1 + 2?")
+    seen = HARNESS._scripted(gateway).seen[0]
+    reported = (
+        fixed_size(agent, gateway.budget)
+        + sum(entry.size for entry in entries(seen))
+        + INPUT_MARGIN_TOKENS
+    )
+    # At least the budget's figure; over it only by each message's own brackets and the last
+    # call's tool_choice "none".
+    assert checked[0] <= reported <= checked[0] + 64
+
+
+async def test_the_context_report_keeps_an_agents_larger_output_limit_free(make: Any) -> None:
+    # An agent that may write 100,000 tokens leaves 1,000,000 - 100,000 for input in Sonnet's
+    # window, not the window minus the gateway's 1,024 (Codex on #131).
+    gateway = make()
+    agent = gateway.agent([], name="limits", default_options={"max_tokens": 100_000})
+    got = await gateway.context_report(User(id="u_limits"), "c_limits", agent)
+    assert got.limit == 1_000_000 - 100_000
+    plain = await gateway.context_report(
+        User(id="u_limits"), "c_limits", gateway.agent([], name="limits")
+    )
+    assert plain.limit == 1_000_000 - gateway.max_tokens

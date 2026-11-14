@@ -52,6 +52,32 @@ REMOVED_FILES = {
 # Not compared: file modes, symlinks and empty directories (the template has no tracked
 # executables today).
 INTENDED: dict[str, str] = {
+    "backend/src/app/llm/core/context.py":
+        "the context report and the trim policy, framework-free (#46 PR 1)",
+    "backend/src/app/llm/langchain/context.py":
+        "a LangGraph thread's messages as context entries (#46 PR 1)",
+    "backend/tests/test_llm_core_context.py":
+        "hand-worked tests of the limit, the count, the report and the trim policy (#46 PR 1)",
+    "backend/tests/test_llm_langchain_context.py":
+        "LangChain messages as context entries: tool groups, waiting calls, usage (#46 PR 1)",
+    "backend/tests/test_llm_parity_context.py":
+        "the context report of a stored conversation, the same under every framework (#46 PR 1)",
+    "backend/src/app/llm/core/__init__.py":
+        "names context.py among the core's modules (#46 PR 1)",
+    "backend/src/app/llm/core/prices.py":
+        "the Window entry (context window and output limit, with date and model page) (#46 PR 1)",
+    "backend/src/app/llm/langchain/gateway.py":
+        "context_report(thread_id, system_prompt=, tools=); refuses LLM_MAX_TOKENS above the "
+        "model's output limit (#46 PR 1)",
+    "backend/src/app/llm/prices.py":
+        "each chat model's context window, read from the providers' model pages (#46 PR 1)",
+    "backend/src/app/llm/core/bounds.py":
+        "the comment on the prompt-size check names the context report's use of it (#46 PR 1)",
+    "backend/src/app/llm/langchain/__init__.py":
+        "names context.py among the adapter's modules (#46 PR 1)",
+    "backend/src/app/llm/langchain/callbacks.py":
+        "the budget records the bound it checked on each answer, for the context report "
+        "(#46 PR 1)",
     ".claude/rules/fastapi.md":
         "names the maf extra and the `llm: maf` answer in the extras sentence; tool definitions and "
         "output schemas are redacted; the structured-output 502; the eval rules are shared by both "

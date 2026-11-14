@@ -4,6 +4,7 @@ exactly as in the app and nothing reaches a provider."""
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import aclosing
@@ -37,6 +38,7 @@ from pydantic import Field
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.llm.core.budget import Meter
+from app.llm.core.context import ContextReport
 from app.llm.core.redaction import Redactor
 from app.llm.langchain import checkpoints, steps
 from app.llm.langchain.gateway import Gateway
@@ -54,6 +56,11 @@ ERRORS: dict[str, type[BaseException]] = {
     "invalid_request": ModelInvalidRequestError,
     "unknown": RuntimeError,
 }
+
+
+def thread_id(user_ref: str, conversation_id: str) -> str:
+    """The thread id an app derives on the server from the user and the conversation."""
+    return f"{user_ref}:{conversation_id}"
 
 
 def _error(failure: Failure) -> BaseException:
@@ -146,8 +153,29 @@ class ScriptedModel(GenericFakeChatModel):
         item = self.script.pop(0)
         if isinstance(item, Failure):
             raise _error(item)
-        if isinstance(item, AsksTool):  # agents are run with ainvoke in the parity tests
-            raise AssertionError("the harness does not stream a scripted tool call")
+        if isinstance(item, AsksTool):
+            # One chunk holding the whole call, as its fragments merge (with the call's usage).
+            asked = _asks(item, kwargs)
+            chunk = ChatGenerationChunk(
+                message=AIMessageChunk(
+                    content="",
+                    tool_call_chunks=[
+                        {
+                            "name": call["name"],
+                            "args": json.dumps(call["args"]),
+                            "id": call["id"],
+                            "index": index,
+                            "type": "tool_call_chunk",
+                        }
+                        for index, call in enumerate(asked.tool_calls)
+                    ],
+                    usage_metadata=asked.usage_metadata,
+                )
+            )
+            if run_manager is not None:
+                await run_manager.on_llm_new_token("", chunk=chunk)
+            yield chunk
+            return
         pieces = item.streamed()
         for number, piece in enumerate(pieces, start=1):
             usage = _answer(item).usage_metadata if number == len(pieces) else None
@@ -299,18 +327,38 @@ class LangChainHarness:
         conversation_id: str,
         messages: Sequence[Message],
         tools: Sequence[Callable[..., Any]] = (),
+        stream: bool = False,
     ) -> str:
-        state = await gateway.agent(list(tools)).ainvoke(
-            {"messages": convert_to_messages(list(messages))},
-            config={"configurable": {"thread_id": f"{user_ref}:{conversation_id}"}},
-        )
-        return str(state["messages"][-1].text)
+        agent = gateway.agent(list(tools))
+        given = {"messages": convert_to_messages(list(messages))}
+        config: Any = {"configurable": {"thread_id": thread_id(user_ref, conversation_id)}}
+        if not stream:
+            state = await agent.ainvoke(given, config=config)
+            return str(state["messages"][-1].text)
+        # Token by token, as a chat route streams ("messages"), with the state after each step.
+        last: Any = None
+        async for mode, part in agent.astream(
+            given, config=config, stream_mode=["messages", "values"]
+        ):
+            if mode == "values":
+                last = part
+        return str(last["messages"][-1].text)
+
+    async def context_report(
+        self,
+        gateway: Gateway,
+        *,
+        user_ref: str,
+        conversation_id: str,
+        tools: Sequence[Callable[..., Any]] = (),
+    ) -> ContextReport:
+        return await gateway.context_report(thread_id(user_ref, conversation_id), tools=tools)
 
     async def forget_threads(
         self, gateway: Gateway, *, user_ref: str, conversation_id: str
     ) -> None:
         assert gateway.checkpointer is not None
-        await gateway.checkpointer.adelete_thread(f"{user_ref}:{conversation_id}")
+        await gateway.checkpointer.adelete_thread(thread_id(user_ref, conversation_id))
 
     def last_request_offered_tools(self, gateway: Gateway) -> bool:
         return offers_tools(self._scripted(gateway).seen_kwargs[-1])
