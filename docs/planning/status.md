@@ -7,8 +7,8 @@ Last updated: 14 Nov 2026.
 ## Where things stand
 
 - **Released:** v0.10.1 (13 Nov 2026). 0.10.0 added the `llm: maf` answer (Microsoft Agent Framework, epic #35, PRs #112 and #118 to #123); 0.10.1 is a dependency update (#124).
-- **Merged, not yet released:** #131, #46 PR 1, the context-window report (14 Nov 2026). The next release-please PR will carry it as a feature (0.11.0).
-- **Open pull requests:** only this status update.
+- **Merged, not yet released:** #131, #46 PR 1, the context-window report (14 Nov 2026). Release PR #133 (0.11.0) carries it.
+- **Open pull requests:** #133, the 0.11.0 release; and this status update.
 - **#35 (MAF):** closed on 13 Nov 2026, with every planned PR merged. Its leftover is #127.
 
 ## Next
@@ -38,7 +38,7 @@ None.
 ## Owner to-dos
 
 - Say go (or not yet) for #46 PR 2 (trimming at 80% down to 50%, the provider's count near the threshold, refusal at 100%, and #132).
-- Merge the release-please PR for 0.11.0 when you want #46 PR 1 released (say `merge N`).
+- Say `merge 133` when you want 0.11.0 (#46 PR 1) released.
 - agent-workflows #16 (process issue, 13 Nov): the six Codex rounds on #131 came from one cause, a figure that re-derived another code path's figure. It proposes testing such figures against the real path from the start. Review it in the weekly process check.
 - agent-workflows #15 (issue) proposes that every repository keeps a status file. Checked 13 Nov: agent-workflows main doesn't cover it yet. For now only the adoption issues (#117 here, nextjs #21) require the file. #13 has merged, so #15 is unblocked. Say whether to write its pull request. It changes the house rules, so it's a founder-only merge.
 
