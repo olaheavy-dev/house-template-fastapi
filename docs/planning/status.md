@@ -2,13 +2,14 @@
 
 The handover for this repository. Update it in any pull request that changes what is done, open or next, a decision, a plan or the backlog, and overwrite it at the end of each session (house rules, agent-workflows v0.6.0).
 
-Last updated: 14 Nov 2026.
+Last updated: 18 Nov 2026.
 
 ## Where things stand
 
-- **Released:** v0.10.1 (13 Nov 2026). 0.10.0 added the `llm: maf` answer (Microsoft Agent Framework, epic #35, PRs #112 and #118 to #123); 0.10.1 is a dependency update (#124).
-- **Merged, not yet released:** #131, #46 PR 1, the context-window report (14 Nov 2026). Release PR #133 (0.11.0) carries it.
-- **Open pull requests:** #133, the 0.11.0 release; and this status update.
+- **Released:** v0.11.0 (14 Nov 2026, release PR #133): the context-window report (#131, #46 PR 1). Before it, 0.10.1 (13 Nov) was a dependency update and 0.10.0 added the `llm: maf` answer (epic #35).
+- **Merged since 0.11.0, not yet released:** Dependabot updates #135, #136 and #140.
+- **Open pull requests:** #139, the 0.11.1 release; and #138, the `exclude-newer` change, which joins 0.11.1 as a fix. Check GitHub for the current list.
+- **18 Nov 2026:** uv now skips packages uploaded in the last 7 days (`exclude-newer = "7 days"`, root and `template/backend`), after the malicious `agent-framework` 1.26.1 and 1.26.2 on 17 Nov. Founder: "Yes, all three repos (Recommended)". Recorded in the register in `docs/decisions/README.md`.
 - **#35 (MAF):** closed on 13 Nov 2026, with every planned PR merged. Its leftover is #127.
 
 ## Next
