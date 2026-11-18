@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.11.1](https://github.com/olaheavy-dev/house-template-fastapi/compare/v0.11.0...v0.11.1) (2026-11-18)
+
+
+### Bug Fixes
+
+* **deps:** bump dnspython from 2.9.0 to 2.9.2 in /template/backend ([#136](https://github.com/olaheavy-dev/house-template-fastapi/issues/136)) ([4ddbd06](https://github.com/olaheavy-dev/house-template-fastapi/commit/4ddbd066e2263b68c6147dad534293addb268e52))
+* **deps:** bump opentelemetry-api from 1.45.1 to 1.45.2 in /template/backend ([#135](https://github.com/olaheavy-dev/house-template-fastapi/issues/135)) ([63cb416](https://github.com/olaheavy-dev/house-template-fastapi/commit/63cb4167b051b42ed9dccaa01cd657fbe51f68ee))
+* **deps:** bump the backend-minor-and-patch group across 1 directory with 3 updates ([#140](https://github.com/olaheavy-dev/house-template-fastapi/issues/140)) ([07c7ff1](https://github.com/olaheavy-dev/house-template-fastapi/commit/07c7ff1d2b7251ab78f78b724c57d418946c36f4))
+* uv skips packages uploaded in the last 7 days (exclude-newer) ([#138](https://github.com/olaheavy-dev/house-template-fastapi/issues/138)) ([1dd0e8c](https://github.com/olaheavy-dev/house-template-fastapi/commit/1dd0e8c189f26cf23ffbf572212732f7779177b5))
+
 ## [0.11.0](https://github.com/olaheavy-dev/house-template-fastapi/compare/v0.10.1...v0.11.0) (2026-11-14)
 
 
