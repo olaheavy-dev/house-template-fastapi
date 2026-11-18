@@ -74,7 +74,7 @@ dev = [
 # Skip packages uploaded in the last 7 days, so a malicious release that is pulled within hours
 # (agent-framework 1.26.1 and 1.26.2 on 17 Nov 2026, https://osv.dev/vulnerability/PYSEC-2026-4388)
 # is never picked by `uv add` or `uv lock --upgrade`. For an urgent security fix, exempt that one
-# package: exclude-newer-package = { name = false }, and remove the line once the fix is a week old.
+# package: exclude-newer-package = { <package> = false }, and remove the line once the fix is a week old.
 # This probably also holds back a Dependabot security update under 7 days old (unverified); same exemption.
 exclude-newer = "7 days"
 # One lockfile holds both frameworks, but a project installs one: `llm: langchain` or `llm: maf`.
