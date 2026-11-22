@@ -44,9 +44,9 @@ langchain = [
 # these (`.github/dependabot.yml` groups them for review). msgspec comes in with the framework.
 # Cannot be installed with `langchain` (see [tool.uv] conflicts below).
 maf = [
-    "agent-framework-anthropic==1.0.0b261106",
-    "agent-framework-core==1.25.0",
-    "agent-framework-openai==1.18.1",
+    "agent-framework-anthropic==1.0.0b261112",
+    "agent-framework-core==1.26.0",
+    "agent-framework-openai==1.18.2",
     "msgspec==0.22.0",
 ]
 storage = [
